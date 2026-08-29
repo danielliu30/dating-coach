@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/danielliu30/dating-coach/backend/internal/store/db"
 )
@@ -31,14 +32,14 @@ func NewService(queries *db.Queries, hub *Hub) *Service {
 }
 
 type Thread struct {
-	ID              string `json:"id"`
-	UserID          string `json:"user_id"`
-	CoachID         string `json:"coach_id"`
-	SessionID       string `json:"session_id,omitempty"`
-	CounterpartName string `json:"counterpart_name,omitempty"`
-	Status          string `json:"status"`
-	LastMessageAt   string `json:"last_message_at"`
-	CounterpartOnline bool  `json:"counterpart_online"`
+	ID                string `json:"id"`
+	UserID            string `json:"user_id"`
+	CoachID           string `json:"coach_id"`
+	SessionID         string `json:"session_id,omitempty"`
+	CounterpartName   string `json:"counterpart_name,omitempty"`
+	Status            string `json:"status"`
+	LastMessageAt     string `json:"last_message_at"`
+	CounterpartOnline bool   `json:"counterpart_online"`
 }
 
 func threadOf(t db.ChatThread) Thread {
@@ -72,6 +73,10 @@ func (s *Service) StartThread(ctx context.Context, userID, coachID uuid.UUID, se
 		SessionID: sessionID,
 	})
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+			return Thread{}, fmt.Errorf("%w: coach is not available for chat", ErrNotFound)
+		}
 		return Thread{}, fmt.Errorf("create thread: %w", err)
 	}
 	return threadOf(created), nil

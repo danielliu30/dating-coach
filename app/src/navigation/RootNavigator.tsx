@@ -145,9 +145,9 @@ function MainTabs(): React.ReactElement {
   );
 }
 
-function AuthNavigator(): React.ReactElement {
+function AuthNavigator({ initialRoute }: { initialRoute: keyof AuthStackParams }): React.ReactElement {
   return (
-    <AuthStack.Navigator screenOptions={{ headerShown: false }}>
+    <AuthStack.Navigator screenOptions={{ headerShown: false }} initialRouteName={initialRoute}>
       <AuthStack.Screen name="SignIn" component={SignInScreen} />
       <AuthStack.Screen name="SignUp" component={SignUpScreen} />
       <AuthStack.Screen name="Verify" component={VerifyEmailScreen} />
@@ -156,11 +156,18 @@ function AuthNavigator(): React.ReactElement {
 }
 
 export default function RootNavigator(): React.ReactElement {
-  const { ready, token } = useAuth();
+  const { ready, token, user } = useAuth();
+  const verified = Boolean(user?.email_verified);
 
   return (
     <NavigationContainer linking={linking}>
-      {!ready ? <Loading /> : token ? <MainTabs /> : <AuthNavigator />}
+      {!ready ? (
+        <Loading />
+      ) : token && verified ? (
+        <MainTabs />
+      ) : (
+        <AuthNavigator initialRoute={token ? 'Verify' : 'SignIn'} />
+      )}
     </NavigationContainer>
   );
 }

@@ -141,7 +141,7 @@ CREATE TABLE training_examples (
     consented        boolean NOT NULL DEFAULT false,
     created_at       timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT training_examples_label_source_check CHECK (label_source IN ('user', 'coach', 'heuristic')),
-    CONSTRAINT training_examples_outcome_check CHECK (outcome IS NULL OR outcome IN ('ghosted', 'kept_chatting', 'date_scheduled', 'date_happened', 'relationship'))
+    CONSTRAINT training_examples_outcome_check CHECK (outcome IS NULL OR outcome IN ('ghosted', 'kept_talking', 'number_exchanged', 'date_set'))
 );
 
 CREATE INDEX training_examples_conversation_idx ON training_examples (conversation_id);

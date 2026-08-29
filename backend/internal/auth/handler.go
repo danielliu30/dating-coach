@@ -43,7 +43,7 @@ func (h *Handler) signUp(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	profile, err := h.svc.SignUp(r.Context(), in)
+	session, err := h.svc.SignUp(r.Context(), in)
 	switch {
 	case errors.Is(err, ErrInvalidInput):
 		httpx.Error(w, http.StatusBadRequest, err.Error())
@@ -53,7 +53,7 @@ func (h *Handler) signUp(w http.ResponseWriter, r *http.Request) {
 		slog.Error("sign up", "error", err)
 		httpx.Error(w, http.StatusInternalServerError, "could not create account")
 	default:
-		httpx.JSON(w, http.StatusCreated, profile)
+		httpx.JSON(w, http.StatusCreated, session)
 	}
 }
 

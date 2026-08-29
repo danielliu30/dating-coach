@@ -11,7 +11,7 @@ export default function VerifyEmailScreen({
   route,
   navigation,
 }: NativeStackScreenProps<AuthStackParams, 'Verify'>): React.ReactElement {
-  const { verify, resendVerification, user } = useAuth();
+  const { verify, resendVerification, signOut, token: session, user } = useAuth();
   const [email, setEmail] = useState(route.params?.email ?? user?.email ?? '');
   const [token, setToken] = useState('');
   const [status, setStatus] = useState<string | null>(null);
@@ -56,7 +56,11 @@ export default function VerifyEmailScreen({
         <Button label="Verify" onPress={submit} loading={busy} />
         <Button label="Resend email" variant="secondary" onPress={resend} />
       </View>
-      <Button label="Back to sign in" variant="secondary" onPress={() => navigation.navigate('SignIn')} />
+      {session ? (
+        <Button label="Sign out" variant="secondary" onPress={() => void signOut()} />
+      ) : (
+        <Button label="Back to sign in" variant="secondary" onPress={() => navigation.navigate('SignIn')} />
+      )}
     </Screen>
   );
 }

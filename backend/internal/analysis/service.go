@@ -227,6 +227,15 @@ func (s *Service) ListConversations(ctx context.Context, userID uuid.UUID, limit
 	return out, nil
 }
 
+// validOutcomes mirrors the training_examples outcome constraint and the
+// options the app offers; ml-analyzer/training/data_schema.md documents them.
+var validOutcomes = map[string]bool{
+	"ghosted":          true,
+	"kept_talking":     true,
+	"number_exchanged": true,
+	"date_set":         true,
+}
+
 type LabelInput struct {
 	Outcome         *string         `json:"outcome"`
 	ReplyReceived   *bool           `json:"reply_received"`
@@ -249,6 +258,12 @@ func (s *Service) Label(ctx context.Context, conversationID, userID uuid.UUID, i
 	}
 	if source != "user" && source != "coach" && source != "heuristic" {
 		return db.TrainingExample{}, fmt.Errorf("%w: unknown label_source %q", ErrInvalidInput, source)
+	}
+	if in.Outcome != nil && !validOutcomes[*in.Outcome] {
+		return db.TrainingExample{}, fmt.Errorf("%w: unknown outcome %q", ErrInvalidInput, *in.Outcome)
+	}
+	if in.EngagementScore != nil && (*in.EngagementScore < 0 || *in.EngagementScore > 1) {
+		return db.TrainingExample{}, fmt.Errorf("%w: engagement_score must be between 0 and 1", ErrInvalidInput)
 	}
 	segmentLabels := in.SegmentLabels
 	if len(segmentLabels) == 0 {

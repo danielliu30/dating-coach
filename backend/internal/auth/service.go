@@ -73,34 +73,36 @@ func profileOf(u db.User) Profile {
 	}
 }
 
-func (s *Service) SignUp(ctx context.Context, in SignUpInput) (Profile, error) {
+// SignUp creates the account and returns a session, so a new account is signed
+// in immediately; email verification is tracked separately on the profile.
+func (s *Service) SignUp(ctx context.Context, in SignUpInput) (Session, error) {
 	email := strings.ToLower(strings.TrimSpace(in.Email))
 	if _, err := mail.ParseAddress(email); err != nil {
-		return Profile{}, fmt.Errorf("%w: email is not valid", ErrInvalidInput)
+		return Session{}, fmt.Errorf("%w: email is not valid", ErrInvalidInput)
 	}
 	if len(in.Password) < 8 {
-		return Profile{}, fmt.Errorf("%w: password must be at least 8 characters", ErrInvalidInput)
+		return Session{}, fmt.Errorf("%w: password must be at least 8 characters", ErrInvalidInput)
 	}
 	displayName := strings.TrimSpace(in.DisplayName)
 	if displayName == "" {
-		return Profile{}, fmt.Errorf("%w: display_name is required", ErrInvalidInput)
+		return Session{}, fmt.Errorf("%w: display_name is required", ErrInvalidInput)
 	}
 	role := in.Role
 	if role == "" {
 		role = RoleUser
 	}
 	if role != RoleUser && role != RoleCoach {
-		return Profile{}, fmt.Errorf("%w: role must be user or coach", ErrInvalidInput)
+		return Session{}, fmt.Errorf("%w: role must be user or coach", ErrInvalidInput)
 	}
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(in.Password), s.bcryptCost)
 	if err != nil {
-		return Profile{}, fmt.Errorf("hash password: %w", err)
+		return Session{}, fmt.Errorf("hash password: %w", err)
 	}
 
 	token, err := randomToken()
 	if err != nil {
-		return Profile{}, err
+		return Session{}, err
 	}
 	expires := time.Now().Add(verificationTTL)
 
@@ -115,13 +117,22 @@ func (s *Service) SignUp(ctx context.Context, in SignUpInput) (Profile, error) {
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			return Profile{}, ErrEmailTaken
+			return Session{}, ErrEmailTaken
 		}
-		return Profile{}, fmt.Errorf("create user: %w", err)
+		return Session{}, fmt.Errorf("create user: %w", err)
 	}
 
 	s.sendVerificationEmail(ctx, user.Email, token)
-	return profileOf(user), nil
+
+	jwtToken, expiresAt, err := s.issuer.Issue(user.ID, user.Email, user.Role)
+	if err != nil {
+		return Session{}, err
+	}
+	return Session{
+		Token:     jwtToken,
+		ExpiresAt: expiresAt.UTC().Format(time.RFC3339),
+		User:      profileOf(user),
+	}, nil
 }
 
 func (s *Service) SignIn(ctx context.Context, email, password string) (Session, error) {
