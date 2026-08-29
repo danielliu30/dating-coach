@@ -1,0 +1,17 @@
+.env
+.env.local
+*.log
+
+# Go
+/backend/bin/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+ml-analyzer/models/
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
