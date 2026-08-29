@@ -1,0 +1,10 @@
+# Training-only dependencies. The serving image installs requirements.txt and
+# stays torch-free until ML_BACKEND=trained is used.
+-r requirements.txt
+torch==2.5.1
+transformers==4.47.1
+datasets==3.2.0
+numpy==2.2.1
+accelerate==1.2.1
+# Uncomment for the LoRA / generative recipe described in README.md
+# peft==0.14.0

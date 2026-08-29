@@ -1,0 +1,12 @@
+DROP TABLE IF EXISTS notifications;
+DROP TABLE IF EXISTS training_examples;
+DROP TABLE IF EXISTS analysis_results;
+DROP TABLE IF EXISTS messages;
+DROP TABLE IF EXISTS conversations;
+DROP TABLE IF EXISTS chat_messages;
+DROP TABLE IF EXISTS chat_threads;
+DROP TABLE IF EXISTS coaching_sessions;
+DROP FUNCTION IF EXISTS session_range(timestamptz, integer);
+DROP TABLE IF EXISTS coach_availability;
+DROP TABLE IF EXISTS coaches;
+DROP TABLE IF EXISTS users;
