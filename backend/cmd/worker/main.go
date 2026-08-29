@@ -25,6 +25,7 @@ func main() {
 	}
 }
 
+// run builds the analysis worker and keeps it consuming until a signal arrives.
 func run() error {
 	cfg, err := config.Load()
 	if err != nil {
@@ -77,6 +78,7 @@ func consume(ctx context.Context, url, name string, handle analysis.JobHandler) 
 	}
 }
 
+// runConsumer holds one broker connection for as long as it stays healthy.
 func runConsumer(ctx context.Context, url, name string, handle analysis.JobHandler) error {
 	queue, err := analysis.OpenQueue(url, name)
 	if err != nil {

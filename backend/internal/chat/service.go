@@ -15,6 +15,7 @@ import (
 	"github.com/danielliu30/dating-coach/backend/internal/store/db"
 )
 
+// Sentinel errors respondErr maps onto HTTP status codes.
 var (
 	ErrNotFound     = errors.New("not found")
 	ErrForbidden    = errors.New("not allowed")
@@ -24,15 +25,21 @@ var (
 
 const maxMessageLength = 4000
 
+// Service owns the chat business rules: it opens threads between a user and a
+// coach, enforces that only participants read or write a thread, persists the
+// transcript and hands events to the Hub for delivery.
 type Service struct {
 	queries *db.Queries
 	hub     *Hub
 }
 
+// NewService wires the service dependencies; called once from cmd/api.
 func NewService(queries *db.Queries, hub *Hub) *Service {
 	return &Service{queries: queries, hub: hub}
 }
 
+// Thread is the API view of a chat thread. CounterpartName and
+// CounterpartOnline are only filled in by the list endpoints.
 type Thread struct {
 	ID                string `json:"id"`
 	UserID            string `json:"user_id"`
@@ -44,6 +51,7 @@ type Thread struct {
 	CounterpartOnline bool   `json:"counterpart_online"`
 }
 
+// threadOf projects a thread row onto the API shape.
 func threadOf(t db.ChatThread) Thread {
 	out := Thread{
 		ID:            t.ID.String(),
@@ -92,6 +100,7 @@ func (s *Service) StartThread(ctx context.Context, userID, coachID uuid.UUID, se
 	return threadOf(created), nil
 }
 
+// ListForUser returns a client's threads with the coach's name and presence.
 func (s *Service) ListForUser(ctx context.Context, userID uuid.UUID) ([]Thread, error) {
 	rows, err := s.queries.ListThreadsForUser(ctx, userID)
 	if err != nil {
@@ -110,6 +119,8 @@ func (s *Service) ListForUser(ctx context.Context, userID uuid.UUID) ([]Thread, 
 	return out, nil
 }
 
+// ListForCoach returns a coach's threads, optionally filtered by status, for
+// the coach dashboard.
 func (s *Service) ListForCoach(ctx context.Context, coachID uuid.UUID, status *string) ([]Thread, error) {
 	rows, err := s.queries.ListThreadsForCoach(ctx, db.ListThreadsForCoachParams{CoachID: coachID, Status: status})
 	if err != nil {
@@ -128,6 +139,8 @@ func (s *Service) ListForCoach(ctx context.Context, coachID uuid.UUID, status *s
 	return out, nil
 }
 
+// online reports presence, treating a Redis failure as offline so a listing
+// still succeeds without it.
 func (s *Service) online(ctx context.Context, userID uuid.UUID) bool {
 	online, err := s.hub.IsOnline(ctx, userID)
 	return err == nil && online
@@ -160,6 +173,7 @@ func (s *Service) activeThread(ctx context.Context, threadID, actorID uuid.UUID)
 	return thread, nil
 }
 
+// History returns a page of the transcript. Closed threads stay readable.
 func (s *Service) History(ctx context.Context, threadID, actorID uuid.UUID, limit, offset int32) ([]Message, error) {
 	if _, err := s.Thread(ctx, threadID, actorID); err != nil {
 		return nil, err
@@ -224,6 +238,7 @@ func (s *Service) Send(ctx context.Context, threadID, senderID uuid.UUID, body s
 	return msg, nil
 }
 
+// Typing broadcasts a typing indicator; it is not persisted.
 func (s *Service) Typing(ctx context.Context, threadID, senderID uuid.UUID, typing bool) error {
 	if _, err := s.activeThread(ctx, threadID, senderID); err != nil {
 		return err
@@ -236,6 +251,8 @@ func (s *Service) Typing(ctx context.Context, threadID, senderID uuid.UUID, typi
 	})
 }
 
+// Close ends a thread. Either participant may close it, after which Send and
+// Typing are rejected but History still works.
 func (s *Service) Close(ctx context.Context, threadID, actorID uuid.UUID) (Thread, error) {
 	if _, err := s.Thread(ctx, threadID, actorID); err != nil {
 		return Thread{}, err

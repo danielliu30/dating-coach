@@ -11,12 +11,15 @@ import (
 	"github.com/danielliu30/dating-coach/backend/internal/store/db"
 )
 
+// Store is the database handle passed to the services: Queries for the generated
+// statements, and Pool for the cases that need an explicit transaction.
 type Store struct {
 	Pool    *pgxpool.Pool
 	Queries *db.Queries
 }
 
-// Open creates a pgx pool and pings it.
+// Open creates a pgx pool and pings it, so a misconfigured database fails at
+// startup rather than on the first request.
 func Open(ctx context.Context, dsn string) (*Store, error) {
 	poolCfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
@@ -40,6 +43,7 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 	return &Store{Pool: pool, Queries: db.New(pool)}, nil
 }
 
+// Close drains the pool; deferred by cmd/api and cmd/worker.
 func (s *Store) Close() {
 	s.Pool.Close()
 }

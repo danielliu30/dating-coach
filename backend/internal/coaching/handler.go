@@ -13,10 +13,14 @@ import (
 	"github.com/danielliu30/dating-coach/backend/internal/httpx"
 )
 
+// Handler is the HTTP layer for the coaching features. It serves two route
+// groups: the client-facing endpoints from Routes and the coach-only dashboard
+// endpoints from CoachRoutes.
 type Handler struct {
 	svc *Service
 }
 
+// NewHandler builds the coaching handler; cmd/api mounts both route groups.
 func NewHandler(svc *Service) *Handler {
 	return &Handler{svc: svc}
 }
@@ -46,6 +50,8 @@ func (h *Handler) CoachRoutes() http.Handler {
 	return r
 }
 
+// listCoaches handles GET /coaches, hiding coaches that are not accepting
+// clients unless accepting_only=false.
 func (h *Handler) listCoaches(w http.ResponseWriter, r *http.Request) {
 	limit := httpx.QueryInt(r, "limit", 25, 100)
 	offset := httpx.QueryInt(r, "offset", 1, 10_000) - 1
@@ -60,6 +66,7 @@ func (h *Handler) listCoaches(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{"coaches": coaches})
 }
 
+// getCoach handles GET /coaches/{coachID}.
 func (h *Handler) getCoach(w http.ResponseWriter, r *http.Request) {
 	coachID, ok := pathUUID(w, r, "coachID")
 	if !ok {
@@ -73,6 +80,8 @@ func (h *Handler) getCoach(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, coach)
 }
 
+// coachAvailability handles GET /coaches/{coachID}/availability, returning the
+// recurring weekly windows rather than concrete times.
 func (h *Handler) coachAvailability(w http.ResponseWriter, r *http.Request) {
 	coachID, ok := pathUUID(w, r, "coachID")
 	if !ok {
@@ -86,6 +95,9 @@ func (h *Handler) coachAvailability(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{"availability": windows})
 }
 
+// coachSlots handles GET /coaches/{coachID}/slots, defaulting to the next seven
+// days. exclude_session_id lets a reschedule screen offer the times taken by the
+// session being moved.
 func (h *Handler) coachSlots(w http.ResponseWriter, r *http.Request) {
 	coachID, ok := pathUUID(w, r, "coachID")
 	if !ok {
@@ -134,6 +146,7 @@ func (h *Handler) coachSlots(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{"slots": slots})
 }
 
+// bookSession handles POST /sessions.
 func (h *Handler) bookSession(w http.ResponseWriter, r *http.Request) {
 	principal, ok := auth.PrincipalFrom(r.Context())
 	if !ok {
@@ -153,6 +166,7 @@ func (h *Handler) bookSession(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusCreated, session)
 }
 
+// listMySessions handles GET /sessions for the calling client.
 func (h *Handler) listMySessions(w http.ResponseWriter, r *http.Request) {
 	principal, ok := auth.PrincipalFrom(r.Context())
 	if !ok {
@@ -167,6 +181,7 @@ func (h *Handler) listMySessions(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{"sessions": sessions})
 }
 
+// cancelSession handles POST /sessions/{sessionID}/cancel.
 func (h *Handler) cancelSession(w http.ResponseWriter, r *http.Request) {
 	principal, ok := auth.PrincipalFrom(r.Context())
 	if !ok {
@@ -185,6 +200,7 @@ func (h *Handler) cancelSession(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, session)
 }
 
+// rescheduleSession handles POST /sessions/{sessionID}/reschedule.
 func (h *Handler) rescheduleSession(w http.ResponseWriter, r *http.Request) {
 	principal, ok := auth.PrincipalFrom(r.Context())
 	if !ok {
@@ -210,6 +226,7 @@ func (h *Handler) rescheduleSession(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, session)
 }
 
+// upsertProfile handles PUT /coach/profile for the calling coach.
 func (h *Handler) upsertProfile(w http.ResponseWriter, r *http.Request) {
 	principal, ok := auth.PrincipalFrom(r.Context())
 	if !ok {
@@ -229,6 +246,7 @@ func (h *Handler) upsertProfile(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, coach)
 }
 
+// setAvailability handles PUT /coach/availability, replacing the whole schedule.
 func (h *Handler) setAvailability(w http.ResponseWriter, r *http.Request) {
 	principal, ok := auth.PrincipalFrom(r.Context())
 	if !ok {
@@ -250,6 +268,7 @@ func (h *Handler) setAvailability(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{"availability": windows})
 }
 
+// listCoachSessions handles GET /coach/sessions for the coach dashboard.
 func (h *Handler) listCoachSessions(w http.ResponseWriter, r *http.Request) {
 	principal, ok := auth.PrincipalFrom(r.Context())
 	if !ok {
@@ -273,6 +292,8 @@ func (h *Handler) listCoachSessions(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{"sessions": sessions})
 }
 
+// setSessionStatus handles POST /coach/sessions/{sessionID}/status, which is how
+// a coach marks a session completed or a no-show.
 func (h *Handler) setSessionStatus(w http.ResponseWriter, r *http.Request) {
 	principal, ok := auth.PrincipalFrom(r.Context())
 	if !ok {
@@ -298,6 +319,7 @@ func (h *Handler) setSessionStatus(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, session)
 }
 
+// setSessionNotes handles POST /coach/sessions/{sessionID}/notes.
 func (h *Handler) setSessionNotes(w http.ResponseWriter, r *http.Request) {
 	principal, ok := auth.PrincipalFrom(r.Context())
 	if !ok {
@@ -323,6 +345,7 @@ func (h *Handler) setSessionNotes(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, session)
 }
 
+// pathUUID parses a UUID path parameter, writing 400 when it is malformed.
 func pathUUID(w http.ResponseWriter, r *http.Request, param string) (uuid.UUID, bool) {
 	id, err := uuid.Parse(chi.URLParam(r, param))
 	if err != nil {
@@ -332,6 +355,8 @@ func pathUUID(w http.ResponseWriter, r *http.Request, param string) (uuid.UUID, 
 	return id, true
 }
 
+// optionalQuery returns a query parameter as a pointer, nil when absent, which
+// is how the queries express "no filter".
 func optionalQuery(r *http.Request, key string) *string {
 	if v := r.URL.Query().Get(key); v != "" {
 		return &v
@@ -339,6 +364,8 @@ func optionalQuery(r *http.Request, key string) *string {
 	return nil
 }
 
+// respondErr maps the package's sentinel errors onto status codes; anything
+// else is logged and reported as a 500 with the fallback message.
 func respondErr(w http.ResponseWriter, err error, fallback string) {
 	switch {
 	case errors.Is(err, ErrNotFound):

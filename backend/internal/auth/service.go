@@ -21,6 +21,7 @@ import (
 	"github.com/danielliu30/dating-coach/backend/internal/store/db"
 )
 
+// Sentinel errors the handler maps onto HTTP status codes.
 var (
 	ErrEmailTaken         = errors.New("email already registered")
 	ErrInvalidCredentials = errors.New("invalid email or password")
@@ -30,6 +31,9 @@ var (
 
 const verificationTTL = 48 * time.Hour
 
+// Service holds the account business rules: it validates credentials, hashes
+// passwords, mints sessions through the TokenIssuer and drives the email
+// verification flow. Handler is its only caller.
 type Service struct {
 	queries    *db.Queries
 	issuer     *TokenIssuer
@@ -38,10 +42,12 @@ type Service struct {
 	appURL     string
 }
 
+// NewService wires the service dependencies; called once from cmd/api.
 func NewService(queries *db.Queries, issuer *TokenIssuer, notifier notify.Notifier, bcryptCost int, appURL string) *Service {
 	return &Service{queries: queries, issuer: issuer, notifier: notifier, bcryptCost: bcryptCost, appURL: appURL}
 }
 
+// SignUpInput is the decoded POST /auth/signup body.
 type SignUpInput struct {
 	Email       string `json:"email"`
 	Password    string `json:"password"`
@@ -49,12 +55,15 @@ type SignUpInput struct {
 	Role        string `json:"role"`
 }
 
+// Session is the sign-up/sign-in response: a bearer token plus the profile the
+// clients render right away.
 type Session struct {
 	Token     string  `json:"token"`
 	ExpiresAt string  `json:"expires_at"`
 	User      Profile `json:"user"`
 }
 
+// Profile is the public view of a user row, also returned by GET /auth/me.
 type Profile struct {
 	ID            string `json:"id"`
 	Email         string `json:"email"`
@@ -63,6 +72,8 @@ type Profile struct {
 	EmailVerified bool   `json:"email_verified"`
 }
 
+// profileOf projects a database row onto the API shape, keeping the password
+// hash and verification token out of responses.
 func profileOf(u db.User) Profile {
 	return Profile{
 		ID:            u.ID.String(),
@@ -135,6 +146,8 @@ func (s *Service) SignUp(ctx context.Context, in SignUpInput) (Session, error) {
 	}, nil
 }
 
+// SignIn verifies the password and issues a session. Unknown emails and wrong
+// passwords both return ErrInvalidCredentials.
 func (s *Service) SignIn(ctx context.Context, email, password string) (Session, error) {
 	user, err := s.queries.GetUserByEmail(ctx, strings.ToLower(strings.TrimSpace(email)))
 	if err != nil {
@@ -158,6 +171,7 @@ func (s *Service) SignIn(ctx context.Context, email, password string) (Session, 
 	}, nil
 }
 
+// VerifyEmail consumes a verification token and marks the address confirmed.
 func (s *Service) VerifyEmail(ctx context.Context, token string) (Profile, error) {
 	user, err := s.queries.VerifyUserEmail(ctx, &token)
 	if err != nil {
@@ -169,6 +183,8 @@ func (s *Service) VerifyEmail(ctx context.Context, token string) (Profile, error
 	return profileOf(user), nil
 }
 
+// ResendVerification issues a fresh token and re-sends the email. It succeeds
+// for unknown or already verified addresses so callers cannot enumerate users.
 func (s *Service) ResendVerification(ctx context.Context, email string) error {
 	user, err := s.queries.GetUserByEmail(ctx, strings.ToLower(strings.TrimSpace(email)))
 	if err != nil {
@@ -196,6 +212,8 @@ func (s *Service) ResendVerification(ctx context.Context, email string) error {
 	return nil
 }
 
+// Profile reloads the authenticated caller from the database, so clients see
+// changes made since the token was issued.
 func (s *Service) Profile(ctx context.Context, principal Principal) (Profile, error) {
 	user, err := s.queries.GetUserByID(ctx, principal.UserID)
 	if err != nil {
@@ -204,6 +222,8 @@ func (s *Service) Profile(ctx context.Context, principal Principal) (Profile, er
 	return profileOf(user), nil
 }
 
+// sendVerificationEmail builds the deep link into the app and delivers it. A
+// delivery failure is logged, not returned: sign-up itself already succeeded.
 func (s *Service) sendVerificationEmail(ctx context.Context, email, token string) {
 	link := fmt.Sprintf("%s/verify?token=%s", strings.TrimRight(s.appURL, "/"), token)
 	body := fmt.Sprintf("Welcome to Dating Coach!\n\nVerify your email address: %s\n\nThis link expires in 48 hours.", link)
@@ -212,6 +232,7 @@ func (s *Service) sendVerificationEmail(ctx context.Context, email, token string
 	}
 }
 
+// randomToken returns a 256-bit hex string used as an email verification token.
 func randomToken() (string, error) {
 	buf := make([]byte, 32)
 	if _, err := rand.Read(buf); err != nil {

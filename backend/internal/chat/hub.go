@@ -39,6 +39,7 @@ type Event struct {
 	CreatedAt string    `json:"created_at,omitempty"`
 }
 
+// Message is a persisted chat message as returned to clients.
 type Message struct {
 	ID        string `json:"id"`
 	ThreadID  string `json:"thread_id"`
@@ -61,6 +62,8 @@ type Hub struct {
 	cancels map[uuid.UUID]context.CancelFunc
 }
 
+// NewHub returns a hub bridging local sockets to Redis; one is shared by the
+// chat Handler (sockets) and Service (publishing).
 func NewHub(rdb *redis.Client) *Hub {
 	return &Hub{
 		rdb:     rdb,
@@ -90,6 +93,8 @@ func (h *Hub) Subscribe(threadID uuid.UUID) (<-chan Event, func()) {
 	return sub.events, func() { h.unsubscribe(threadID, sub) }
 }
 
+// unsubscribe removes a socket and, once a thread has no local sockets left,
+// stops its Redis subscription.
 func (h *Hub) unsubscribe(threadID uuid.UUID, sub *subscriber) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -137,6 +142,8 @@ func (h *Hub) pump(ctx context.Context, threadID uuid.UUID) {
 	}
 }
 
+// broadcastLocal delivers an event to this replica's sockets, dropping it for
+// clients whose buffer is full rather than blocking the whole thread.
 func (h *Hub) broadcastLocal(threadID uuid.UUID, event Event) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -175,6 +182,8 @@ func (h *Hub) MarkOnline(ctx context.Context, userID, connID uuid.UUID) error {
 	return nil
 }
 
+// MarkOffline drops one connection from a user's presence set; call it when a
+// socket closes.
 func (h *Hub) MarkOffline(ctx context.Context, userID, connID uuid.UUID) error {
 	if err := h.rdb.SRem(ctx, presenceKey(userID), connID.String()).Err(); err != nil {
 		return fmt.Errorf("clear presence: %w", err)
@@ -182,6 +191,8 @@ func (h *Hub) MarkOffline(ctx context.Context, userID, connID uuid.UUID) error {
 	return nil
 }
 
+// IsOnline reports whether a user holds any live connection, which the thread
+// lists surface as counterpart presence.
 func (h *Hub) IsOnline(ctx context.Context, userID uuid.UUID) (bool, error) {
 	n, err := h.rdb.SCard(ctx, presenceKey(userID)).Result()
 	if err != nil {
@@ -190,10 +201,12 @@ func (h *Hub) IsOnline(ctx context.Context, userID uuid.UUID) (bool, error) {
 	return n > 0, nil
 }
 
+// channelFor is the Redis pub/sub channel carrying one thread's events.
 func channelFor(threadID uuid.UUID) string {
 	return fmt.Sprintf(typingChannelFmt, threadID)
 }
 
+// presenceKey is the Redis set holding a user's live connection IDs.
 func presenceKey(userID uuid.UUID) string {
 	return fmt.Sprintf("presence:user:%s", userID)
 }

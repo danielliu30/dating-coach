@@ -14,13 +14,15 @@ type contextKey string
 
 const principalKey contextKey = "auth.principal"
 
-// Principal is the authenticated caller.
+// Principal is the authenticated caller. Middleware puts one on the request
+// context and handlers read it back with PrincipalFrom.
 type Principal struct {
 	UserID uuid.UUID
 	Email  string
 	Role   string
 }
 
+// IsCoach reports whether the caller may use the coach-only endpoints.
 func (p Principal) IsCoach() bool { return p.Role == RoleCoach || p.Role == RoleAdmin }
 
 // Middleware rejects requests without a valid bearer token.
@@ -63,10 +65,13 @@ func RequireCoach(next http.Handler) http.Handler {
 	})
 }
 
+// WithPrincipal stores the caller on a context; tests use it to fake auth.
 func WithPrincipal(ctx context.Context, p Principal) context.Context {
 	return context.WithValue(ctx, principalKey, p)
 }
 
+// PrincipalFrom returns the caller placed on the context by Middleware. The
+// boolean is false on unauthenticated requests.
 func PrincipalFrom(ctx context.Context) (Principal, bool) {
 	p, ok := ctx.Value(principalKey).(Principal)
 	return p, ok

@@ -20,6 +20,7 @@ type MLRequest struct {
 	Messages       []MLMessage `json:"messages"`
 }
 
+// MLMessage is one transcript message as the analyzer expects it.
 type MLMessage struct {
 	Position int32  `json:"position"`
 	Sender   string `json:"sender"`
@@ -34,6 +35,8 @@ type MLResponse struct {
 	Overall      MLOverall   `json:"overall"`
 }
 
+// MLSegment scores a contiguous run of messages, which is what the app
+// highlights inline in the transcript.
 type MLSegment struct {
 	StartPosition   int32   `json:"start_position"`
 	EndPosition     int32   `json:"end_position"`
@@ -42,6 +45,7 @@ type MLSegment struct {
 	Comment         string  `json:"comment"`
 }
 
+// MLOverall is the conversation-level verdict shown at the top of the report.
 type MLOverall struct {
 	EngagementScore float64  `json:"engagement_score"`
 	Summary         string   `json:"summary"`
@@ -56,6 +60,8 @@ type MLClient struct {
 	http    *http.Client
 }
 
+// NewMLClient returns a client for the analyzer at baseURL. The timeout bounds
+// a whole scoring call, which can be slow when it goes through an LLM.
 func NewMLClient(baseURL string, timeout time.Duration) *MLClient {
 	return &MLClient{
 		baseURL: strings.TrimRight(baseURL, "/"),
@@ -63,6 +69,9 @@ func NewMLClient(baseURL string, timeout time.Duration) *MLClient {
 	}
 }
 
+// Analyze scores one conversation by POSTing it to /analyze. Non-200 responses
+// become errors carrying a snippet of the body, so the worker can record why a
+// job failed. Called by Worker.Handle.
 func (c *MLClient) Analyze(ctx context.Context, in MLRequest) (MLResponse, error) {
 	body, err := json.Marshal(in)
 	if err != nil {
