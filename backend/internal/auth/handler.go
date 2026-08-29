@@ -10,11 +10,14 @@ import (
 	"github.com/danielliu30/dating-coach/backend/internal/httpx"
 )
 
+// Handler is the HTTP layer for /api/v1/auth: it decodes requests, delegates to
+// Service and translates its sentinel errors into status codes.
 type Handler struct {
 	svc     *Service
 	limiter *RateLimiter
 }
 
+// NewHandler builds the auth handler; cmd/api mounts its Routes.
 func NewHandler(svc *Service, limiter *RateLimiter) *Handler {
 	return &Handler{svc: svc, limiter: limiter}
 }
@@ -37,6 +40,7 @@ func (h *Handler) Routes(authenticate func(http.Handler) http.Handler) http.Hand
 	return r
 }
 
+// signUp handles POST /signup and returns a session for the new account.
 func (h *Handler) signUp(w http.ResponseWriter, r *http.Request) {
 	var in SignUpInput
 	if err := httpx.Decode(r, &in); err != nil {
@@ -57,6 +61,7 @@ func (h *Handler) signUp(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// signIn handles POST /signin and exchanges credentials for a session.
 func (h *Handler) signIn(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Email    string `json:"email"`
@@ -78,6 +83,7 @@ func (h *Handler) signIn(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// verify handles POST /verify, consuming the token from the verification email.
 func (h *Handler) verify(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Token string `json:"token"`
@@ -98,6 +104,9 @@ func (h *Handler) verify(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// resendVerification handles POST /resend-verification. Unknown and already
+// verified addresses also report success, so the response cannot be used to
+// probe for registered emails.
 func (h *Handler) resendVerification(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Email string `json:"email"`
@@ -114,6 +123,7 @@ func (h *Handler) resendVerification(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusAccepted, map[string]string{"status": "sent"})
 }
 
+// me handles GET /me and returns the profile of the authenticated caller.
 func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
 	principal, ok := PrincipalFrom(r.Context())
 	if !ok {

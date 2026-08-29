@@ -28,6 +28,8 @@ type Queue struct {
 	name    string
 }
 
+// OpenQueue dials the broker, declares the durable queue and configures
+// prefetch plus publisher confirms. Callers must Close the result.
 func OpenQueue(url, name string) (*Queue, error) {
 	conn, err := amqp.Dial(url)
 	if err != nil {
@@ -58,6 +60,8 @@ func OpenQueue(url, name string) (*Queue, error) {
 	return &Queue{conn: conn, channel: channel, name: name}, nil
 }
 
+// Publish sends a job and waits for the broker to confirm it, so callers only
+// see success once the job is durably queued.
 func (q *Queue) Publish(ctx context.Context, job Job) error {
 	body, err := json.Marshal(job)
 	if err != nil {
@@ -90,6 +94,7 @@ type JobPublisher struct {
 	queue *Queue
 }
 
+// OpenPublisher dials the broker and returns the publisher used by the API.
 func OpenPublisher(url, name string) (*JobPublisher, error) {
 	queue, err := OpenQueue(url, name)
 	if err != nil {
@@ -98,6 +103,9 @@ func OpenPublisher(url, name string) (*JobPublisher, error) {
 	return &JobPublisher{url: url, name: name, queue: queue}, nil
 }
 
+// Publish satisfies Publisher. A failure that is not caused by the caller's
+// context is retried once on a fresh connection, since the usual cause is a
+// channel the broker closed while the process was idle.
 func (p *JobPublisher) Publish(ctx context.Context, job Job) error {
 	queue, err := p.acquire()
 	if err != nil {
@@ -116,6 +124,8 @@ func (p *JobPublisher) Publish(ctx context.Context, job Job) error {
 	return queue.Publish(ctx, job)
 }
 
+// acquire returns the live queue, dialing a new one when there is none or the
+// previous connection is closed.
 func (p *JobPublisher) acquire() (*Queue, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -143,6 +153,7 @@ func (p *JobPublisher) discard(stale *Queue) {
 	stale.Close()
 }
 
+// Close releases the broker connection; deferred by cmd/api.
 func (p *JobPublisher) Close() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -204,6 +215,7 @@ func (q *Queue) Consume(ctx context.Context, handle JobHandler) error {
 	}
 }
 
+// Close shuts the channel and connection down.
 func (q *Queue) Close() {
 	if err := q.channel.Close(); err != nil {
 		slog.Debug("close rabbitmq channel", "error", err)

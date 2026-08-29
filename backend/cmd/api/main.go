@@ -34,6 +34,8 @@ func main() {
 	}
 }
 
+// run loads configuration, opens the backing services, assembles each feature's
+// service and handler, and serves until a signal arrives.
 func run() error {
 	cfg, err := config.Load()
 	if err != nil {

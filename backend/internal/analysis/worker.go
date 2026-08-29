@@ -21,6 +21,8 @@ type Worker struct {
 	notifier notify.Notifier
 }
 
+// NewWorker wires the worker dependencies; called once from cmd/worker, whose
+// consumer loop invokes Handle for every delivery.
 func NewWorker(queries *db.Queries, ml *MLClient, notifier notify.Notifier) *Worker {
 	return &Worker{queries: queries, ml: ml, notifier: notifier}
 }

@@ -13,15 +13,20 @@ import (
 	"github.com/danielliu30/dating-coach/backend/internal/config"
 )
 
+// Notifier is the delivery interface the services depend on, so tests can
+// capture notifications instead of sending them.
 type Notifier interface {
 	Email(ctx context.Context, to, subject, body string) error
 	Push(ctx context.Context, userID, title, body string) error
 }
 
+// Service is the real Notifier: it delivers email over the configured SMTP
+// server and records push intent.
 type Service struct {
 	cfg *config.Config
 }
 
+// New returns the notifier used by the API and the worker.
 func New(cfg *config.Config) *Service {
 	return &Service{cfg: cfg}
 }

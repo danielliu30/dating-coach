@@ -11,6 +11,8 @@ import (
 	"github.com/joho/godotenv"
 )
 
+// Config is the fully resolved configuration shared by cmd/api and cmd/worker.
+// Each process reads only the fields it needs.
 type Config struct {
 	Env      string
 	HTTPAddr string
@@ -106,6 +108,7 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
+// env returns a trimmed environment variable, or fallback when unset or blank.
 func env(key, fallback string) string {
 	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
 		return v
@@ -113,6 +116,7 @@ func env(key, fallback string) string {
 	return fallback
 }
 
+// envList parses a comma-separated variable, used for the CORS origins.
 func envList(key string, fallback []string) []string {
 	raw := env(key, "")
 	if raw == "" {

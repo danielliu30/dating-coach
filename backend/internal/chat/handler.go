@@ -22,12 +22,16 @@ const (
 	historyOnJoin   = 50
 )
 
+// Handler is the HTTP layer for /api/v1/chat: the REST endpoints plus the
+// WebSocket endpoint that streams a thread in both directions.
 type Handler struct {
 	svc            *Service
 	hub            *Hub
 	originPatterns []string
 }
 
+// NewHandler builds the chat handler. originPatterns are the origins allowed to
+// open a socket, and mirror the API's CORS configuration.
 func NewHandler(svc *Service, hub *Hub, originPatterns []string) *Handler {
 	return &Handler{svc: svc, hub: hub, originPatterns: originPatterns}
 }
@@ -49,6 +53,8 @@ func (h *Handler) Routes() http.Handler {
 	return r
 }
 
+// startThread handles POST /threads, reusing the caller's active thread with
+// the coach when one exists.
 func (h *Handler) startThread(w http.ResponseWriter, r *http.Request) {
 	principal, ok := principalOf(w, r)
 	if !ok {
@@ -85,6 +91,7 @@ func (h *Handler) startThread(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusCreated, thread)
 }
 
+// listThreads handles GET /threads for the client side.
 func (h *Handler) listThreads(w http.ResponseWriter, r *http.Request) {
 	principal, ok := principalOf(w, r)
 	if !ok {
@@ -98,6 +105,7 @@ func (h *Handler) listThreads(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{"threads": threads})
 }
 
+// listCoachThreads handles GET /coach/threads for the coach dashboard.
 func (h *Handler) listCoachThreads(w http.ResponseWriter, r *http.Request) {
 	principal, ok := principalOf(w, r)
 	if !ok {
@@ -115,6 +123,7 @@ func (h *Handler) listCoachThreads(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{"threads": threads})
 }
 
+// history handles GET /threads/{threadID}/messages with 1-based offset paging.
 func (h *Handler) history(w http.ResponseWriter, r *http.Request) {
 	principal, ok := principalOf(w, r)
 	if !ok {
@@ -160,6 +169,7 @@ func (h *Handler) postMessage(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusCreated, msg)
 }
 
+// closeThread handles POST /threads/{threadID}/close.
 func (h *Handler) closeThread(w http.ResponseWriter, r *http.Request) {
 	principal, ok := principalOf(w, r)
 	if !ok {
@@ -247,6 +257,9 @@ func (h *Handler) websocket(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleIncoming dispatches one client event: sending a message, relaying a
+// typing indicator or refreshing presence. Rejected sends are reported back on
+// the socket instead of closing it.
 func (h *Handler) handleIncoming(ctx context.Context, conn *websocket.Conn, threadID uuid.UUID, principal auth.Principal, connID uuid.UUID, event Event) {
 	switch event.Type {
 	case EventMessage:
@@ -266,6 +279,8 @@ func (h *Handler) handleIncoming(ctx context.Context, conn *websocket.Conn, thre
 	}
 }
 
+// readLoop decodes client frames onto out until the socket fails, then cancels
+// the connection context so websocket returns. Undecodable frames are skipped.
 func (h *Handler) readLoop(ctx context.Context, cancel context.CancelFunc, conn *websocket.Conn, out chan<- Event) {
 	defer cancel()
 	defer close(out)
@@ -286,6 +301,8 @@ func (h *Handler) readLoop(ctx context.Context, cancel context.CancelFunc, conn 
 	}
 }
 
+// write sends one event with a bounded deadline, so a stalled client cannot
+// block the connection's event loop.
 func (h *Handler) write(ctx context.Context, conn *websocket.Conn, event Event) {
 	payload, err := json.Marshal(event)
 	if err != nil {
@@ -299,6 +316,8 @@ func (h *Handler) write(ctx context.Context, conn *websocket.Conn, event Event) 
 	}
 }
 
+// principalOf returns the authenticated caller, writing 401 when absent. The
+// boolean reports whether the handler should continue.
 func principalOf(w http.ResponseWriter, r *http.Request) (auth.Principal, bool) {
 	principal, ok := auth.PrincipalFrom(r.Context())
 	if !ok {
@@ -308,6 +327,7 @@ func principalOf(w http.ResponseWriter, r *http.Request) (auth.Principal, bool) 
 	return principal, true
 }
 
+// pathUUID parses a UUID path parameter, writing 400 when it is malformed.
 func pathUUID(w http.ResponseWriter, r *http.Request, param string) (uuid.UUID, bool) {
 	id, err := uuid.Parse(chi.URLParam(r, param))
 	if err != nil {
@@ -317,6 +337,8 @@ func pathUUID(w http.ResponseWriter, r *http.Request, param string) (uuid.UUID, 
 	return id, true
 }
 
+// respondErr maps the package's sentinel errors onto status codes; anything
+// else is logged and reported as a 500 with the fallback message.
 func respondErr(w http.ResponseWriter, err error, fallback string) {
 	switch {
 	case errors.Is(err, ErrNotFound):

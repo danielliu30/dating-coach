@@ -15,6 +15,7 @@ import (
 	"github.com/danielliu30/dating-coach/backend/internal/store/db"
 )
 
+// Sentinel errors respondErr maps onto HTTP status codes.
 var (
 	ErrNotFound     = errors.New("not found")
 	ErrForbidden    = errors.New("not allowed")
@@ -31,6 +32,7 @@ const (
 	maxAvailabilityDays   = 30
 )
 
+// sessionStatuses are the states a booking may be moved to.
 var sessionStatuses = map[string]bool{
 	"scheduled": true,
 	"completed": true,
@@ -38,15 +40,20 @@ var sessionStatuses = map[string]bool{
 	"no_show":   true,
 }
 
+// Service owns the coaching business rules: the coach directory and profiles,
+// each coach's weekly availability, the bookable slots derived from it, and the
+// lifecycle of a booked session (book, reschedule, status, notes).
 type Service struct {
 	pool    *pgxpool.Pool
 	queries *db.Queries
 }
 
+// NewService wires the service dependencies; called once from cmd/api.
 func NewService(pool *pgxpool.Pool, queries *db.Queries) *Service {
 	return &Service{pool: pool, queries: queries}
 }
 
+// Coach is the public directory view of a coach profile.
 type Coach struct {
 	ID               string   `json:"id"`
 	DisplayName      string   `json:"display_name"`
@@ -59,6 +66,8 @@ type Coach struct {
 	AcceptingClients bool     `json:"accepting_clients"`
 }
 
+// Session is the API view of a booking. CounterpartName is the other party's
+// name and is only filled in by the list endpoints.
 type Session struct {
 	ID              string `json:"id"`
 	UserID          string `json:"user_id"`
@@ -71,17 +80,21 @@ type Session struct {
 	CoachNotes      string `json:"coach_notes,omitempty"`
 }
 
+// Slot is one bookable start time offered to clients.
 type Slot struct {
 	Start           string `json:"start"`
 	DurationMinutes int32  `json:"duration_minutes"`
 }
 
+// AvailabilityWindow is a recurring weekly window in the coach's own timezone,
+// expressed as minutes from midnight.
 type AvailabilityWindow struct {
 	Weekday     int16 `json:"weekday"`
 	StartMinute int32 `json:"start_minute"`
 	EndMinute   int32 `json:"end_minute"`
 }
 
+// sessionOf projects a session row onto the API shape.
 func sessionOf(s db.CoachingSession, counterpart string) Session {
 	return Session{
 		ID:              s.ID.String(),
@@ -96,6 +109,7 @@ func sessionOf(s db.CoachingSession, counterpart string) Session {
 	}
 }
 
+// ListCoaches returns a page of the coach directory.
 func (s *Service) ListCoaches(ctx context.Context, limit, offset int32, acceptingOnly bool) ([]Coach, error) {
 	rows, err := s.queries.ListCoaches(ctx, db.ListCoachesParams{
 		Limit:         limit,
@@ -122,6 +136,7 @@ func (s *Service) ListCoaches(ctx context.Context, limit, offset int32, acceptin
 	return out, nil
 }
 
+// GetCoach returns one coach profile, or ErrNotFound when the user has none.
 func (s *Service) GetCoach(ctx context.Context, coachID uuid.UUID) (Coach, error) {
 	row, err := s.queries.GetCoach(ctx, coachID)
 	if err != nil {
@@ -143,6 +158,7 @@ func (s *Service) GetCoach(ctx context.Context, coachID uuid.UUID) (Coach, error
 	}, nil
 }
 
+// UpsertProfileInput is the decoded PUT /coach/profile body.
 type UpsertProfileInput struct {
 	Headline         string   `json:"headline"`
 	Bio              string   `json:"bio"`
@@ -153,6 +169,8 @@ type UpsertProfileInput struct {
 	AcceptingClients bool     `json:"accepting_clients"`
 }
 
+// UpsertProfile creates or replaces the caller's coach profile. The timezone is
+// validated here because every slot calculation is done in it.
 func (s *Service) UpsertProfile(ctx context.Context, coachID uuid.UUID, in UpsertProfileInput) (Coach, error) {
 	if in.Timezone == "" {
 		in.Timezone = "UTC"
@@ -179,6 +197,7 @@ func (s *Service) UpsertProfile(ctx context.Context, coachID uuid.UUID, in Upser
 	return s.GetCoach(ctx, row.UserID)
 }
 
+// SetAvailability replaces the coach's whole weekly schedule with windows.
 func (s *Service) SetAvailability(ctx context.Context, coachID uuid.UUID, windows []AvailabilityWindow) ([]AvailabilityWindow, error) {
 	for _, w := range windows {
 		if w.Weekday < 0 || w.Weekday > 6 || w.StartMinute < 0 || w.EndMinute <= w.StartMinute || w.EndMinute > 1440 {
@@ -213,6 +232,7 @@ func (s *Service) SetAvailability(ctx context.Context, coachID uuid.UUID, window
 	return s.ListAvailability(ctx, coachID)
 }
 
+// ListAvailability returns the coach's published weekly windows.
 func (s *Service) ListAvailability(ctx context.Context, coachID uuid.UUID) ([]AvailabilityWindow, error) {
 	rows, err := s.queries.ListCoachAvailability(ctx, coachID)
 	if err != nil {
@@ -311,6 +331,8 @@ func wallMinute(t time.Time, loc *time.Location) int32 {
 	return int32(local.Hour()*60 + local.Minute())
 }
 
+// overlapsBooked reports whether the interval collides with an existing session,
+// optionally ignoring the one being rescheduled.
 func overlapsBooked(start time.Time, durationMinutes int32, booked []db.ListBookedSlotsRow, exclude *uuid.UUID) bool {
 	end := start.Add(time.Duration(durationMinutes) * time.Minute)
 	for _, b := range booked {
@@ -325,6 +347,7 @@ func overlapsBooked(start time.Time, durationMinutes int32, booked []db.ListBook
 	return false
 }
 
+// BookInput is the decoded POST /coaching/sessions body.
 type BookInput struct {
 	CoachID         string `json:"coach_id"`
 	ScheduledTime   string `json:"scheduled_time"`
@@ -332,6 +355,8 @@ type BookInput struct {
 	Topic           string `json:"topic"`
 }
 
+// BookSession books a slot with a coach after checking that it is in the future,
+// inside the published availability and still free.
 func (s *Service) BookSession(ctx context.Context, userID uuid.UUID, in BookInput) (Session, error) {
 	coachID, err := uuid.Parse(in.CoachID)
 	if err != nil {
@@ -421,6 +446,7 @@ func (s *Service) assertBookable(ctx context.Context, coachID uuid.UUID, start t
 	return nil
 }
 
+// ListForUser returns a client's sessions, optionally filtered by status.
 func (s *Service) ListForUser(ctx context.Context, userID uuid.UUID, status *string) ([]Session, error) {
 	rows, err := s.queries.ListSessionsForUser(ctx, db.ListSessionsForUserParams{UserID: userID, Status: status})
 	if err != nil {
@@ -443,6 +469,8 @@ func (s *Service) ListForUser(ctx context.Context, userID uuid.UUID, status *str
 	return out, nil
 }
 
+// ListForCoach returns a coach's sessions for the dashboard, optionally
+// filtered by status and start time.
 func (s *Service) ListForCoach(ctx context.Context, coachID uuid.UUID, status *string, fromTime *time.Time) ([]Session, error) {
 	rows, err := s.queries.ListSessionsForCoach(ctx, db.ListSessionsForCoachParams{
 		CoachID:  coachID,
@@ -484,6 +512,8 @@ func (s *Service) participant(ctx context.Context, sessionID, userID uuid.UUID) 
 	return session, nil
 }
 
+// SetStatus moves a session to another status; either participant may call it,
+// which is how client-side cancellation is implemented.
 func (s *Service) SetStatus(ctx context.Context, sessionID, actorID uuid.UUID, status string) (Session, error) {
 	if !sessionStatuses[status] {
 		return Session{}, fmt.Errorf("%w: unknown status %q", ErrInvalidInput, status)
@@ -498,6 +528,9 @@ func (s *Service) SetStatus(ctx context.Context, sessionID, actorID uuid.UUID, s
 	return sessionOf(updated, ""), nil
 }
 
+// Reschedule moves a session to a new start time, keeping its duration. The
+// session being moved is excluded from the conflict check, and the coach need
+// not still be accepting new clients.
 func (s *Service) Reschedule(ctx context.Context, sessionID, actorID uuid.UUID, scheduledTime string) (Session, error) {
 	scheduled, err := time.Parse(time.RFC3339, scheduledTime)
 	if err != nil {
@@ -526,6 +559,7 @@ func (s *Service) Reschedule(ctx context.Context, sessionID, actorID uuid.UUID, 
 	return sessionOf(updated, ""), nil
 }
 
+// SetNotes stores the coach's private notes; only the session's coach may.
 func (s *Service) SetNotes(ctx context.Context, sessionID, coachID uuid.UUID, notes string) (Session, error) {
 	session, err := s.participant(ctx, sessionID, coachID)
 	if err != nil {
