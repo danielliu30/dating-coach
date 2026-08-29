@@ -36,8 +36,13 @@ WHERE conversation_id = $1
 ORDER BY created_at DESC
 LIMIT 1;
 
--- name: MarkAnalysisRunning :exec
-UPDATE analysis_results SET status = 'running' WHERE id = $1;
+-- Claims a job for this delivery. Terminal rows return no row, so a redelivered
+-- job can be acked without scoring the conversation again.
+-- name: ClaimAnalysis :one
+UPDATE analysis_results
+SET status = 'running'
+WHERE id = $1 AND status IN ('pending', 'running')
+RETURNING *;
 
 -- name: CompleteAnalysis :one
 UPDATE analysis_results

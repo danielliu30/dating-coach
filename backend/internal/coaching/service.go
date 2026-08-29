@@ -252,8 +252,9 @@ func (s *Service) OpenSlots(ctx context.Context, coachID uuid.UUID, from, to tim
 		return nil, err
 	}
 	booked, err := s.queries.ListBookedSlots(ctx, db.ListBookedSlotsParams{
+		// A session starting before the range can still run into it.
 		CoachID:         coachID,
-		ScheduledTime:   from,
+		ScheduledTime:   from.Add(-maxSessionMinutes * time.Minute),
 		ScheduledTime_2: to,
 	})
 	if err != nil {
@@ -274,7 +275,7 @@ func (s *Service) OpenSlots(ctx context.Context, coachID uuid.UUID, from, to tim
 				if start.Before(from) || !start.Before(to) {
 					continue
 				}
-				if overlapsBooked(start, durationMinutes, booked) {
+				if overlapsBooked(start, durationMinutes, booked, nil) {
 					continue
 				}
 				slots = append(slots, Slot{Start: start.UTC().Format(time.RFC3339), DurationMinutes: durationMinutes})
@@ -285,9 +286,12 @@ func (s *Service) OpenSlots(ctx context.Context, coachID uuid.UUID, from, to tim
 	return slots, nil
 }
 
-func overlapsBooked(start time.Time, durationMinutes int32, booked []db.ListBookedSlotsRow) bool {
+func overlapsBooked(start time.Time, durationMinutes int32, booked []db.ListBookedSlotsRow, exclude *uuid.UUID) bool {
 	end := start.Add(time.Duration(durationMinutes) * time.Minute)
 	for _, b := range booked {
+		if exclude != nil && b.ID == *exclude {
+			continue
+		}
 		bookedEnd := b.ScheduledTime.Add(time.Duration(b.DurationMinutes) * time.Minute)
 		if start.Before(bookedEnd) && b.ScheduledTime.Before(end) {
 			return true
@@ -319,7 +323,7 @@ func (s *Service) BookSession(ctx context.Context, userID uuid.UUID, in BookInpu
 	if duration <= 0 {
 		duration = defaultSessionMinutes
 	}
-	if err := s.assertBookable(ctx, coachID, scheduled, duration, true); err != nil {
+	if err := s.assertBookable(ctx, coachID, scheduled, duration, true, nil); err != nil {
 		return Session{}, err
 	}
 
@@ -343,7 +347,7 @@ func (s *Service) BookSession(ctx context.Context, userID uuid.UUID, in BookInpu
 // availability for, or that collides with an existing session. The exclusion
 // constraint on coaching_sessions is the authoritative race-safe check; this
 // gives callers a precise error instead of a bare conflict.
-func (s *Service) assertBookable(ctx context.Context, coachID uuid.UUID, start time.Time, duration int32, requireAccepting bool) error {
+func (s *Service) assertBookable(ctx context.Context, coachID uuid.UUID, start time.Time, duration int32, requireAccepting bool, excludeSessionID *uuid.UUID) error {
 	if duration < minSessionMinutes || duration > maxSessionMinutes {
 		return fmt.Errorf("%w: duration must be between %d and %d minutes", ErrInvalidInput, minSessionMinutes, maxSessionMinutes)
 	}
@@ -386,7 +390,7 @@ func (s *Service) assertBookable(ctx context.Context, coachID uuid.UUID, start t
 	if err != nil {
 		return fmt.Errorf("list booked slots: %w", err)
 	}
-	if overlapsBooked(start, duration, booked) {
+	if overlapsBooked(start, duration, booked, excludeSessionID) {
 		return ErrSlotTaken
 	}
 	return nil
@@ -481,7 +485,7 @@ func (s *Service) Reschedule(ctx context.Context, sessionID, actorID uuid.UUID, 
 	if err != nil {
 		return Session{}, err
 	}
-	if err := s.assertBookable(ctx, session.CoachID, scheduled, session.DurationMinutes, false); err != nil {
+	if err := s.assertBookable(ctx, session.CoachID, scheduled, session.DurationMinutes, false, &sessionID); err != nil {
 		return Session{}, err
 	}
 	updated, err := s.queries.RescheduleSession(ctx, db.RescheduleSessionParams{ID: sessionID, ScheduledTime: scheduled})

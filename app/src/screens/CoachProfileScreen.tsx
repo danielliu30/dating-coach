@@ -12,6 +12,20 @@ const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const clock = (minute: number): string =>
   `${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`;
 
+type WindowDraft = {
+  key: string;
+  weekday: number;
+  start: string;
+  end: string;
+};
+
+const draftOf = (window: AvailabilityWindow, index: number): WindowDraft => ({
+  key: `${window.weekday}-${window.start_minute}-${window.end_minute}-${index}`,
+  weekday: window.weekday,
+  start: clock(window.start_minute),
+  end: clock(window.end_minute),
+});
+
 const parseClock = (value: string): number | null => {
   const match = /^(\d{1,2}):(\d{2})$/.exec(value.trim());
   if (!match) return null;
@@ -29,9 +43,9 @@ export default function CoachProfileScreen(): React.ReactElement {
   const [years, setYears] = useState('3');
   const [accepting, setAccepting] = useState(true);
 
-  const [weekdays, setWeekdays] = useState<number[]>([1, 2, 3, 4, 5]);
-  const [start, setStart] = useState('17:00');
-  const [end, setEnd] = useState('21:00');
+  const [windows, setWindows] = useState<WindowDraft[]>(() =>
+    [1, 2, 3, 4, 5].map((weekday) => ({ key: `default-${weekday}`, weekday, start: '17:00', end: '21:00' })),
+  );
 
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -45,7 +59,7 @@ export default function CoachProfileScreen(): React.ReactElement {
     let cancelled = false;
     void (async () => {
       try {
-        const [profile, windows] = await Promise.all([
+        const [profile, saved] = await Promise.all([
           api.getCoach(coachID),
           api.coachAvailability(coachID),
         ]);
@@ -57,10 +71,8 @@ export default function CoachProfileScreen(): React.ReactElement {
         setTimezone(profile.timezone);
         setYears(String(profile.years_experience));
         setAccepting(profile.accepting_clients);
-        if (windows.length > 0) {
-          setWeekdays(windows.map((w) => w.weekday).sort((a, b) => a - b));
-          setStart(clock(windows[0].start_minute));
-          setEnd(clock(windows[0].end_minute));
+        if (saved.length > 0) {
+          setWindows(saved.map(draftOf));
         }
       } catch (err) {
         // 404 simply means the coach has not published a profile yet.
@@ -77,11 +89,15 @@ export default function CoachProfileScreen(): React.ReactElement {
   }, [coachID]);
 
   const save = async () => {
-    const startMinute = parseClock(start);
-    const endMinute = parseClock(end);
-    if (startMinute === null || endMinute === null || endMinute <= startMinute) {
-      setError('Availability times must be HH:MM with end after start.');
-      return;
+    const payload: AvailabilityWindow[] = [];
+    for (const window of windows) {
+      const startMinute = parseClock(window.start);
+      const endMinute = parseClock(window.end);
+      if (startMinute === null || endMinute === null || endMinute <= startMinute) {
+        setError(`${WEEKDAYS[window.weekday]} times must be HH:MM with end after start.`);
+        return;
+      }
+      payload.push({ weekday: window.weekday, start_minute: startMinute, end_minute: endMinute });
     }
     setBusy(true);
     setError(null);
@@ -99,24 +115,35 @@ export default function CoachProfileScreen(): React.ReactElement {
         years_experience: Number(years) || 0,
         accepting_clients: accepting,
       });
-      const windows: AvailabilityWindow[] = weekdays.map((weekday) => ({
-        weekday,
-        start_minute: startMinute,
-        end_minute: endMinute,
-      }));
-      await api.setAvailability(windows);
-      setStatus('Profile and availability saved.');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'could not save profile');
+      setBusy(false);
+      return;
+    }
+    // The profile request is already committed, so an availability failure is a
+    // partial save and has to say so.
+    try {
+      const { availability } = await api.setAvailability(payload);
+      setWindows((availability ?? []).map(draftOf));
+      setStatus('Profile and availability saved.');
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : 'unknown error';
+      setError(`Profile saved, but availability did not save (${detail}). Save again to retry.`);
     } finally {
       setBusy(false);
     }
   };
 
-  const toggleDay = (day: number) =>
-    setWeekdays((current) =>
-      current.includes(day) ? current.filter((value) => value !== day) : [...current, day].sort(),
-    );
+  const updateWindow = (key: string, patch: Partial<WindowDraft>) =>
+    setWindows((current) => current.map((w) => (w.key === key ? { ...w, ...patch } : w)));
+
+  const addWindow = () =>
+    setWindows((current) => [
+      ...current,
+      { key: `new-${Date.now()}-${current.length}`, weekday: 1, start: '17:00', end: '21:00' },
+    ]);
+
+  const removeWindow = (key: string) => setWindows((current) => current.filter((w) => w.key !== key));
 
   if (loading) {
     return (
@@ -160,32 +187,52 @@ export default function CoachProfileScreen(): React.ReactElement {
 
       <View style={shared.card}>
         <Text style={shared.heading}>Weekly availability</Text>
-        <Text style={shared.muted}>Times are in your profile timezone.</Text>
-        <View style={[shared.row, { flexWrap: 'wrap' }]}>
-          {WEEKDAYS.map((label, day) => (
-            <Pressable
-              key={label}
-              accessibilityRole="checkbox"
-              accessibilityState={{ checked: weekdays.includes(day) }}
-              onPress={() => toggleDay(day)}
-              style={[styles.day, weekdays.includes(day) && styles.dayActive]}
-            >
-              <Text style={weekdays.includes(day) ? styles.dayActiveLabel : styles.dayLabel}>{label}</Text>
-            </Pressable>
-          ))}
-        </View>
-        <View style={shared.row}>
-          <View style={{ flex: 1 }}>
-            <Field label="From" value={start} onChangeText={setStart} placeholder="17:00" />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Field label="To" value={end} onChangeText={setEnd} placeholder="21:00" />
-          </View>
-        </View>
         <Text style={shared.muted}>
-          {weekdays.map((day) => WEEKDAYS[day]).join(', ') || 'No days'} · {clock(parseClock(start) ?? 0)}–
-          {clock(parseClock(end) ?? 0)}
+          One row per window: add several rows for split hours or different hours per day. Times are in your profile
+          timezone.
         </Text>
+        {windows.length === 0 ? <Text style={shared.muted}>No availability published.</Text> : null}
+        {windows.map((window) => (
+          <View key={window.key} style={styles.window}>
+            <View style={[shared.row, { flexWrap: 'wrap' }]}>
+              {WEEKDAYS.map((label, day) => (
+                <Pressable
+                  key={label}
+                  accessibilityRole="radio"
+                  accessibilityState={{ checked: window.weekday === day }}
+                  onPress={() => updateWindow(window.key, { weekday: day })}
+                  style={[styles.day, window.weekday === day && styles.dayActive]}
+                >
+                  <Text style={window.weekday === day ? styles.dayActiveLabel : styles.dayLabel}>{label}</Text>
+                </Pressable>
+              ))}
+            </View>
+            <View style={shared.row}>
+              <View style={{ flex: 1 }}>
+                <Field
+                  label="From"
+                  value={window.start}
+                  onChangeText={(value) => updateWindow(window.key, { start: value })}
+                  placeholder="17:00"
+                />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Field
+                  label="To"
+                  value={window.end}
+                  onChangeText={(value) => updateWindow(window.key, { end: value })}
+                  placeholder="21:00"
+                />
+              </View>
+            </View>
+            <Pressable accessibilityRole="button" onPress={() => removeWindow(window.key)}>
+              <Text style={styles.link}>Remove window</Text>
+            </Pressable>
+          </View>
+        ))}
+        <Pressable accessibilityRole="button" onPress={addWindow}>
+          <Text style={styles.link}>+ Add window</Text>
+        </Pressable>
       </View>
 
       {status ? <Text style={shared.muted}>{status}</Text> : null}
@@ -204,7 +251,15 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     paddingHorizontal: 12,
   },
+  window: {
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    paddingTop: 12,
+    marginTop: 12,
+    gap: 8,
+  },
   dayActive: { borderColor: colors.primary, backgroundColor: '#fdf0f4' },
   dayLabel: { color: colors.muted, fontWeight: '600', fontSize: 13 },
   dayActiveLabel: { color: colors.primary, fontWeight: '700', fontSize: 13 },
+  link: { color: colors.primary, fontWeight: '600', fontSize: 14 },
 });

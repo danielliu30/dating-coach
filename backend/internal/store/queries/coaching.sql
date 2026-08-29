@@ -65,7 +65,7 @@ WHERE s.coach_id = $1
 ORDER BY s.scheduled_time;
 
 -- name: ListBookedSlots :many
-SELECT scheduled_time, duration_minutes
+SELECT id, scheduled_time, duration_minutes
 FROM coaching_sessions
 WHERE coach_id = $1
   AND status = 'scheduled'

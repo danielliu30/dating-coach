@@ -13,6 +13,32 @@ import (
 	"github.com/google/uuid"
 )
 
+const claimAnalysis = `-- name: ClaimAnalysis :one
+UPDATE analysis_results
+SET status = 'running'
+WHERE id = $1 AND status IN ('pending', 'running')
+RETURNING id, conversation_id, status, model_version, segments, overall, error, created_at, completed_at
+`
+
+// Claims a job for this delivery. Terminal rows return no row, so a redelivered
+// job can be acked without scoring the conversation again.
+func (q *Queries) ClaimAnalysis(ctx context.Context, id uuid.UUID) (AnalysisResult, error) {
+	row := q.db.QueryRow(ctx, claimAnalysis, id)
+	var i AnalysisResult
+	err := row.Scan(
+		&i.ID,
+		&i.ConversationID,
+		&i.Status,
+		&i.ModelVersion,
+		&i.Segments,
+		&i.Overall,
+		&i.Error,
+		&i.CreatedAt,
+		&i.CompletedAt,
+	)
+	return i, err
+}
+
 const completeAnalysis = `-- name: CompleteAnalysis :one
 UPDATE analysis_results
 SET status = 'succeeded',
@@ -377,15 +403,6 @@ func (q *Queries) ListTrainingExamples(ctx context.Context, arg ListTrainingExam
 		return nil, err
 	}
 	return items, nil
-}
-
-const markAnalysisRunning = `-- name: MarkAnalysisRunning :exec
-UPDATE analysis_results SET status = 'running' WHERE id = $1
-`
-
-func (q *Queries) MarkAnalysisRunning(ctx context.Context, id uuid.UUID) error {
-	_, err := q.db.Exec(ctx, markAnalysisRunning, id)
-	return err
 }
 
 const markNotificationSent = `-- name: MarkNotificationSent :exec

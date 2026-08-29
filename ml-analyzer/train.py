@@ -20,7 +20,7 @@ import argparse
 import json
 from pathlib import Path
 
-from training.dataset import load_jsonl, split, to_segment_rows
+from training.dataset import load_jsonl, split
 
 
 def parse_args() -> argparse.Namespace:
@@ -41,11 +41,11 @@ def main() -> None:
     args = parse_args()
 
     examples = load_jsonl(args.data, require_consent=not args.include_unconsented)
-    rows = list(to_segment_rows(examples))
-    if not rows:
+    train_rows, eval_rows = split(examples)
+    if not train_rows:
         raise SystemExit(f"no usable labeled segments in {args.data}")
-    train_rows, eval_rows = split(rows)
-    print(f"conversations={len(examples)} segments={len(rows)} train={len(train_rows)} eval={len(eval_rows)}")
+    segments = len(train_rows) + len(eval_rows)
+    print(f"conversations={len(examples)} segments={segments} train={len(train_rows)} eval={len(eval_rows)}")
     if args.dry_run:
         return
 

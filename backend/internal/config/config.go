@@ -45,6 +45,32 @@ func Load() (*Config, error) {
 	// Missing .env files are not an error: containers get real env vars.
 	_ = godotenv.Load(".env", "../.env", "../../.env")
 
+	var bad []string
+	envInt := func(key string, fallback int) int {
+		raw := env(key, "")
+		if raw == "" {
+			return fallback
+		}
+		v, err := strconv.Atoi(raw)
+		if err != nil {
+			bad = append(bad, fmt.Sprintf("%s=%q is not an integer", key, raw))
+			return fallback
+		}
+		return v
+	}
+	envDuration := func(key string, fallback time.Duration) time.Duration {
+		raw := env(key, "")
+		if raw == "" {
+			return fallback
+		}
+		v, err := time.ParseDuration(raw)
+		if err != nil {
+			bad = append(bad, fmt.Sprintf("%s=%q is not a duration", key, raw))
+			return fallback
+		}
+		return v
+	}
+
 	cfg := &Config{
 		Env:              env("APP_ENV", "development"),
 		HTTPAddr:         env("HTTP_ADDR", ":8080"),
@@ -74,25 +100,14 @@ func Load() (*Config, error) {
 	if cfg.JWTSecret == "" {
 		return nil, fmt.Errorf("JWT_SECRET is required")
 	}
+	if len(bad) > 0 {
+		return nil, fmt.Errorf("invalid configuration: %s", strings.Join(bad, "; "))
+	}
 	return cfg, nil
 }
 
 func env(key, fallback string) string {
 	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
-		return v
-	}
-	return fallback
-}
-
-func envInt(key string, fallback int) int {
-	if v, err := strconv.Atoi(env(key, "")); err == nil {
-		return v
-	}
-	return fallback
-}
-
-func envDuration(key string, fallback time.Duration) time.Duration {
-	if v, err := time.ParseDuration(env(key, "")); err == nil {
 		return v
 	}
 	return fallback

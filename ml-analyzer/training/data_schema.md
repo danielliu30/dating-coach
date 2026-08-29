@@ -6,6 +6,7 @@ reads, and it mirrors the `training_examples` table in the Go backend.
 ```json
 {
   "conversation_id": "9f2b...",
+  "user_id": "3ad1...",
   "platform": "hinge",
   "consented": true,
   "reply_received": true,
@@ -22,7 +23,8 @@ reads, and it mirrors the `training_examples` table in the Go backend.
 
 | Field | Type | Required | Notes |
 | --- | --- | --- | --- |
-| `conversation_id` | string | yes | Stable id; used for de-duplication and user-disjoint splits. |
+| `conversation_id` | string | yes | Stable id; used for de-duplication and as the split group when `user_id` is absent. |
+| `user_id` | string | no | Split group: every conversation of a user lands entirely in train or eval. |
 | `platform` | string | no | `hinge`, `tinder`, `bumble`, `unknown`. Useful as a slice for evaluation. |
 | `consented` | bool | yes | `dataset.load_jsonl` drops rows without it unless `--include-unconsented`. |
 | `messages[].position` | int | yes | 0-based, contiguous, ordered. |

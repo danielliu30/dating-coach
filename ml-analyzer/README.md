@@ -95,6 +95,7 @@ Export a dataset:
 \copy (
   SELECT json_build_object(
     'conversation_id', c.id,
+    'user_id',        c.user_id,
     'platform',       c.platform,
     'consented',      t.consented,
     'reply_received', t.reply_received,
@@ -109,7 +110,7 @@ Export a dataset:
   JOIN conversations c ON c.id = t.conversation_id
   JOIN messages m      ON m.conversation_id = c.id
   WHERE t.consented
-  GROUP BY c.id, c.platform, t.consented, t.reply_received, t.outcome, t.segment_labels
+  GROUP BY c.id, c.user_id, c.platform, t.consented, t.reply_received, t.outcome, t.segment_labels
 ) TO 'data/labeled.jsonl';
 ```
 

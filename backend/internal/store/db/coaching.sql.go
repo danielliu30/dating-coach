@@ -146,7 +146,7 @@ func (q *Queries) GetCoachingSession(ctx context.Context, id uuid.UUID) (Coachin
 }
 
 const listBookedSlots = `-- name: ListBookedSlots :many
-SELECT scheduled_time, duration_minutes
+SELECT id, scheduled_time, duration_minutes
 FROM coaching_sessions
 WHERE coach_id = $1
   AND status = 'scheduled'
@@ -162,6 +162,7 @@ type ListBookedSlotsParams struct {
 }
 
 type ListBookedSlotsRow struct {
+	ID              uuid.UUID `json:"id"`
 	ScheduledTime   time.Time `json:"scheduled_time"`
 	DurationMinutes int32     `json:"duration_minutes"`
 }
@@ -175,7 +176,7 @@ func (q *Queries) ListBookedSlots(ctx context.Context, arg ListBookedSlotsParams
 	items := []ListBookedSlotsRow{}
 	for rows.Next() {
 		var i ListBookedSlotsRow
-		if err := rows.Scan(&i.ScheduledTime, &i.DurationMinutes); err != nil {
+		if err := rows.Scan(&i.ID, &i.ScheduledTime, &i.DurationMinutes); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

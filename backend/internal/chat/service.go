@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -77,6 +78,14 @@ func (s *Service) StartThread(ctx context.Context, userID, coachID uuid.UUID, se
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
 			return Thread{}, fmt.Errorf("%w: coach is not available for chat", ErrNotFound)
+		}
+		// A concurrent StartThread won the partial unique index: use its thread.
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			winner, lookupErr := s.queries.GetActiveThreadForPair(ctx, db.GetActiveThreadForPairParams{UserID: userID, CoachID: coachID})
+			if lookupErr != nil {
+				return Thread{}, fmt.Errorf("lookup thread after conflict: %w", lookupErr)
+			}
+			return threadOf(winner), nil
 		}
 		return Thread{}, fmt.Errorf("create thread: %w", err)
 	}
@@ -190,7 +199,7 @@ func (s *Service) Send(ctx context.Context, threadID, senderID uuid.UUID, body s
 		return Message{}, fmt.Errorf("create message: %w", err)
 	}
 	if err := s.queries.TouchChatThread(ctx, threadID); err != nil {
-		return Message{}, fmt.Errorf("touch thread: %w", err)
+		slog.Error("touch chat thread", "error", err, "thread_id", threadID)
 	}
 
 	msg := Message{
@@ -208,7 +217,9 @@ func (s *Service) Send(ctx context.Context, threadID, senderID uuid.UUID, body s
 		Body:      msg.Body,
 		CreatedAt: msg.CreatedAt,
 	}); err != nil {
-		return msg, err
+		// The message is durably stored, so reporting failure here would only make
+		// senders retry and store duplicates. Peers pick it up from the transcript.
+		slog.Error("broadcast chat message", "error", err, "thread_id", threadID, "message_id", msg.ID)
 	}
 	return msg, nil
 }

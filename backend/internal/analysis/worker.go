@@ -3,10 +3,12 @@ package analysis
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/danielliu30/dating-coach/backend/internal/notify"
 	"github.com/danielliu30/dating-coach/backend/internal/store/db"
@@ -36,8 +38,13 @@ func (w *Worker) Handle(ctx context.Context, job Job, lastAttempt bool) error {
 		return fmt.Errorf("parse conversation id: %w", err)
 	}
 
-	if err := w.queries.MarkAnalysisRunning(ctx, analysisID); err != nil {
-		return fmt.Errorf("mark analysis running: %w", err)
+	// Redeliveries of an already finished analysis are acked without rescoring.
+	if _, err := w.queries.ClaimAnalysis(ctx, analysisID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			slog.Info("skipping analysis in terminal state", "analysis_id", analysisID)
+			return nil
+		}
+		return fmt.Errorf("claim analysis: %w", err)
 	}
 
 	conversation, err := w.queries.GetConversation(ctx, conversationID)

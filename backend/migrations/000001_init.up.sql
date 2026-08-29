@@ -93,6 +93,11 @@ CREATE TABLE chat_threads (
     CONSTRAINT chat_threads_status_check CHECK (status IN ('active', 'closed'))
 );
 
+-- One active thread per client/coach pair; closed threads may repeat.
+CREATE UNIQUE INDEX chat_threads_active_pair_idx
+    ON chat_threads (user_id, coach_id)
+    WHERE status = 'active';
+
 CREATE INDEX chat_threads_user_idx ON chat_threads (user_id, last_message_at DESC);
 CREATE INDEX chat_threads_coach_idx ON chat_threads (coach_id, last_message_at DESC);
 
