@@ -27,9 +27,15 @@ type TokenProvider = () => string | null;
 /** Typed client for the Go API. One instance per app, token injected lazily. */
 export class ApiClient {
   private token: TokenProvider = () => null;
+  private onUnauthorized: () => void = () => undefined;
 
   useToken(provider: TokenProvider): void {
     this.token = provider;
+  }
+
+  /** Called once per rejected authenticated request so the app can sign out. */
+  onSessionRejected(handler: () => void): void {
+    this.onUnauthorized = handler;
   }
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -48,6 +54,9 @@ export class ApiClient {
     const payload = text ? (JSON.parse(text) as unknown) : null;
 
     if (!response.ok) {
+      if (response.status === 401 && token) {
+        this.onUnauthorized();
+      }
       const message =
         payload && typeof payload === 'object' && 'error' in payload
           ? String((payload as { error: unknown }).error)
@@ -101,10 +110,11 @@ export class ApiClient {
     return availability ?? [];
   }
 
-  async openSlots(coachID: string, durationMinutes = 45): Promise<Slot[]> {
+  async openSlots(coachID: string, durationMinutes = 45, excludeSessionID?: string): Promise<Slot[]> {
+    const exclude = excludeSessionID ? `&exclude_session_id=${excludeSessionID}` : '';
     const { slots } = await this.request<{ slots: Slot[] | null }>(
       'GET',
-      `/coaching/coaches/${coachID}/slots?duration_minutes=${durationMinutes}`,
+      `/coaching/coaches/${coachID}/slots?duration_minutes=${durationMinutes}${exclude}`,
     );
     return slots ?? [];
   }

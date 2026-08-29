@@ -26,6 +26,9 @@ const draftOf = (window: AvailabilityWindow, index: number): WindowDraft => ({
   end: clock(window.end_minute),
 });
 
+const describe = (reason: unknown): string =>
+  reason instanceof Error ? reason.message : 'unknown error';
+
 const parseClock = (value: string): number | null => {
   const match = /^(\d{1,2}):(\d{2})$/.exec(value.trim());
   if (!match) return null;
@@ -52,36 +55,42 @@ export default function CoachProfileScreen(): React.ReactElement {
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  // Load the saved profile once so saving cannot overwrite it with defaults.
+  // Both halves load independently: a failure on one must neither discard the
+  // other nor leave the editor showing defaults that a save would commit.
   const coachID = user?.id;
+  const [loadFailed, setLoadFailed] = useState(false);
   useEffect(() => {
     if (!coachID) return;
     let cancelled = false;
     void (async () => {
-      try {
-        const [profile, saved] = await Promise.all([
-          api.getCoach(coachID),
-          api.coachAvailability(coachID),
-        ]);
-        if (cancelled) return;
-        setHeadline(profile.headline);
-        setBio(profile.bio);
-        setSpecialties(profile.specialties.join(', '));
-        setRate(String(profile.hourly_rate_cents / 100));
-        setTimezone(profile.timezone);
-        setYears(String(profile.years_experience));
-        setAccepting(profile.accepting_clients);
-        if (saved.length > 0) {
-          setWindows(saved.map(draftOf));
-        }
-      } catch (err) {
+      const [profile, saved] = await Promise.allSettled([
+        api.getCoach(coachID),
+        api.coachAvailability(coachID),
+      ]);
+      if (cancelled) return;
+      const problems: string[] = [];
+      if (profile.status === 'fulfilled') {
+        setHeadline(profile.value.headline);
+        setBio(profile.value.bio);
+        setSpecialties(profile.value.specialties.join(', '));
+        setRate(String(profile.value.hourly_rate_cents / 100));
+        setTimezone(profile.value.timezone);
+        setYears(String(profile.value.years_experience));
+        setAccepting(profile.value.accepting_clients);
         // 404 simply means the coach has not published a profile yet.
-        if (!cancelled && !(err instanceof ApiError && err.status === 404)) {
-          setError(err instanceof Error ? err.message : 'could not load profile');
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
+      } else if (!(profile.reason instanceof ApiError && profile.reason.status === 404)) {
+        setLoadFailed(true);
+        problems.push(`profile (${describe(profile.reason)})`);
       }
+      if (saved.status === 'fulfilled') {
+        if (saved.value.length > 0) setWindows(saved.value.map(draftOf));
+      } else {
+        problems.push(`availability (${describe(saved.reason)})`);
+      }
+      if (problems.length > 0) {
+        setError(`Could not load ${problems.join(' and ')}. Reload before saving.`);
+      }
+      setLoading(false);
     })();
     return () => {
       cancelled = true;
@@ -89,6 +98,10 @@ export default function CoachProfileScreen(): React.ReactElement {
   }, [coachID]);
 
   const save = async () => {
+    if (loadFailed) {
+      setError('Your saved profile could not be loaded, so saving now would overwrite it. Reload first.');
+      return;
+    }
     const payload: AvailabilityWindow[] = [];
     for (const window of windows) {
       const startMinute = parseClock(window.start);

@@ -124,7 +124,7 @@ def main() -> None:
         json.dumps(
             {
                 "base_model": args.base_model,
-                "segments": len(rows),
+                "segments": segments,
                 "epochs": args.epochs,
                 "objective": "soft-target BCE; serve sigmoid(logit) as engagement_score in [0,1]",
             },

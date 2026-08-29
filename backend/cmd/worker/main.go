@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/danielliu30/dating-coach/backend/internal/analysis"
 	"github.com/danielliu30/dating-coach/backend/internal/config"
@@ -39,12 +40,6 @@ func run() error {
 	}
 	defer pg.Close()
 
-	queue, err := analysis.OpenQueue(cfg.RabbitMQURL, cfg.AnalysisQueue)
-	if err != nil {
-		return err
-	}
-	defer queue.Close()
-
 	worker := analysis.NewWorker(
 		pg.Queries,
 		analysis.NewMLClient(cfg.MLServiceURL, cfg.MLServiceTimeout),
@@ -52,5 +47,41 @@ func run() error {
 	)
 
 	slog.Info("analysis worker started", "queue", cfg.AnalysisQueue, "ml_service", cfg.MLServiceURL)
-	return queue.Consume(ctx, worker.Handle)
+	return consume(ctx, cfg.RabbitMQURL, cfg.AnalysisQueue, worker.Handle)
+}
+
+const (
+	minBackoff = time.Second
+	maxBackoff = 30 * time.Second
+)
+
+// consume keeps a consumer attached to the queue for the life of ctx. A broker
+// restart or dropped channel is transient, so the worker redials with
+// exponential backoff instead of exiting and leaving jobs queued indefinitely.
+func consume(ctx context.Context, url, name string, handle analysis.JobHandler) error {
+	backoff := minBackoff
+	for {
+		err := runConsumer(ctx, url, name, handle)
+		if ctx.Err() != nil {
+			return nil
+		}
+		slog.Error("analysis consumer stopped", "error", err, "retry_in", backoff)
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(backoff):
+		}
+		if backoff < maxBackoff {
+			backoff = min(backoff*2, maxBackoff)
+		}
+	}
+}
+
+func runConsumer(ctx context.Context, url, name string, handle analysis.JobHandler) error {
+	queue, err := analysis.OpenQueue(url, name)
+	if err != nil {
+		return err
+	}
+	defer queue.Close()
+	return queue.Consume(ctx, handle)
 }

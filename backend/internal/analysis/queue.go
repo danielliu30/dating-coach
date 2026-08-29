@@ -5,9 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sync"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
+
+// prefetchCount bounds both unacked deliveries and in-flight handlers.
+const prefetchCount = 4
 
 // Job is the unit of work handed to the analysis worker.
 type Job struct {
@@ -39,7 +43,7 @@ func OpenQueue(url, name string) (*Queue, error) {
 		conn.Close()
 		return nil, fmt.Errorf("declare queue %q: %w", name, err)
 	}
-	if err := channel.Qos(4, 0, false); err != nil {
+	if err := channel.Qos(prefetchCount, 0, false); err != nil {
 		channel.Close()
 		conn.Close()
 		return nil, fmt.Errorf("set qos: %w", err)
@@ -77,15 +81,93 @@ func (q *Queue) Publish(ctx context.Context, job Job) error {
 	return nil
 }
 
-// Consume blocks until ctx is cancelled, calling handle for every job. handle
-// receives whether this is the last attempt (the delivery was already
-// redelivered once); a failing first attempt is requeued so a transient ML or
-// network blip does not lose the analysis.
-func (q *Queue) Consume(ctx context.Context, handle func(ctx context.Context, job Job, lastAttempt bool) error) error {
+// JobPublisher owns a Queue for publishing and redials it when the broker drops the
+// connection, so an API process outlives a RabbitMQ restart.
+type JobPublisher struct {
+	url   string
+	name  string
+	mu    sync.Mutex
+	queue *Queue
+}
+
+func OpenPublisher(url, name string) (*JobPublisher, error) {
+	queue, err := OpenQueue(url, name)
+	if err != nil {
+		return nil, err
+	}
+	return &JobPublisher{url: url, name: name, queue: queue}, nil
+}
+
+func (p *JobPublisher) Publish(ctx context.Context, job Job) error {
+	queue, err := p.acquire()
+	if err != nil {
+		return err
+	}
+	err = queue.Publish(ctx, job)
+	if err == nil || ctx.Err() != nil {
+		return err
+	}
+	slog.Warn("republishing analysis job on a fresh channel", "error", err, "analysis_id", job.AnalysisID)
+	p.discard(queue)
+	queue, dialErr := p.acquire()
+	if dialErr != nil {
+		return fmt.Errorf("%w (redial: %v)", err, dialErr)
+	}
+	return queue.Publish(ctx, job)
+}
+
+func (p *JobPublisher) acquire() (*Queue, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.queue != nil && !p.queue.conn.IsClosed() {
+		return p.queue, nil
+	}
+	p.queue = nil
+	queue, err := OpenQueue(p.url, p.name)
+	if err != nil {
+		return nil, err
+	}
+	p.queue = queue
+	return queue, nil
+}
+
+// discard drops stale so the next acquire redials, ignoring a queue another
+// caller already replaced.
+func (p *JobPublisher) discard(stale *Queue) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.queue != stale {
+		return
+	}
+	p.queue = nil
+	stale.Close()
+}
+
+func (p *JobPublisher) Close() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.queue != nil {
+		p.queue.Close()
+		p.queue = nil
+	}
+}
+
+// JobHandler processes one analysis job. lastAttempt reports that the delivery
+// was already redelivered once, so a failure now is terminal.
+type JobHandler func(ctx context.Context, job Job, lastAttempt bool) error
+
+// Consume blocks until ctx is cancelled or the channel drops, running up to
+// prefetchCount jobs concurrently so one slow model call does not stall the
+// deliveries behind it. A failing first attempt is requeued so a transient ML
+// or network blip does not lose the analysis.
+func (q *Queue) Consume(ctx context.Context, handle JobHandler) error {
 	deliveries, err := q.channel.Consume(q.name, "", false, false, false, false, nil)
 	if err != nil {
 		return fmt.Errorf("consume queue: %w", err)
 	}
+	var wg sync.WaitGroup
+	slots := make(chan struct{}, prefetchCount)
+	defer wg.Wait()
 	for {
 		select {
 		case <-ctx.Done():
@@ -100,14 +182,24 @@ func (q *Queue) Consume(ctx context.Context, handle func(ctx context.Context, jo
 				_ = delivery.Nack(false, false)
 				continue
 			}
-			if err := handle(ctx, job, delivery.Redelivered); err != nil {
-				slog.Error("handle analysis job", "error", err, "analysis_id", job.AnalysisID, "requeue", !delivery.Redelivered)
-				_ = delivery.Nack(false, !delivery.Redelivered)
-				continue
+			select {
+			case <-ctx.Done():
+				return nil
+			case slots <- struct{}{}:
 			}
-			if err := delivery.Ack(false); err != nil {
-				slog.Error("ack analysis job", "error", err, "analysis_id", job.AnalysisID)
-			}
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				defer func() { <-slots }()
+				if err := handle(ctx, job, delivery.Redelivered); err != nil {
+					slog.Error("handle analysis job", "error", err, "analysis_id", job.AnalysisID, "requeue", !delivery.Redelivered)
+					_ = delivery.Nack(false, !delivery.Redelivered)
+					return
+				}
+				if err := delivery.Ack(false); err != nil {
+					slog.Error("ack analysis job", "error", err, "analysis_id", job.AnalysisID)
+				}
+			}()
 		}
 	}
 }

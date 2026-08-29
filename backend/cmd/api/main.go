@@ -55,7 +55,7 @@ func run() error {
 	}
 	defer rdb.Close()
 
-	queue, err := analysis.OpenQueue(cfg.RabbitMQURL, cfg.AnalysisQueue)
+	queue, err := analysis.OpenPublisher(cfg.RabbitMQURL, cfg.AnalysisQueue)
 	if err != nil {
 		return err
 	}

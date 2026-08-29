@@ -111,7 +111,22 @@ func (h *Handler) coachSlots(w http.ResponseWriter, r *http.Request) {
 	}
 	duration := httpx.QueryInt(r, "duration_minutes", defaultSessionMinutes, 240)
 
-	slots, err := h.svc.OpenSlots(r.Context(), coachID, from, to, duration)
+	principal, ok := auth.PrincipalFrom(r.Context())
+	if !ok {
+		httpx.Error(w, http.StatusUnauthorized, "unauthenticated")
+		return
+	}
+	var exclude *uuid.UUID
+	if raw := r.URL.Query().Get("exclude_session_id"); raw != "" {
+		parsed, err := uuid.Parse(raw)
+		if err != nil {
+			httpx.Error(w, http.StatusBadRequest, "exclude_session_id must be a UUID")
+			return
+		}
+		exclude = &parsed
+	}
+
+	slots, err := h.svc.OpenSlots(r.Context(), coachID, principal.UserID, from, to, duration, exclude)
 	if err != nil {
 		respondErr(w, err, "could not compute slots")
 		return

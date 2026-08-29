@@ -227,7 +227,18 @@ func (s *Service) ListAvailability(ctx context.Context, coachID uuid.UUID) ([]Av
 
 // OpenSlots expands the coach's weekly availability into concrete slots between
 // from and to, dropping anything that overlaps an already booked session.
-func (s *Service) OpenSlots(ctx context.Context, coachID uuid.UUID, from, to time.Time, durationMinutes int32) ([]Slot, error) {
+// excludeSessionID ignores one of the actor's own sessions, so a reschedule can
+// offer times that overlap the slot being moved.
+func (s *Service) OpenSlots(ctx context.Context, coachID, actorID uuid.UUID, from, to time.Time, durationMinutes int32, excludeSessionID *uuid.UUID) ([]Slot, error) {
+	if excludeSessionID != nil {
+		session, err := s.participant(ctx, *excludeSessionID, actorID)
+		if err != nil {
+			return nil, err
+		}
+		if session.CoachID != coachID {
+			return nil, fmt.Errorf("%w: session belongs to another coach", ErrInvalidInput)
+		}
+	}
 	if durationMinutes <= 0 {
 		durationMinutes = defaultSessionMinutes
 	}
@@ -271,11 +282,18 @@ func (s *Service) OpenSlots(ctx context.Context, coachID uuid.UUID, from, to tim
 	for !day.After(to.In(loc)) {
 		for _, w := range byWeekday[int16(day.Weekday())] {
 			for minute := w.StartMinute; minute+durationMinutes <= w.EndMinute; minute += slotStepMinutes {
-				start := day.Add(time.Duration(minute) * time.Minute)
+				// Wall-clock construction, so a DST transition inside the day
+				// does not shift slots out of the published window.
+				start := time.Date(day.Year(), day.Month(), day.Day(), int(minute/60), int(minute%60), 0, 0, loc)
+				if wallMinute(start, loc) != minute {
+					// Nonexistent local time (spring forward); the window
+					// resumes after the gap.
+					continue
+				}
 				if start.Before(from) || !start.Before(to) {
 					continue
 				}
-				if overlapsBooked(start, durationMinutes, booked, nil) {
+				if overlapsBooked(start, durationMinutes, booked, excludeSessionID) {
 					continue
 				}
 				slots = append(slots, Slot{Start: start.UTC().Format(time.RFC3339), DurationMinutes: durationMinutes})
@@ -284,6 +302,13 @@ func (s *Service) OpenSlots(ctx context.Context, coachID uuid.UUID, from, to tim
 		day = day.AddDate(0, 0, 1)
 	}
 	return slots, nil
+}
+
+// wallMinute is the local minute-of-day t actually lands on, which differs from
+// the requested one when the time does not exist in loc (spring forward).
+func wallMinute(t time.Time, loc *time.Location) int32 {
+	local := t.In(loc)
+	return int32(local.Hour()*60 + local.Minute())
 }
 
 func overlapsBooked(start time.Time, durationMinutes int32, booked []db.ListBookedSlotsRow, exclude *uuid.UUID) bool {

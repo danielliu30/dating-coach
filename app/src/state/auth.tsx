@@ -20,6 +20,14 @@ interface AuthState {
 
 const AuthContext = createContext<AuthState | null>(null);
 
+// A persisted session is only usable while its token is still valid; restoring
+// an expired one lands the user in authenticated tabs where every request 401s.
+const isFresh = (expiresAt: string | undefined): boolean => {
+  if (!expiresAt) return false;
+  const expiry = Date.parse(expiresAt);
+  return Number.isFinite(expiry) && expiry > Date.now();
+};
+
 export function AuthProvider({ children }: { children: React.ReactNode }): React.ReactElement {
   const [ready, setReady] = useState(false);
   const [token, setToken] = useState<string | null>(null);
@@ -32,6 +40,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
   tokenRef.current = token;
   useEffect(() => {
     api.useToken(() => tokenRef.current);
+    // A token can also expire while the app is open; drop it centrally so the
+    // UI leaves the authenticated tabs instead of failing every request.
+    api.onSessionRejected(() => {
+      tokenRef.current = null;
+      expiresRef.current = '';
+      setToken(null);
+      setUser(null);
+      void AsyncStorage.removeItem(STORAGE_KEY).catch(() => undefined);
+    });
   }, []);
 
   useEffect(() => {
@@ -39,7 +56,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
       try {
         const raw = await AsyncStorage.getItem(STORAGE_KEY);
         const stored = raw ? (JSON.parse(raw) as Partial<AuthSession>) : null;
-        if (stored?.token && stored.user) {
+        if (stored?.token && stored.user && isFresh(stored.expires_at)) {
           tokenRef.current = stored.token;
           expiresRef.current = stored.expires_at ?? '';
           setToken(stored.token);

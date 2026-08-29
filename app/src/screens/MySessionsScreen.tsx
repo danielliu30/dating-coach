@@ -34,7 +34,9 @@ export default function MySessionsScreen(): React.ReactElement {
     setSlots(null);
     setSlotError(null);
     try {
-      setSlots(await api.openSlots(session.coach_id, session.duration_minutes));
+      // Excluding this session frees the times it currently occupies, so small
+      // shifts inside its own window are offered.
+      setSlots(await api.openSlots(session.coach_id, session.duration_minutes, session.id));
     } catch (err) {
       setSlotError(err instanceof Error ? err.message : 'could not load open slots');
     }
