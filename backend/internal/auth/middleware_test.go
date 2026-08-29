@@ -11,6 +11,10 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// verifiedRequest drives one request through RequireVerified(lookup), with a
+// user principal in context unless withPrincipal is false, and returns the
+// recorded response. It fails the test when the wrapped handler runs without
+// answering 204, i.e. when rejecting the request did not stop the chain.
 func verifiedRequest(t *testing.T, lookup VerifiedLookup, withPrincipal bool) *httptest.ResponseRecorder {
 	t.Helper()
 

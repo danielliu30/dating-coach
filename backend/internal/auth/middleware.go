@@ -55,10 +55,14 @@ func Middleware(issuer *TokenIssuer) func(http.Handler) http.Handler {
 	}
 }
 
-// VerifiedLookup reports whether the account has confirmed its email address.
+// VerifiedLookup reports whether the account behind userID has confirmed its
+// email address. Implementations return pgx.ErrNoRows when no such account
+// exists; any other error means the flag could not be determined.
 type VerifiedLookup func(ctx context.Context, userID uuid.UUID) (bool, error)
 
-// EmailVerifiedLookup reads the verification flag straight from the users table.
+// EmailVerifiedLookup returns a VerifiedLookup backed by the users table. It
+// costs one primary-key read per call, and propagates pgx.ErrNoRows for users
+// that no longer exist.
 func EmailVerifiedLookup(queries *db.Queries) VerifiedLookup {
 	return func(ctx context.Context, userID uuid.UUID) (bool, error) {
 		user, err := queries.GetUserByID(ctx, userID)
@@ -69,10 +73,16 @@ func EmailVerifiedLookup(queries *db.Queries) VerifiedLookup {
 	}
 }
 
-// RequireVerified rejects callers whose email address is still unconfirmed. The
-// flag is read per request rather than taken from the token so that verifying
-// (or an account being deleted) takes effect immediately on tokens already out
-// in the wild.
+// RequireVerified rejects callers whose email address is still unconfirmed. It
+// must be mounted after Middleware, which supplies the Principal it reads.
+//
+// The flag comes from lookup on every request rather than from the token, so
+// verifying an address (or deleting an account) takes effect immediately on
+// tokens already out in the wild, at the cost of one lookup per request.
+//
+// Callers are answered 403 when unverified, 401 when the principal is missing
+// or the account is gone, and 500 when the lookup itself fails: a failing
+// lookup denies the request rather than failing open.
 func RequireVerified(lookup VerifiedLookup) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
