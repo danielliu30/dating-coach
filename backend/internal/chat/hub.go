@@ -161,23 +161,29 @@ func (h *Hub) Publish(ctx context.Context, threadID uuid.UUID, event Event) erro
 	return nil
 }
 
-// MarkOnline refreshes a user's presence key; call it on connect and on ping.
-func (h *Hub) MarkOnline(ctx context.Context, userID uuid.UUID) error {
-	if err := h.rdb.Set(ctx, presenceKey(userID), "1", presenceTTL).Err(); err != nil {
+// MarkOnline records one live connection for a user; call it on connect and on
+// ping. Presence is a set of connection IDs so a user with several devices stays
+// online until the last of them goes away, and the TTL still reaps the key if a
+// replica dies without cleaning up.
+func (h *Hub) MarkOnline(ctx context.Context, userID, connID uuid.UUID) error {
+	pipe := h.rdb.TxPipeline()
+	pipe.SAdd(ctx, presenceKey(userID), connID.String())
+	pipe.Expire(ctx, presenceKey(userID), presenceTTL)
+	if _, err := pipe.Exec(ctx); err != nil {
 		return fmt.Errorf("set presence: %w", err)
 	}
 	return nil
 }
 
-func (h *Hub) MarkOffline(ctx context.Context, userID uuid.UUID) error {
-	if err := h.rdb.Del(ctx, presenceKey(userID)).Err(); err != nil {
+func (h *Hub) MarkOffline(ctx context.Context, userID, connID uuid.UUID) error {
+	if err := h.rdb.SRem(ctx, presenceKey(userID), connID.String()).Err(); err != nil {
 		return fmt.Errorf("clear presence: %w", err)
 	}
 	return nil
 }
 
 func (h *Hub) IsOnline(ctx context.Context, userID uuid.UUID) (bool, error) {
-	n, err := h.rdb.Exists(ctx, presenceKey(userID)).Result()
+	n, err := h.rdb.SCard(ctx, presenceKey(userID)).Result()
 	if err != nil {
 		return false, fmt.Errorf("check presence: %w", err)
 	}

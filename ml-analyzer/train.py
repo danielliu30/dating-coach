@@ -7,10 +7,11 @@
 Produces a checkpoint directory that ``ML_BACKEND=trained`` loads (see
 ``app/scoring/trained.py``); the /analyze contract is unchanged.
 
-Default recipe: DistilBERT + a single-logit regression head over segment
-transcripts, trained with MSE against engagement scores in [0, 1]. For a
-generative alternative (LoRA fine-tune of a small instruct model that emits the
-same JSON as the prompt backend) see the README.
+Default recipe: DistilBERT + a single-logit head over segment transcripts,
+trained with soft-target BCE so that ``sigmoid(logit)`` is the engagement score
+in [0, 1] that ``trained.py`` serves. For a generative alternative (LoRA
+fine-tune of a small instruct model that emits the same JSON as the prompt
+backend) see the README.
 """
 
 from __future__ import annotations
@@ -59,9 +60,22 @@ def main() -> None:
     )
 
     tokenizer = AutoTokenizer.from_pretrained(args.base_model)
-    model = AutoModelForSequenceClassification.from_pretrained(
-        args.base_model, num_labels=1, problem_type="regression"
-    )
+    model = AutoModelForSequenceClassification.from_pretrained(args.base_model, num_labels=1)
+
+    class BCETrainer(Trainer):
+        """Soft-target BCE on the raw logit.
+
+        Plain MSE against labels in [0, 1] fits the logit itself, and the sigmoid
+        that serving applies would then squash every prediction into [0.5, 0.73].
+        BCE keeps training and inference on the same scale.
+        """
+
+        def compute_loss(self, model, inputs, return_outputs=False, **kwargs):  # noqa: ANN001, ANN201
+            labels = inputs.pop("labels").float()
+            outputs = model(**inputs)
+            logits = outputs.logits.squeeze(-1)
+            loss = torch.nn.functional.binary_cross_entropy_with_logits(logits, labels)
+            return (loss, outputs) if return_outputs else loss
 
     def build(rows: list[tuple[str, float]]) -> Dataset:
         dataset = Dataset.from_dict(
@@ -84,7 +98,7 @@ def main() -> None:
         }
 
     out_dir = Path(args.out)
-    trainer = Trainer(
+    trainer = BCETrainer(
         model=model,
         args=TrainingArguments(
             output_dir=str(out_dir / "checkpoints"),
@@ -112,7 +126,7 @@ def main() -> None:
                 "base_model": args.base_model,
                 "segments": len(rows),
                 "epochs": args.epochs,
-                "objective": "sigmoid(logit) regression against engagement_score in [0,1]",
+                "objective": "soft-target BCE; serve sigmoid(logit) as engagement_score in [0,1]",
             },
             indent=2,
         ),

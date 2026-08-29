@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { api } from '../api/client';
+import { ApiError, api } from '../api/client';
 import type { AvailabilityWindow } from '../api/types';
-import { Button, Field, Screen } from '../components/ui';
+import { Button, Field, Loading, Screen } from '../components/ui';
+import { useAuth } from '../state/auth';
 import { colors, shared } from '../theme';
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -19,6 +20,7 @@ const parseClock = (value: string): number | null => {
 };
 
 export default function CoachProfileScreen(): React.ReactElement {
+  const { user } = useAuth();
   const [headline, setHeadline] = useState('');
   const [bio, setBio] = useState('');
   const [specialties, setSpecialties] = useState('');
@@ -34,6 +36,45 @@ export default function CoachProfileScreen(): React.ReactElement {
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  // Load the saved profile once so saving cannot overwrite it with defaults.
+  const coachID = user?.id;
+  useEffect(() => {
+    if (!coachID) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const [profile, windows] = await Promise.all([
+          api.getCoach(coachID),
+          api.coachAvailability(coachID),
+        ]);
+        if (cancelled) return;
+        setHeadline(profile.headline);
+        setBio(profile.bio);
+        setSpecialties(profile.specialties.join(', '));
+        setRate(String(profile.hourly_rate_cents / 100));
+        setTimezone(profile.timezone);
+        setYears(String(profile.years_experience));
+        setAccepting(profile.accepting_clients);
+        if (windows.length > 0) {
+          setWeekdays(windows.map((w) => w.weekday).sort((a, b) => a - b));
+          setStart(clock(windows[0].start_minute));
+          setEnd(clock(windows[0].end_minute));
+        }
+      } catch (err) {
+        // 404 simply means the coach has not published a profile yet.
+        if (!cancelled && !(err instanceof ApiError && err.status === 404)) {
+          setError(err instanceof Error ? err.message : 'could not load profile');
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [coachID]);
 
   const save = async () => {
     const startMinute = parseClock(start);
@@ -76,6 +117,15 @@ export default function CoachProfileScreen(): React.ReactElement {
     setWeekdays((current) =>
       current.includes(day) ? current.filter((value) => value !== day) : [...current, day].sort(),
     );
+
+  if (loading) {
+    return (
+      <Screen>
+        <Text style={shared.title}>Your coach profile</Text>
+        <Loading />
+      </Screen>
+    );
+  }
 
   return (
     <Screen>

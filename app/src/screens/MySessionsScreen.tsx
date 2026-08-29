@@ -3,7 +3,7 @@ import React, { useState } from 'react';
 import { FlatList, Text, View } from 'react-native';
 
 import { api } from '../api/client';
-import type { CoachingSession } from '../api/types';
+import type { CoachingSession, Slot } from '../api/types';
 import { Badge, Button, Empty, Loading, Screen } from '../components/ui';
 import { useAsync } from '../hooks/useAsync';
 import type { RootTabParams } from '../navigation/types';
@@ -25,6 +25,35 @@ export default function MySessionsScreen(): React.ReactElement {
   const navigation = useNavigation<NavigationProp<RootTabParams>>();
   const { data, error, loading, reload } = useAsync(() => api.mySessions());
   const [busyID, setBusyID] = useState<string | null>(null);
+  const [reschedulingID, setReschedulingID] = useState<string | null>(null);
+  const [slots, setSlots] = useState<Slot[] | null>(null);
+  const [slotError, setSlotError] = useState<string | null>(null);
+
+  const openReschedule = async (session: CoachingSession) => {
+    setReschedulingID(session.id);
+    setSlots(null);
+    setSlotError(null);
+    try {
+      setSlots(await api.openSlots(session.coach_id, session.duration_minutes));
+    } catch (err) {
+      setSlotError(err instanceof Error ? err.message : 'could not load open slots');
+    }
+  };
+
+  const reschedule = async (session: CoachingSession, start: string) => {
+    setBusyID(session.id);
+    setSlotError(null);
+    try {
+      await api.rescheduleSession(session.id, start);
+      setReschedulingID(null);
+      setSlots(null);
+      await reload();
+    } catch (err) {
+      setSlotError(err instanceof Error ? err.message : 'could not reschedule');
+    } finally {
+      setBusyID(null);
+    }
+  };
 
   const cancel = async (sessionID: string) => {
     setBusyID(sessionID);
@@ -72,12 +101,42 @@ export default function MySessionsScreen(): React.ReactElement {
                 </View>
                 <View style={{ flex: 1 }}>
                   <Button
+                    label={reschedulingID === item.id ? 'Close' : 'Reschedule'}
+                    variant="secondary"
+                    onPress={() => {
+                      if (reschedulingID === item.id) {
+                        setReschedulingID(null);
+                      } else {
+                        void openReschedule(item);
+                      }
+                    }}
+                  />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Button
                     label="Cancel"
                     variant="secondary"
                     loading={busyID === item.id}
                     onPress={() => void cancel(item.id)}
                   />
                 </View>
+              </View>
+            ) : null}
+            {reschedulingID === item.id ? (
+              <View style={{ gap: 8 }}>
+                <Text style={shared.heading}>Pick a new time</Text>
+                {slotError ? <Text style={shared.error}>{slotError}</Text> : null}
+                {!slots && !slotError ? <Loading /> : null}
+                {slots?.length === 0 ? <Empty text="No open slots in the next few weeks." /> : null}
+                {slots?.slice(0, 8).map((slot) => (
+                  <Button
+                    key={slot.start}
+                    label={formatWhen(slot.start)}
+                    variant="secondary"
+                    loading={busyID === item.id}
+                    onPress={() => void reschedule(item, slot.start)}
+                  />
+                ))}
               </View>
             ) : null}
           </View>

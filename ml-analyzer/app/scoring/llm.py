@@ -111,16 +111,26 @@ class LLMScorer(Scorer):
 
     def _parse(self, raw: str, boundaries: List[tuple[int, int]]) -> AnalyzeResponse:
         payload: Dict[str, Any] = json.loads(_strip_fences(raw))
-        segments: List[Segment] = []
+        by_boundary: Dict[tuple[int, int], Segment] = {}
         for item in payload.get("segments", []):
-            segments.append(
-                Segment(
-                    start_position=int(item.get("start_position", boundaries[0][0])),
-                    end_position=int(item.get("end_position", boundaries[-1][1])),
-                    engagement_score=clamp(item.get("engagement_score", 0.5)),
-                    comment=str(item.get("comment", ""))[:500],
-                )
+            key = (int(item["start_position"]), int(item["end_position"]))
+            if key not in boundaries:
+                raise ValueError(f"llm returned unknown segment boundary {key}")
+            if key in by_boundary:
+                raise ValueError(f"llm returned duplicate segment {key}")
+            by_boundary[key] = Segment(
+                start_position=key[0],
+                end_position=key[1],
+                engagement_score=clamp(item.get("engagement_score", 0.5)),
+                comment=str(item.get("comment", ""))[:500],
             )
+
+        # Partial coverage would silently hide part of the conversation from the
+        # user, so treat it as a failed completion and let the caller fall back.
+        missing = [b for b in boundaries if b not in by_boundary]
+        if missing:
+            raise ValueError(f"llm did not score segments {missing}")
+        segments: List[Segment] = [by_boundary[b] for b in boundaries]
 
         overall = payload.get("overall", {})
         scores = [s.engagement_score for s in segments]

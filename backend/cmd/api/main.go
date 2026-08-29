@@ -70,7 +70,7 @@ func run() error {
 		auth.NewService(pg.Queries, issuer, notifier, cfg.BcryptCost, cfg.PublicAppURL),
 		limiter,
 	)
-	coachingHandler := coaching.NewHandler(coaching.NewService(pg.Queries))
+	coachingHandler := coaching.NewHandler(coaching.NewService(pg.Pool, pg.Queries))
 	hub := chat.NewHub(rdb)
 	chatHandler := chat.NewHandler(chat.NewService(pg.Queries, hub), hub, cfg.CORSOrigins)
 	analysisHandler := analysis.NewHandler(analysis.NewService(pg.Pool, pg.Queries, queue))

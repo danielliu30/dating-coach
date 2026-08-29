@@ -134,8 +134,9 @@ python train.py --data data/labeled.jsonl --dry-run   # dataset stats only
 python train.py --data data/labeled.jsonl --out artifacts/segment-scorer
 ```
 
-Default recipe: DistilBERT with a single-logit regression head over segment
-transcripts, MSE against the 0–1 score, `mae`/`rmse` on the eval split.
+Default recipe: DistilBERT with a single-logit head over segment transcripts,
+soft-target BCE against the 0–1 score (so serving's `sigmoid(logit)` is on the
+same scale as the labels), `mae`/`rmse` on the eval split.
 
 For a generative model that also writes the `comment`/`summary` text, LoRA
 fine-tune a small instruct model on `(transcript → the exact JSON the prompt
@@ -146,8 +147,15 @@ backend returns)` pairs — add `peft` from `requirements-train.txt`, and have
 ### 4. Switch backends
 
 ```bash
+pip install -r requirements-train.txt   # torch/transformers are not in the serving image
 ML_BACKEND=trained ML_MODEL_DIR=artifacts/segment-scorer \
   uvicorn app.main:app --port 8000
+```
+
+In Docker, build the image with the training dependencies included:
+
+```bash
+docker build --build-arg INSTALL_TRAINING_DEPS=1 -t dating-coach-ml:trained ml-analyzer
 ```
 
 Nothing else changes: same `/analyze` request and response, so the Go worker and

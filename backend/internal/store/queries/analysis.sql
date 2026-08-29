@@ -61,6 +61,13 @@ RETURNING *;
 -- name: UpsertTrainingExample :one
 INSERT INTO training_examples (conversation_id, label_source, outcome, reply_received, engagement_score, segment_labels, notes, consented)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+ON CONFLICT (conversation_id, label_source) DO UPDATE
+SET outcome = EXCLUDED.outcome,
+    reply_received = EXCLUDED.reply_received,
+    engagement_score = EXCLUDED.engagement_score,
+    segment_labels = EXCLUDED.segment_labels,
+    notes = EXCLUDED.notes,
+    consented = EXCLUDED.consented
 RETURNING *;
 
 -- name: ListTrainingExamples :many

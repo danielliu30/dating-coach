@@ -23,9 +23,10 @@ func NewWorker(queries *db.Queries, ml *MLClient, notifier notify.Notifier) *Wor
 	return &Worker{queries: queries, ml: ml, notifier: notifier}
 }
 
-// Handle processes a single job. It returns an error only for infrastructure
-// failures; analysis failures are recorded on the row and acked.
-func (w *Worker) Handle(ctx context.Context, job Job) error {
+// Handle processes a single job. It returns an error only for failures worth
+// another delivery; on the last attempt the failure is recorded on the analysis
+// row and the job is acked.
+func (w *Worker) Handle(ctx context.Context, job Job, lastAttempt bool) error {
 	analysisID, err := uuid.Parse(job.AnalysisID)
 	if err != nil {
 		return fmt.Errorf("parse analysis id: %w", err)
@@ -41,11 +42,11 @@ func (w *Worker) Handle(ctx context.Context, job Job) error {
 
 	conversation, err := w.queries.GetConversation(ctx, conversationID)
 	if err != nil {
-		return w.fail(ctx, analysisID, fmt.Errorf("load conversation: %w", err))
+		return w.fail(ctx, analysisID, lastAttempt, fmt.Errorf("load conversation: %w", err))
 	}
 	messages, err := w.queries.ListMessages(ctx, conversationID)
 	if err != nil {
-		return w.fail(ctx, analysisID, fmt.Errorf("load messages: %w", err))
+		return w.fail(ctx, analysisID, lastAttempt, fmt.Errorf("load messages: %w", err))
 	}
 
 	req := MLRequest{
@@ -65,16 +66,16 @@ func (w *Worker) Handle(ctx context.Context, job Job) error {
 
 	resp, err := w.ml.Analyze(ctx, req)
 	if err != nil {
-		return w.fail(ctx, analysisID, err)
+		return w.fail(ctx, analysisID, lastAttempt, err)
 	}
 
 	segments, err := json.Marshal(resp.Segments)
 	if err != nil {
-		return w.fail(ctx, analysisID, fmt.Errorf("encode segments: %w", err))
+		return w.fail(ctx, analysisID, lastAttempt, fmt.Errorf("encode segments: %w", err))
 	}
 	overall, err := json.Marshal(resp.Overall)
 	if err != nil {
-		return w.fail(ctx, analysisID, fmt.Errorf("encode overall: %w", err))
+		return w.fail(ctx, analysisID, lastAttempt, fmt.Errorf("encode overall: %w", err))
 	}
 
 	if _, err := w.queries.CompleteAnalysis(ctx, db.CompleteAnalysisParams{
@@ -90,7 +91,12 @@ func (w *Worker) Handle(ctx context.Context, job Job) error {
 	return nil
 }
 
-func (w *Worker) fail(ctx context.Context, analysisID uuid.UUID, cause error) error {
+// fail records a permanent failure on the analysis row, or returns cause so the
+// job is redelivered when there are attempts left.
+func (w *Worker) fail(ctx context.Context, analysisID uuid.UUID, lastAttempt bool, cause error) error {
+	if !lastAttempt {
+		return cause
+	}
 	slog.Error("analysis failed", "error", cause, "analysis_id", analysisID)
 	if _, err := w.queries.FailAnalysis(ctx, db.FailAnalysisParams{ID: analysisID, Error: cause.Error()}); err != nil {
 		return fmt.Errorf("mark analysis failed: %w", err)

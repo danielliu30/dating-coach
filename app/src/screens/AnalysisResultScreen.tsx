@@ -16,6 +16,7 @@ const OUTCOMES: { value: Outcome; label: string }[] = [
 ];
 
 const POLL_MS = 2000;
+const MAX_POLL_FAILURES = 5;
 
 export default function AnalysisResultScreen({
   route,
@@ -26,17 +27,26 @@ export default function AnalysisResultScreen({
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [labelStatus, setLabelStatus] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const failures = useRef(0);
 
-  // The worker fills the result asynchronously, so poll until it settles.
+  // The worker fills the result asynchronously, so poll until it settles. A
+  // transient request failure retries with backoff instead of giving up.
   const poll = useCallback(async () => {
     try {
       const next = await api.analysisResult(analysisID);
+      failures.current = 0;
+      setError(null);
       setResult(next);
       if (next.status === 'pending' || next.status === 'running') {
         timer.current = setTimeout(() => void poll(), POLL_MS);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'could not load analysis');
+      failures.current += 1;
+      if (failures.current >= MAX_POLL_FAILURES) {
+        setError(err instanceof Error ? err.message : 'could not load analysis');
+        return;
+      }
+      timer.current = setTimeout(() => void poll(), POLL_MS * failures.current);
     }
   }, [analysisID]);
 
@@ -66,6 +76,14 @@ export default function AnalysisResultScreen({
     return (
       <Screen>
         <Text style={shared.error}>{error}</Text>
+        <Button
+          label="Try again"
+          onPress={() => {
+            failures.current = 0;
+            setError(null);
+            void poll();
+          }}
+        />
       </Screen>
     );
   }

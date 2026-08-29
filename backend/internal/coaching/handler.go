@@ -332,7 +332,7 @@ func respondErr(w http.ResponseWriter, err error, fallback string) {
 		httpx.Error(w, http.StatusForbidden, "not allowed")
 	case errors.Is(err, ErrInvalidInput):
 		httpx.Error(w, http.StatusBadRequest, err.Error())
-	case errors.Is(err, ErrSlotTaken):
+	case errors.Is(err, ErrSlotTaken), errors.Is(err, ErrUnavailable):
 		httpx.Error(w, http.StatusConflict, err.Error())
 	default:
 		slog.Error(fallback, "error", err)

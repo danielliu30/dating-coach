@@ -1,4 +1,7 @@
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+-- btree_gist lets the coaching_sessions exclusion constraint below combine uuid
+-- equality with timestamp-range overlap.
+CREATE EXTENSION IF NOT EXISTS "btree_gist";
 
 CREATE TABLE users (
     id                       uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -43,6 +46,17 @@ CREATE TABLE coach_availability (
 
 CREATE INDEX coach_availability_coach_idx ON coach_availability (coach_id, weekday);
 
+-- timestamptz + interval is only STABLE (day/month components depend on the
+-- session timezone), so wrap the minute arithmetic to get an index-usable
+-- IMMUTABLE expression for the exclusion constraint below.
+CREATE FUNCTION session_range(start_time timestamptz, minutes integer)
+RETURNS tstzrange
+LANGUAGE sql
+IMMUTABLE
+AS $$
+    SELECT tstzrange(start_time, start_time + make_interval(mins => minutes))
+$$;
+
 CREATE TABLE coaching_sessions (
     id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id          uuid NOT NULL REFERENCES users (id) ON DELETE CASCADE,
@@ -54,12 +68,18 @@ CREATE TABLE coaching_sessions (
     coach_notes      text NOT NULL DEFAULT '',
     created_at       timestamptz NOT NULL DEFAULT now(),
     updated_at       timestamptz NOT NULL DEFAULT now(),
-    CONSTRAINT coaching_sessions_status_check CHECK (status IN ('scheduled', 'completed', 'cancelled'))
+    CONSTRAINT coaching_sessions_status_check CHECK (status IN ('scheduled', 'completed', 'cancelled', 'no_show')),
+    CONSTRAINT coaching_sessions_duration_check CHECK (duration_minutes BETWEEN 15 AND 240),
+    -- Two scheduled sessions for the same coach may never overlap, whatever
+    -- their start times are.
+    CONSTRAINT coaching_sessions_no_overlap EXCLUDE USING gist (
+        coach_id WITH =,
+        session_range(scheduled_time, duration_minutes) WITH &&
+    ) WHERE (status = 'scheduled')
 );
 
 CREATE INDEX coaching_sessions_user_idx ON coaching_sessions (user_id, scheduled_time DESC);
 CREATE INDEX coaching_sessions_coach_idx ON coaching_sessions (coach_id, scheduled_time DESC);
-CREATE UNIQUE INDEX coaching_sessions_coach_slot_idx ON coaching_sessions (coach_id, scheduled_time) WHERE status = 'scheduled';
 
 -- Live user <-> coach chat.
 CREATE TABLE chat_threads (
@@ -144,7 +164,8 @@ CREATE TABLE training_examples (
     CONSTRAINT training_examples_outcome_check CHECK (outcome IS NULL OR outcome IN ('ghosted', 'kept_talking', 'number_exchanged', 'date_set'))
 );
 
-CREATE INDEX training_examples_conversation_idx ON training_examples (conversation_id);
+-- One label per source per conversation; re-labelling updates in place.
+CREATE UNIQUE INDEX training_examples_conversation_source_idx ON training_examples (conversation_id, label_source);
 
 CREATE TABLE notifications (
     id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),

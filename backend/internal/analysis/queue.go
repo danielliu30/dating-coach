@@ -44,6 +44,13 @@ func OpenQueue(url, name string) (*Queue, error) {
 		conn.Close()
 		return nil, fmt.Errorf("set qos: %w", err)
 	}
+	// Publisher confirms: without them a broker restart silently swallows jobs
+	// that callers were told had been queued.
+	if err := channel.Confirm(false); err != nil {
+		channel.Close()
+		conn.Close()
+		return nil, fmt.Errorf("enable publisher confirms: %w", err)
+	}
 	return &Queue{conn: conn, channel: channel, name: name}, nil
 }
 
@@ -52,19 +59,29 @@ func (q *Queue) Publish(ctx context.Context, job Job) error {
 	if err != nil {
 		return fmt.Errorf("encode job: %w", err)
 	}
-	if err := q.channel.PublishWithContext(ctx, "", q.name, false, false, amqp.Publishing{
+	confirm, err := q.channel.PublishWithDeferredConfirmWithContext(ctx, "", q.name, true, false, amqp.Publishing{
 		ContentType:  "application/json",
 		Body:         body,
 		DeliveryMode: amqp.Persistent,
-	}); err != nil {
+	})
+	if err != nil {
 		return fmt.Errorf("publish job: %w", err)
+	}
+	acked, err := confirm.WaitContext(ctx)
+	if err != nil {
+		return fmt.Errorf("await publish confirm: %w", err)
+	}
+	if !acked {
+		return fmt.Errorf("publish job: broker nacked analysis %s", job.AnalysisID)
 	}
 	return nil
 }
 
-// Consume blocks until ctx is cancelled, calling handle for every job. Jobs that
-// fail are nacked without requeue; the analysis row records the failure.
-func (q *Queue) Consume(ctx context.Context, handle func(context.Context, Job) error) error {
+// Consume blocks until ctx is cancelled, calling handle for every job. handle
+// receives whether this is the last attempt (the delivery was already
+// redelivered once); a failing first attempt is requeued so a transient ML or
+// network blip does not lose the analysis.
+func (q *Queue) Consume(ctx context.Context, handle func(ctx context.Context, job Job, lastAttempt bool) error) error {
 	deliveries, err := q.channel.Consume(q.name, "", false, false, false, false, nil)
 	if err != nil {
 		return fmt.Errorf("consume queue: %w", err)
@@ -83,9 +100,9 @@ func (q *Queue) Consume(ctx context.Context, handle func(context.Context, Job) e
 				_ = delivery.Nack(false, false)
 				continue
 			}
-			if err := handle(ctx, job); err != nil {
-				slog.Error("handle analysis job", "error", err, "analysis_id", job.AnalysisID)
-				_ = delivery.Nack(false, false)
+			if err := handle(ctx, job, delivery.Redelivered); err != nil {
+				slog.Error("handle analysis job", "error", err, "analysis_id", job.AnalysisID, "requeue", !delivery.Redelivered)
+				_ = delivery.Nack(false, !delivery.Redelivered)
 				continue
 			}
 			if err := delivery.Ack(false); err != nil {

@@ -15,6 +15,7 @@ export class ChatSocket {
   private attempts = 0;
   private closed = false;
   private retry: ReturnType<typeof setTimeout> | null = null;
+  private outbox: ChatEvent[] = [];
 
   constructor(
     private readonly threadID: string,
@@ -32,6 +33,7 @@ export class ChatSocket {
     socket.onopen = () => {
       this.attempts = 0;
       this.handlers.onStatus?.('open');
+      this.flush();
     };
     socket.onmessage = (event) => {
       try {
@@ -62,14 +64,27 @@ export class ChatSocket {
     this.emit({ type: 'typing', typing });
   }
 
+  /**
+   * Messages typed while the socket is down are held and replayed on reconnect;
+   * transient events (typing) are dropped because they are stale by then.
+   */
   private emit(event: ChatEvent): void {
     if (this.socket?.readyState === WebSocket.OPEN) {
       this.socket.send(JSON.stringify(event));
+      return;
     }
+    if (event.type === 'message') this.outbox.push(event);
+  }
+
+  private flush(): void {
+    const pending = this.outbox;
+    this.outbox = [];
+    for (const event of pending) this.emit(event);
   }
 
   close(): void {
     this.closed = true;
+    this.outbox = [];
     if (this.retry) clearTimeout(this.retry);
     this.socket?.close();
     this.socket = null;

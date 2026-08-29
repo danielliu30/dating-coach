@@ -35,14 +35,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
 
   useEffect(() => {
     void (async () => {
-      const raw = await AsyncStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        const stored = JSON.parse(raw) as AuthSession;
-        tokenRef.current = stored.token;
-        setToken(stored.token);
-        setUser(stored.user);
+      try {
+        const raw = await AsyncStorage.getItem(STORAGE_KEY);
+        const stored = raw ? (JSON.parse(raw) as Partial<AuthSession>) : null;
+        if (stored?.token && stored.user) {
+          tokenRef.current = stored.token;
+          setToken(stored.token);
+          setUser(stored.user);
+        } else if (raw) {
+          await AsyncStorage.removeItem(STORAGE_KEY);
+        }
+      } catch {
+        // Unreadable or corrupt session: drop it and start signed out rather
+        // than leaving the app stuck on the loading screen.
+        await AsyncStorage.removeItem(STORAGE_KEY).catch(() => undefined);
+      } finally {
+        setReady(true);
       }
-      setReady(true);
     })();
   }, []);
 

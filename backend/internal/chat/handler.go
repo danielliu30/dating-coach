@@ -205,11 +205,12 @@ func (h *Handler) websocket(w http.ResponseWriter, r *http.Request) {
 	events, unsubscribe := h.hub.Subscribe(threadID)
 	defer unsubscribe()
 
-	if err := h.hub.MarkOnline(ctx, principal.UserID); err != nil {
+	connID := uuid.New()
+	if err := h.hub.MarkOnline(ctx, principal.UserID, connID); err != nil {
 		slog.Error("mark online", "error", err)
 	}
 	defer func() {
-		if err := h.hub.MarkOffline(context.WithoutCancel(ctx), principal.UserID); err != nil {
+		if err := h.hub.MarkOffline(context.WithoutCancel(ctx), principal.UserID, connID); err != nil {
 			slog.Error("mark offline", "error", err)
 		}
 	}()
@@ -229,7 +230,7 @@ func (h *Handler) websocket(w http.ResponseWriter, r *http.Request) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := h.hub.MarkOnline(ctx, principal.UserID); err != nil {
+			if err := h.hub.MarkOnline(ctx, principal.UserID, connID); err != nil {
 				slog.Error("refresh presence", "error", err)
 			}
 		case event, open := <-events:
@@ -241,12 +242,12 @@ func (h *Handler) websocket(w http.ResponseWriter, r *http.Request) {
 			if !open {
 				return
 			}
-			h.handleIncoming(ctx, conn, threadID, principal, event)
+			h.handleIncoming(ctx, conn, threadID, principal, connID, event)
 		}
 	}
 }
 
-func (h *Handler) handleIncoming(ctx context.Context, conn *websocket.Conn, threadID uuid.UUID, principal auth.Principal, event Event) {
+func (h *Handler) handleIncoming(ctx context.Context, conn *websocket.Conn, threadID uuid.UUID, principal auth.Principal, connID uuid.UUID, event Event) {
 	switch event.Type {
 	case EventMessage:
 		if _, err := h.svc.Send(ctx, threadID, principal.UserID, event.Body); err != nil {
@@ -257,7 +258,7 @@ func (h *Handler) handleIncoming(ctx context.Context, conn *websocket.Conn, thre
 			slog.Error("publish typing", "error", err)
 		}
 	case EventPresence:
-		if err := h.hub.MarkOnline(ctx, principal.UserID); err != nil {
+		if err := h.hub.MarkOnline(ctx, principal.UserID, connID); err != nil {
 			slog.Error("refresh presence", "error", err)
 		}
 	default:
@@ -324,6 +325,8 @@ func respondErr(w http.ResponseWriter, err error, fallback string) {
 		httpx.Error(w, http.StatusForbidden, "not allowed")
 	case errors.Is(err, ErrInvalidInput):
 		httpx.Error(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, ErrClosed):
+		httpx.Error(w, http.StatusConflict, err.Error())
 	default:
 		slog.Error(fallback, "error", err)
 		httpx.Error(w, http.StatusInternalServerError, fallback)

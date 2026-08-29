@@ -40,7 +40,13 @@ class TrainedScorer(Scorer):
                 "Run train.py (see ml-analyzer/README.md) or set ML_BACKEND=llm."
             )
         # Imported here so the LLM-only deployment stays torch-free.
-        from transformers import AutoModelForSequenceClassification, AutoTokenizer  # noqa: PLC0415
+        try:
+            from transformers import AutoModelForSequenceClassification, AutoTokenizer  # noqa: PLC0415
+        except ImportError as exc:  # pragma: no cover - depends on the image build
+            raise RuntimeError(
+                "ML_BACKEND=trained needs the training dependencies: install "
+                "requirements-train.txt (docker build --build-arg INSTALL_TRAINING_DEPS=1)."
+            ) from exc
 
         self._tokenizer = AutoTokenizer.from_pretrained(str(self.model_dir))
         self._model = AutoModelForSequenceClassification.from_pretrained(str(self.model_dir))
@@ -48,7 +54,7 @@ class TrainedScorer(Scorer):
 
     async def analyze(self, request: AnalyzeRequest) -> AnalyzeResponse:
         self._load()
-        import torch  # noqa: PLC0415
+        import torch  # noqa: PLC0415  (installed alongside transformers)
 
         windows = chunk(request.messages, self.settings.segment_size)
         texts = [transcript(window) for _, _, window in windows]

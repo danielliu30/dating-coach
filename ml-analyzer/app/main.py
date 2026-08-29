@@ -26,7 +26,8 @@ app = FastAPI(
 async def healthz() -> dict[str, str]:
     return {
         "status": "ok",
-        "backend": settings.backend,
+        "configured_backend": settings.backend,
+        "active_backend": type(scorer).__name__,
         "model_version": scorer.version,
     }
 

@@ -1,8 +1,8 @@
 import { NavigationContainer, type LinkingOptions } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import React from 'react';
-import { Text, useWindowDimensions } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { Linking, Text, useWindowDimensions } from 'react-native';
 
 import { Loading } from '../components/ui';
 import AccountScreen from '../screens/AccountScreen';
@@ -158,6 +158,15 @@ function AuthNavigator({ initialRoute }: { initialRoute: keyof AuthStackParams }
 export default function RootNavigator(): React.ReactElement {
   const { ready, token, user } = useAuth();
   const verified = Boolean(user?.email_verified);
+  const [linkedVerify, setLinkedVerify] = useState(false);
+
+  // Emails link to <app>/verify?token=..., which has to land on the verification
+  // screen even for a visitor without a session.
+  useEffect(() => {
+    void Linking.getInitialURL().then((url) => {
+      if (url && /\/verify\b/.test(url)) setLinkedVerify(true);
+    });
+  }, []);
 
   return (
     <NavigationContainer linking={linking}>
@@ -166,7 +175,7 @@ export default function RootNavigator(): React.ReactElement {
       ) : token && verified ? (
         <MainTabs />
       ) : (
-        <AuthNavigator initialRoute={token ? 'Verify' : 'SignIn'} />
+        <AuthNavigator initialRoute={token || linkedVerify ? 'Verify' : 'SignIn'} />
       )}
     </NavigationContainer>
   );

@@ -18,6 +18,7 @@ var (
 	ErrNotFound     = errors.New("not found")
 	ErrForbidden    = errors.New("not allowed")
 	ErrInvalidInput = errors.New("invalid input")
+	ErrClosed       = errors.New("thread is closed")
 )
 
 const maxMessageLength = 4000
@@ -138,6 +139,18 @@ func (s *Service) Thread(ctx context.Context, threadID, actorID uuid.UUID) (db.C
 	return thread, nil
 }
 
+// activeThread is Thread plus the requirement that the conversation is still open.
+func (s *Service) activeThread(ctx context.Context, threadID, actorID uuid.UUID) (db.ChatThread, error) {
+	thread, err := s.Thread(ctx, threadID, actorID)
+	if err != nil {
+		return db.ChatThread{}, err
+	}
+	if thread.Status != "active" {
+		return db.ChatThread{}, ErrClosed
+	}
+	return thread, nil
+}
+
 func (s *Service) History(ctx context.Context, threadID, actorID uuid.UUID, limit, offset int32) ([]Message, error) {
 	if _, err := s.Thread(ctx, threadID, actorID); err != nil {
 		return nil, err
@@ -168,7 +181,7 @@ func (s *Service) Send(ctx context.Context, threadID, senderID uuid.UUID, body s
 	if len(body) > maxMessageLength {
 		return Message{}, fmt.Errorf("%w: message body is too long", ErrInvalidInput)
 	}
-	if _, err := s.Thread(ctx, threadID, senderID); err != nil {
+	if _, err := s.activeThread(ctx, threadID, senderID); err != nil {
 		return Message{}, err
 	}
 
@@ -201,7 +214,7 @@ func (s *Service) Send(ctx context.Context, threadID, senderID uuid.UUID, body s
 }
 
 func (s *Service) Typing(ctx context.Context, threadID, senderID uuid.UUID, typing bool) error {
-	if _, err := s.Thread(ctx, threadID, senderID); err != nil {
+	if _, err := s.activeThread(ctx, threadID, senderID); err != nil {
 		return err
 	}
 	return s.hub.Publish(ctx, threadID, Event{

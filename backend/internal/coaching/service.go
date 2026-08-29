@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/danielliu30/dating-coach/backend/internal/store/db"
 )
@@ -19,20 +20,31 @@ var (
 	ErrForbidden    = errors.New("not allowed")
 	ErrInvalidInput = errors.New("invalid input")
 	ErrSlotTaken    = errors.New("slot is no longer available")
+	ErrUnavailable  = errors.New("coach is not available then")
 )
 
 const (
 	defaultSessionMinutes = 45
 	slotStepMinutes       = 30
+	minSessionMinutes     = 15
+	maxSessionMinutes     = 240
 	maxAvailabilityDays   = 30
 )
 
+var sessionStatuses = map[string]bool{
+	"scheduled": true,
+	"completed": true,
+	"cancelled": true,
+	"no_show":   true,
+}
+
 type Service struct {
+	pool    *pgxpool.Pool
 	queries *db.Queries
 }
 
-func NewService(queries *db.Queries) *Service {
-	return &Service{queries: queries}
+func NewService(pool *pgxpool.Pool, queries *db.Queries) *Service {
+	return &Service{pool: pool, queries: queries}
 }
 
 type Coach struct {
@@ -173,11 +185,20 @@ func (s *Service) SetAvailability(ctx context.Context, coachID uuid.UUID, window
 			return nil, fmt.Errorf("%w: availability window out of range", ErrInvalidInput)
 		}
 	}
-	if err := s.queries.ReplaceCoachAvailability(ctx, coachID); err != nil {
+	// Delete-then-insert in one transaction, so a failing insert cannot leave the
+	// coach with partial or empty availability.
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	q := s.queries.WithTx(tx)
+	if err := q.ReplaceCoachAvailability(ctx, coachID); err != nil {
 		return nil, fmt.Errorf("clear availability: %w", err)
 	}
 	for _, w := range windows {
-		if _, err := s.queries.AddCoachAvailability(ctx, db.AddCoachAvailabilityParams{
+		if _, err := q.AddCoachAvailability(ctx, db.AddCoachAvailabilityParams{
 			CoachID:     coachID,
 			Weekday:     w.Weekday,
 			StartMinute: w.StartMinute,
@@ -185,6 +206,9 @@ func (s *Service) SetAvailability(ctx context.Context, coachID uuid.UUID, window
 		}); err != nil {
 			return nil, fmt.Errorf("add availability: %w", err)
 		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit availability: %w", err)
 	}
 	return s.ListAvailability(ctx, coachID)
 }
@@ -295,6 +319,9 @@ func (s *Service) BookSession(ctx context.Context, userID uuid.UUID, in BookInpu
 	if duration <= 0 {
 		duration = defaultSessionMinutes
 	}
+	if err := s.assertBookable(ctx, coachID, scheduled, duration, true); err != nil {
+		return Session{}, err
+	}
 
 	session, err := s.queries.CreateCoachingSession(ctx, db.CreateCoachingSessionParams{
 		UserID:          userID,
@@ -304,12 +331,65 @@ func (s *Service) BookSession(ctx context.Context, userID uuid.UUID, in BookInpu
 		Topic:           in.Topic,
 	})
 	if err != nil {
-		if isUniqueViolation(err) {
+		if isSlotConflict(err) {
 			return Session{}, ErrSlotTaken
 		}
 		return Session{}, fmt.Errorf("create session: %w", err)
 	}
 	return sessionOf(session, ""), nil
+}
+
+// assertBookable rejects a requested interval that the coach has not published
+// availability for, or that collides with an existing session. The exclusion
+// constraint on coaching_sessions is the authoritative race-safe check; this
+// gives callers a precise error instead of a bare conflict.
+func (s *Service) assertBookable(ctx context.Context, coachID uuid.UUID, start time.Time, duration int32, requireAccepting bool) error {
+	if duration < minSessionMinutes || duration > maxSessionMinutes {
+		return fmt.Errorf("%w: duration must be between %d and %d minutes", ErrInvalidInput, minSessionMinutes, maxSessionMinutes)
+	}
+
+	coach, err := s.GetCoach(ctx, coachID)
+	if err != nil {
+		return err
+	}
+	if requireAccepting && !coach.AcceptingClients {
+		return fmt.Errorf("%w: coach is not accepting clients", ErrUnavailable)
+	}
+
+	windows, err := s.ListAvailability(ctx, coachID)
+	if err != nil {
+		return err
+	}
+	loc, err := time.LoadLocation(coach.Timezone)
+	if err != nil {
+		loc = time.UTC
+	}
+	local := start.In(loc)
+	startMinute := int32(local.Hour()*60 + local.Minute())
+	insideWindow := false
+	for _, w := range windows {
+		if w.Weekday == int16(local.Weekday()) && startMinute >= w.StartMinute && startMinute+duration <= w.EndMinute {
+			insideWindow = true
+			break
+		}
+	}
+	if !insideWindow {
+		return fmt.Errorf("%w: %s is outside the coach's published availability", ErrUnavailable, start.UTC().Format(time.RFC3339))
+	}
+
+	end := start.Add(time.Duration(duration) * time.Minute)
+	booked, err := s.queries.ListBookedSlots(ctx, db.ListBookedSlotsParams{
+		CoachID:         coachID,
+		ScheduledTime:   start.Add(-maxSessionMinutes * time.Minute),
+		ScheduledTime_2: end,
+	})
+	if err != nil {
+		return fmt.Errorf("list booked slots: %w", err)
+	}
+	if overlapsBooked(start, duration, booked) {
+		return ErrSlotTaken
+	}
+	return nil
 }
 
 func (s *Service) ListForUser(ctx context.Context, userID uuid.UUID, status *string) ([]Session, error) {
@@ -328,6 +408,7 @@ func (s *Service) ListForUser(ctx context.Context, userID uuid.UUID, status *str
 			DurationMinutes: row.DurationMinutes,
 			Status:          row.Status,
 			Topic:           row.Topic,
+			CoachNotes:      row.CoachNotes,
 		})
 	}
 	return out, nil
@@ -375,7 +456,7 @@ func (s *Service) participant(ctx context.Context, sessionID, userID uuid.UUID) 
 }
 
 func (s *Service) SetStatus(ctx context.Context, sessionID, actorID uuid.UUID, status string) (Session, error) {
-	if status != "scheduled" && status != "completed" && status != "cancelled" {
+	if !sessionStatuses[status] {
 		return Session{}, fmt.Errorf("%w: unknown status %q", ErrInvalidInput, status)
 	}
 	if _, err := s.participant(ctx, sessionID, actorID); err != nil {
@@ -396,12 +477,16 @@ func (s *Service) Reschedule(ctx context.Context, sessionID, actorID uuid.UUID, 
 	if scheduled.Before(time.Now()) {
 		return Session{}, fmt.Errorf("%w: scheduled_time is in the past", ErrInvalidInput)
 	}
-	if _, err := s.participant(ctx, sessionID, actorID); err != nil {
+	session, err := s.participant(ctx, sessionID, actorID)
+	if err != nil {
+		return Session{}, err
+	}
+	if err := s.assertBookable(ctx, session.CoachID, scheduled, session.DurationMinutes, false); err != nil {
 		return Session{}, err
 	}
 	updated, err := s.queries.RescheduleSession(ctx, db.RescheduleSessionParams{ID: sessionID, ScheduledTime: scheduled})
 	if err != nil {
-		if isUniqueViolation(err) {
+		if isSlotConflict(err) {
 			return Session{}, ErrSlotTaken
 		}
 		if errors.Is(err, pgx.ErrNoRows) {
