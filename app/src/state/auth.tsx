@@ -68,6 +68,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
           void api
             .me()
             .then(async (fresh) => {
+              // Signing out or signing in again while this was in flight makes
+              // the response belong to a session that no longer exists.
+              if (tokenRef.current !== stored.token) return;
               setUser(fresh);
               await AsyncStorage.setItem(
                 STORAGE_KEY,

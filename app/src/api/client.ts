@@ -54,7 +54,9 @@ export class ApiClient {
     const payload = text ? (JSON.parse(text) as unknown) : null;
 
     if (!response.ok) {
-      if (response.status === 401 && token) {
+      // A 401 for a token that has since been replaced belongs to a session the
+      // app already left, and must not sign the current one out.
+      if (response.status === 401 && token && token === this.token()) {
         this.onUnauthorized();
       }
       const message =
