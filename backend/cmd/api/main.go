@@ -65,6 +65,7 @@ func run() error {
 	issuer := auth.NewTokenIssuer(cfg.JWTSecret, cfg.JWTTTL)
 	limiter := auth.NewRateLimiter(rdb, cfg.AuthRateLimit, cfg.AuthRateWindow)
 	authenticate := auth.Middleware(issuer)
+	verified := auth.RequireVerified(auth.EmailVerifiedLookup(pg.Queries))
 
 	authHandler := auth.NewHandler(
 		auth.NewService(pg.Queries, issuer, notifier, cfg.BcryptCost, cfg.PublicAppURL),
@@ -92,7 +93,7 @@ func run() error {
 	router.Route("/api/v1", func(v1 chi.Router) {
 		v1.Mount("/auth", authHandler.Routes(authenticate))
 		v1.Group(func(private chi.Router) {
-			private.Use(authenticate)
+			private.Use(authenticate, verified)
 			private.Mount("/coaching", coachingHandler.Routes())
 			private.Mount("/chat", chatHandler.Routes())
 			private.Mount("/analysis", analysisHandler.Routes())

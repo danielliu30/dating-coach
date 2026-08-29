@@ -61,6 +61,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
           expiresRef.current = stored.expires_at ?? '';
           setToken(stored.token);
           setUser(stored.user);
+          // The stored profile can be stale — most importantly email_verified,
+          // which the API enforces on every authenticated route. Re-read it in
+          // the background so the UI does not gate on a flag the server
+          // disagrees with, without holding up the splash screen.
+          void api
+            .me()
+            .then(async (fresh) => {
+              setUser(fresh);
+              await AsyncStorage.setItem(
+                STORAGE_KEY,
+                JSON.stringify({ token: stored.token, expires_at: stored.expires_at, user: fresh }),
+              );
+            })
+            .catch(() => undefined);
         } else if (raw) {
           await AsyncStorage.removeItem(STORAGE_KEY);
         }

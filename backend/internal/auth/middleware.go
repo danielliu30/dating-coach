@@ -2,12 +2,16 @@ package auth
 
 import (
 	"context"
+	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/danielliu30/dating-coach/backend/internal/httpx"
+	"github.com/danielliu30/dating-coach/backend/internal/store/db"
 )
 
 type contextKey string
@@ -47,6 +51,50 @@ func Middleware(issuer *TokenIssuer) func(http.Handler) http.Handler {
 			}
 			principal := Principal{UserID: userID, Email: claims.Email, Role: claims.Role}
 			next.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), principal)))
+		})
+	}
+}
+
+// VerifiedLookup reports whether the account has confirmed its email address.
+type VerifiedLookup func(ctx context.Context, userID uuid.UUID) (bool, error)
+
+// EmailVerifiedLookup reads the verification flag straight from the users table.
+func EmailVerifiedLookup(queries *db.Queries) VerifiedLookup {
+	return func(ctx context.Context, userID uuid.UUID) (bool, error) {
+		user, err := queries.GetUserByID(ctx, userID)
+		if err != nil {
+			return false, err
+		}
+		return user.EmailVerified, nil
+	}
+}
+
+// RequireVerified rejects callers whose email address is still unconfirmed. The
+// flag is read per request rather than taken from the token so that verifying
+// (or an account being deleted) takes effect immediately on tokens already out
+// in the wild.
+func RequireVerified(lookup VerifiedLookup) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			principal, ok := PrincipalFrom(r.Context())
+			if !ok {
+				httpx.Error(w, http.StatusUnauthorized, "missing bearer token")
+				return
+			}
+			verified, err := lookup(r.Context(), principal.UserID)
+			switch {
+			case errors.Is(err, pgx.ErrNoRows):
+				httpx.Error(w, http.StatusUnauthorized, "account no longer exists")
+				return
+			case err != nil:
+				slog.Error("email verification lookup", "error", err, "user_id", principal.UserID)
+				httpx.Error(w, http.StatusInternalServerError, "could not verify account")
+				return
+			case !verified:
+				httpx.Error(w, http.StatusForbidden, "email not verified")
+				return
+			}
+			next.ServeHTTP(w, r)
 		})
 	}
 }
