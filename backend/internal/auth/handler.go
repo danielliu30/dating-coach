@@ -104,8 +104,9 @@ func (h *Handler) verify(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// resendVerification handles POST /resend-verification. It always reports
-// success so the response cannot be used to probe for registered emails.
+// resendVerification handles POST /resend-verification. Unknown and already
+// verified addresses also report success, so the response cannot be used to
+// probe for registered emails.
 func (h *Handler) resendVerification(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Email string `json:"email"`

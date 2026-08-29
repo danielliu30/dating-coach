@@ -40,8 +40,8 @@ func NewTokenIssuer(secret string, ttl time.Duration) *TokenIssuer {
 	return &TokenIssuer{secret: []byte(secret), ttl: ttl}
 }
 
-// Issue mints a signed token for a user and reports when it expires, so the
-// clients can refresh before the API starts rejecting them.
+// Issue mints a signed token for a user and reports when it expires, which the
+// sign-up and sign-in responses hand to clients as the session expiry.
 func (t *TokenIssuer) Issue(userID uuid.UUID, email, role string) (string, time.Time, error) {
 	expires := time.Now().Add(t.ttl)
 	claims := Claims{

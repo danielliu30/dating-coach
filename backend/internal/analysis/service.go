@@ -69,7 +69,7 @@ type SubmitMessage struct {
 }
 
 // Result is the API view of an analysis row. Segments and Overall stay raw JSON
-// so the ML analyzer's scoring schema can evolve without a Go change.
+// so the stored scoring payload reaches clients unchanged.
 type Result struct {
 	ID             string          `json:"id"`
 	ConversationID string          `json:"conversation_id"`
