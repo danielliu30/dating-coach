@@ -1,0 +1,93 @@
+package analysis
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"time"
+)
+
+// MLRequest is the payload sent to the Python analyzer. It is intentionally
+// model-agnostic: the LLM-prompt backend and a future fine-tuned model share it.
+type MLRequest struct {
+	ConversationID string      `json:"conversation_id"`
+	Platform       string      `json:"platform"`
+	MatchName      string      `json:"match_name,omitempty"`
+	Messages       []MLMessage `json:"messages"`
+}
+
+type MLMessage struct {
+	Position int32  `json:"position"`
+	Sender   string `json:"sender"`
+	Body     string `json:"body"`
+	SentAt   string `json:"sent_at"`
+}
+
+// MLResponse mirrors ml-analyzer's AnalyzeResponse schema.
+type MLResponse struct {
+	ModelVersion string      `json:"model_version"`
+	Segments     []MLSegment `json:"segments"`
+	Overall      MLOverall   `json:"overall"`
+}
+
+type MLSegment struct {
+	StartPosition   int32   `json:"start_position"`
+	EndPosition     int32   `json:"end_position"`
+	EngagementScore float64 `json:"engagement_score"`
+	Label           string  `json:"label"`
+	Comment         string  `json:"comment"`
+}
+
+type MLOverall struct {
+	EngagementScore float64  `json:"engagement_score"`
+	Summary         string   `json:"summary"`
+	Strengths       []string `json:"strengths"`
+	Improvements    []string `json:"improvements"`
+}
+
+// MLClient talks to the ml-analyzer service over HTTP only, so the ML component
+// can be deployed, scaled and replaced independently.
+type MLClient struct {
+	baseURL string
+	http    *http.Client
+}
+
+func NewMLClient(baseURL string, timeout time.Duration) *MLClient {
+	return &MLClient{
+		baseURL: strings.TrimRight(baseURL, "/"),
+		http:    &http.Client{Timeout: timeout},
+	}
+}
+
+func (c *MLClient) Analyze(ctx context.Context, in MLRequest) (MLResponse, error) {
+	body, err := json.Marshal(in)
+	if err != nil {
+		return MLResponse{}, fmt.Errorf("encode ml request: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/analyze", bytes.NewReader(body))
+	if err != nil {
+		return MLResponse{}, fmt.Errorf("build ml request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return MLResponse{}, fmt.Errorf("call ml service: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return MLResponse{}, fmt.Errorf("ml service returned %d: %s", resp.StatusCode, strings.TrimSpace(string(snippet)))
+	}
+
+	var out MLResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return MLResponse{}, fmt.Errorf("decode ml response: %w", err)
+	}
+	return out, nil
+}

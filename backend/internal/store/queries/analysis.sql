@@ -1,0 +1,78 @@
+-- name: CreateConversation :one
+INSERT INTO conversations (user_id, title, platform, match_name)
+VALUES ($1, $2, $3, $4)
+RETURNING *;
+
+-- name: GetConversation :one
+SELECT * FROM conversations WHERE id = $1;
+
+-- name: ListConversationsForUser :many
+SELECT * FROM conversations
+WHERE user_id = $1
+ORDER BY created_at DESC
+LIMIT $2 OFFSET $3;
+
+-- name: CreateMessage :one
+INSERT INTO messages (conversation_id, position, sender, body, sent_at)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING *;
+
+-- name: ListMessages :many
+SELECT * FROM messages
+WHERE conversation_id = $1
+ORDER BY position;
+
+-- name: CreateAnalysisResult :one
+INSERT INTO analysis_results (conversation_id, status)
+VALUES ($1, 'pending')
+RETURNING *;
+
+-- name: GetAnalysisResult :one
+SELECT * FROM analysis_results WHERE id = $1;
+
+-- name: GetLatestAnalysisForConversation :one
+SELECT * FROM analysis_results
+WHERE conversation_id = $1
+ORDER BY created_at DESC
+LIMIT 1;
+
+-- name: MarkAnalysisRunning :exec
+UPDATE analysis_results SET status = 'running' WHERE id = $1;
+
+-- name: CompleteAnalysis :one
+UPDATE analysis_results
+SET status = 'succeeded',
+    segments = $2,
+    overall = $3,
+    model_version = $4,
+    completed_at = now(),
+    error = ''
+WHERE id = $1
+RETURNING *;
+
+-- name: FailAnalysis :one
+UPDATE analysis_results
+SET status = 'failed',
+    error = $2,
+    completed_at = now()
+WHERE id = $1
+RETURNING *;
+
+-- name: UpsertTrainingExample :one
+INSERT INTO training_examples (conversation_id, label_source, outcome, reply_received, engagement_score, segment_labels, notes, consented)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+RETURNING *;
+
+-- name: ListTrainingExamples :many
+SELECT * FROM training_examples
+WHERE consented
+ORDER BY created_at
+LIMIT $1 OFFSET $2;
+
+-- name: CreateNotification :one
+INSERT INTO notifications (user_id, kind, payload)
+VALUES ($1, $2, $3)
+RETURNING *;
+
+-- name: MarkNotificationSent :exec
+UPDATE notifications SET sent_at = now() WHERE id = $1;

@@ -1,0 +1,109 @@
+name: dating-coach
+
+x-backend-env: &backend-env
+  APP_ENV: ${APP_ENV:-development}
+  DATABASE_URL: postgres://${POSTGRES_USER:-datingcoach}:${POSTGRES_PASSWORD:-datingcoach}@postgres:5432/${POSTGRES_DB:-datingcoach}?sslmode=disable
+  REDIS_URL: redis://redis:6379/0
+  RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+  JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
+  JWT_TTL: ${JWT_TTL:-24h}
+  AUTH_RATE_LIMIT: ${AUTH_RATE_LIMIT:-20}
+  AUTH_RATE_WINDOW: ${AUTH_RATE_WINDOW:-1m}
+  ML_SERVICE_URL: http://ml-analyzer:8000
+  ML_SERVICE_TIMEOUT: ${ML_SERVICE_TIMEOUT:-60s}
+  ANALYSIS_QUEUE: ${ANALYSIS_QUEUE:-conversation.analysis}
+  PUBLIC_APP_URL: ${PUBLIC_APP_URL:-http://localhost:8081}
+  CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8081,http://localhost:19006}
+  SMTP_HOST: ${SMTP_HOST:-}
+  SMTP_PORT: ${SMTP_PORT:-587}
+  SMTP_USERNAME: ${SMTP_USERNAME:-}
+  SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+  MAIL_FROM: ${MAIL_FROM:-no-reply@datingcoach.local}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-datingcoach}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-datingcoach}
+      POSTGRES_DB: ${POSTGRES_DB:-datingcoach}
+    ports: ['5432:5432']
+    volumes: ['postgres-data:/var/lib/postgresql/data']
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-datingcoach}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports: ['6379:6379']
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    ports: ['5672:5672', '15672:15672']
+    healthcheck:
+      test: ['CMD', 'rabbitmq-diagnostics', '-q', 'ping']
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+  # Applies backend/migrations, then exits.
+  migrate:
+    image: migrate/migrate:v4.17.1
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes: ['./backend/migrations:/migrations:ro']
+    command:
+      - -path=/migrations
+      - -database=postgres://${POSTGRES_USER:-datingcoach}:${POSTGRES_PASSWORD:-datingcoach}@postgres:5432/${POSTGRES_DB:-datingcoach}?sslmode=disable
+      - up
+
+  api:
+    build: ./backend
+    command: ['api']
+    environment:
+      <<: *backend-env
+      HTTP_ADDR: ':8080'
+    ports: ['8080:8080']
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  worker:
+    build: ./backend
+    command: ['worker']
+    environment: *backend-env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+      ml-analyzer:
+        condition: service_started
+
+  ml-analyzer:
+    build: ./ml-analyzer
+    environment:
+      ML_BACKEND: ${ML_BACKEND:-llm}
+      LLM_PROVIDER: ${LLM_PROVIDER:-anthropic}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-claude-sonnet-4-5}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-45}
+      ML_SEGMENT_SIZE: ${ML_SEGMENT_SIZE:-6}
+      ML_MODEL_DIR: ${ML_MODEL_DIR:-/models/segment-scorer}
+    ports: ['8000:8000']
+
+volumes:
+  postgres-data:
