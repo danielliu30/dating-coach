@@ -7,6 +7,7 @@ x-backend-env: &backend-env
   RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
   JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
   JWT_TTL: ${JWT_TTL:-24h}
+  VERIFY_TOKEN_TTL: ${VERIFY_TOKEN_TTL:-30m}
   BCRYPT_COST: ${BCRYPT_COST:-12}
   AUTH_RATE_LIMIT: ${AUTH_RATE_LIMIT:-20}
   AUTH_RATE_WINDOW: ${AUTH_RATE_WINDOW:-1m}

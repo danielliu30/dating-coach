@@ -83,6 +83,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
     return session.user;
   }, []);
 
+  // Drops the session everywhere it is held: refs, state and storage.
+  const clearSession = useCallback(async () => {
+    tokenRef.current = null;
+    expiresRef.current = '';
+    setToken(null);
+    setUser(null);
+    await AsyncStorage.removeItem(STORAGE_KEY);
+  }, []);
+
   // Keeps a refreshed profile across restarts instead of only in memory.
   const persistUser = useCallback(async (profile: Profile) => {
     setUser(profile);
@@ -103,11 +112,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
       signUp: async ({ email, password, displayName, role }) =>
         persist(await api.signUp({ email, password, display_name: displayName, role })),
       verify: async (verificationToken) => {
-        // Verifying while signed in swaps the sign-up token for a session one;
-        // the sign-up token cannot reach the private API the app is about to
-        // show. Verifying signed out only returns the profile.
+        // Verifying as the account being verified swaps the sign-up token for a
+        // session one; the sign-up token cannot reach the private API the app is
+        // about to show. An empty token means the backend did not recognise the
+        // caller as that account (signed out, expired, or a different account),
+        // so any session on hand is dropped rather than paired with the
+        // verified profile.
         const session = await api.verifyEmail(verificationToken);
-        return session.token ? persist(session) : persistUser(session.user);
+        if (session.token) return persist(session);
+        await clearSession();
+        return session.user;
       },
       resendVerification: async (email) => {
         await api.resendVerification(email);
@@ -116,15 +130,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
         if (!tokenRef.current) return;
         await persistUser(await api.me());
       },
-      signOut: async () => {
-        tokenRef.current = null;
-        expiresRef.current = '';
-        setToken(null);
-        setUser(null);
-        await AsyncStorage.removeItem(STORAGE_KEY);
-      },
+      signOut: clearSession,
     }),
-    [persist, persistUser, ready, token, user],
+    [clearSession, persist, persistUser, ready, token, user],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
