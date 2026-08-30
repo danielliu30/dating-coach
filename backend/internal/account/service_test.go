@@ -8,10 +8,13 @@ import (
 	"github.com/google/uuid"
 )
 
-// recorder captures the deletion sequence, optionally failing the publish.
+// recorder captures the deletion sequence, optionally failing the publish and
+// cancelling the request context the way an abandoned request would.
 type recorder struct {
-	steps      []string
-	publishErr error
+	steps        []string
+	publishErr   error
+	cancelOnPub  context.CancelFunc
+	restoreCtxOK bool
 }
 
 func (r *recorder) Revoke(_ context.Context, userID uuid.UUID) error {
@@ -19,13 +22,17 @@ func (r *recorder) Revoke(_ context.Context, userID uuid.UUID) error {
 	return nil
 }
 
-func (r *recorder) Restore(_ context.Context, userID uuid.UUID) error {
+func (r *recorder) Restore(ctx context.Context, userID uuid.UUID) error {
 	r.steps = append(r.steps, "restore:"+userID.String())
+	r.restoreCtxOK = ctx.Err() == nil
 	return nil
 }
 
 func (r *recorder) Publish(_ context.Context, job Job) error {
 	r.steps = append(r.steps, "publish:"+job.UserID)
+	if r.cancelOnPub != nil {
+		r.cancelOnPub()
+	}
 	return r.publishErr
 }
 
@@ -52,5 +59,21 @@ func TestDeleteUndoesRevocationWhenQueueingFails(t *testing.T) {
 	// freshly issued ones, would stay denied while its rows still exist.
 	if len(rec.steps) != 3 || rec.steps[2] != "restore:"+userID.String() {
 		t.Fatalf("steps = %v, want the revocation to be undone", rec.steps)
+	}
+}
+
+func TestDeleteUndoesRevocationAfterRequestCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rec := &recorder{publishErr: context.Canceled, cancelOnPub: cancel}
+	userID := uuid.New()
+	if err := NewService(rec, rec).Delete(ctx, userID); err == nil {
+		t.Fatal("expected a publish failure to be reported")
+	}
+	if len(rec.steps) != 3 || rec.steps[2] != "restore:"+userID.String() {
+		t.Fatalf("steps = %v, want the revocation to be undone", rec.steps)
+	}
+	if !rec.restoreCtxOK {
+		t.Fatal("Restore got an already-cancelled context, so the rollback cannot reach Redis")
 	}
 }

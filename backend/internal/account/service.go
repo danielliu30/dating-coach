@@ -6,9 +6,14 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/google/uuid"
 )
+
+// restoreTimeout bounds the detached rollback of a revocation whose deletion
+// could not be queued.
+const restoreTimeout = 5 * time.Second
 
 // Revoker denies the outstanding tokens of an account and can undo that denial.
 // Implemented by auth.Denylist; an interface here keeps the packages decoupled
@@ -40,13 +45,18 @@ func NewService(revoker Revoker, publisher Publisher) *Service {
 // deletion was accepted, so access ends immediately even though the rows go
 // away later. When queueing fails the revocation is undone, because a denylisted
 // account cannot authenticate to retry - not even with a freshly issued token -
-// so keeping it would lock a live account out for the token lifetime.
+// so keeping it would lock a live account out for the token lifetime. That undo
+// runs on a context detached from ctx, so a cancelled request still rolls back.
 func (s *Service) Delete(ctx context.Context, userID uuid.UUID) error {
 	if err := s.revoker.Revoke(ctx, userID); err != nil {
 		return fmt.Errorf("revoke tokens: %w", err)
 	}
 	if err := s.publisher.Publish(ctx, Job{UserID: userID.String()}); err != nil {
-		if restoreErr := s.revoker.Restore(ctx, userID); restoreErr != nil {
+		// The rollback runs detached from ctx: the usual reason Publish fails is
+		// the client giving up, and a cancelled context cannot undo anything.
+		restoreCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), restoreTimeout)
+		defer cancel()
+		if restoreErr := s.revoker.Restore(restoreCtx, userID); restoreErr != nil {
 			slog.Error("account stays revoked after a failed deletion publish",
 				"error", restoreErr, "user_id", userID)
 		}
