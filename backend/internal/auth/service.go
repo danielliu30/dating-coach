@@ -17,6 +17,9 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/google/uuid"
+
+	"github.com/danielliu30/dating-coach/backend/internal/account"
 	"github.com/danielliu30/dating-coach/backend/internal/notify"
 	"github.com/danielliu30/dating-coach/backend/internal/store/db"
 )
@@ -41,11 +44,58 @@ type Service struct {
 	notifier   notify.Notifier
 	bcryptCost int
 	appURL     string
+	denylist   *Denylist
+	deletions  DeletionPublisher
 }
 
-// NewService wires the service dependencies; called once from cmd/api.
-func NewService(queries *db.Queries, issuer *TokenIssuer, notifier notify.Notifier, bcryptCost int, appURL string) *Service {
-	return &Service{queries: queries, issuer: issuer, notifier: notifier, bcryptCost: bcryptCost, appURL: appURL}
+// DeletionPublisher queues the row removal that follows a revoked account.
+// Service depends on the interface so cmd/api owns the broker connection.
+type DeletionPublisher interface {
+	Publish(ctx context.Context, job account.Job) error
+}
+
+// NewService wires the service dependencies; called once from cmd/api. denylist
+// and deletions are the two halves of account deletion: revoke now, delete rows
+// later.
+func NewService(
+	queries *db.Queries,
+	issuer *TokenIssuer,
+	notifier notify.Notifier,
+	bcryptCost int,
+	appURL string,
+	denylist *Denylist,
+	deletions DeletionPublisher,
+) *Service {
+	return &Service{
+		queries:    queries,
+		issuer:     issuer,
+		notifier:   notifier,
+		bcryptCost: bcryptCost,
+		appURL:     appURL,
+		denylist:   denylist,
+		deletions:  deletions,
+	}
+}
+
+// DeleteAccount ends every session for userID and queues the removal of its
+// rows. It returns once the revocation is durable in Redis and the broker has
+// confirmed the deletion job.
+//
+// The revocation is written first and is never rolled back: if queueing then
+// fails, the caller is locked out of an account whose data still exists, which
+// an operator can undo, whereas deleting the rows of a caller whose tokens
+// still work cannot be undone. An error therefore means the account may
+// already be unusable, and the caller should repeat the request: it is
+// idempotent, and DELETE /me stays reachable with a revoked token so the
+// deletion can still be queued once the broker recovers.
+func (s *Service) DeleteAccount(ctx context.Context, userID uuid.UUID) error {
+	if err := s.denylist.Revoke(ctx, userID); err != nil {
+		return fmt.Errorf("revoke sessions: %w", err)
+	}
+	if err := s.deletions.Publish(ctx, account.Job{UserID: userID.String()}); err != nil {
+		return fmt.Errorf("queue account deletion: %w", err)
+	}
+	return nil
 }
 
 // SignUpInput is the decoded POST /auth/signup body.

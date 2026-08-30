@@ -1,5 +1,6 @@
-// Command worker consumes conversation-analysis jobs from RabbitMQ, calls the
-// ML analyzer and stores the results.
+// Command worker consumes the background queues: conversation-analysis jobs,
+// which it runs through the ML analyzer and stores, and account deletions,
+// whose rows it removes after the API has already revoked the sessions.
 package main
 
 import (
@@ -7,9 +8,11 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
+	"github.com/danielliu30/dating-coach/backend/internal/account"
 	"github.com/danielliu30/dating-coach/backend/internal/analysis"
 	"github.com/danielliu30/dating-coach/backend/internal/config"
 	"github.com/danielliu30/dating-coach/backend/internal/notify"
@@ -46,9 +49,30 @@ func run() error {
 		analysis.NewMLClient(cfg.MLServiceURL, cfg.MLServiceTimeout),
 		notify.New(cfg),
 	)
+	deleter := account.NewWorker(pg.Queries)
 
-	slog.Info("analysis worker started", "queue", cfg.AnalysisQueue, "ml_service", cfg.MLServiceURL)
-	return consume(ctx, cfg.RabbitMQURL, cfg.AnalysisQueue, worker.Handle)
+	slog.Info("worker started",
+		"analysis_queue", cfg.AnalysisQueue,
+		"deletion_queue", cfg.AccountDeletionQueue,
+		"ml_service", cfg.MLServiceURL,
+	)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		consume(ctx, "analysis", func(ctx context.Context) error {
+			return runAnalysisConsumer(ctx, cfg.RabbitMQURL, cfg.AnalysisQueue, worker.Handle)
+		})
+	}()
+	go func() {
+		defer wg.Done()
+		consume(ctx, "account deletion", func(ctx context.Context) error {
+			return runDeletionConsumer(ctx, cfg.RabbitMQURL, cfg.AccountDeletionQueue, deleter.Handle)
+		})
+	}()
+	wg.Wait()
+	return nil
 }
 
 const (
@@ -56,20 +80,21 @@ const (
 	maxBackoff = 30 * time.Second
 )
 
-// consume keeps a consumer attached to the queue for the life of ctx. A broker
-// restart or dropped channel is transient, so the worker redials with
-// exponential backoff instead of exiting and leaving jobs queued indefinitely.
-func consume(ctx context.Context, url, name string, handle analysis.JobHandler) error {
+// consume runs one consumer for the life of ctx, restarting it with exponential
+// backoff. A broker restart or dropped channel is transient, so the worker
+// redials instead of exiting and leaving jobs queued indefinitely. kind names
+// the consumer in the log lines; run holds a connection until it breaks.
+func consume(ctx context.Context, kind string, run func(context.Context) error) {
 	backoff := minBackoff
 	for {
-		err := runConsumer(ctx, url, name, handle)
+		err := run(ctx)
 		if ctx.Err() != nil {
-			return nil
+			return
 		}
-		slog.Error("analysis consumer stopped", "error", err, "retry_in", backoff)
+		slog.Error("consumer stopped", "consumer", kind, "error", err, "retry_in", backoff)
 		select {
 		case <-ctx.Done():
-			return nil
+			return
 		case <-time.After(backoff):
 		}
 		if backoff < maxBackoff {
@@ -78,9 +103,20 @@ func consume(ctx context.Context, url, name string, handle analysis.JobHandler) 
 	}
 }
 
-// runConsumer holds one broker connection for as long as it stays healthy.
-func runConsumer(ctx context.Context, url, name string, handle analysis.JobHandler) error {
+// runAnalysisConsumer holds one broker connection for as long as it stays healthy.
+func runAnalysisConsumer(ctx context.Context, url, name string, handle analysis.JobHandler) error {
 	queue, err := analysis.OpenQueue(url, name)
+	if err != nil {
+		return err
+	}
+	defer queue.Close()
+	return queue.Consume(ctx, handle)
+}
+
+// runDeletionConsumer holds one broker connection for as long as it stays
+// healthy, on the deletion queue and its dead-letter queue.
+func runDeletionConsumer(ctx context.Context, url, name string, handle account.JobHandler) error {
+	queue, err := account.OpenQueue(url, name)
 	if err != nil {
 		return err
 	}

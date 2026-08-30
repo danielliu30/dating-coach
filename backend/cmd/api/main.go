@@ -15,6 +15,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 
+	"github.com/danielliu30/dating-coach/backend/internal/account"
 	"github.com/danielliu30/dating-coach/backend/internal/analysis"
 	"github.com/danielliu30/dating-coach/backend/internal/auth"
 	"github.com/danielliu30/dating-coach/backend/internal/chat"
@@ -31,6 +32,18 @@ func main() {
 	if err := run(); err != nil {
 		slog.Error("api exited", "error", err)
 		os.Exit(1)
+	}
+}
+
+// chain composes middlewares into one that applies them left to right, so a
+// route group taking a single middleware still gets both authentication and the
+// revocation check.
+func chain(middlewares ...func(http.Handler) http.Handler) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		for i := len(middlewares) - 1; i >= 0; i-- {
+			next = middlewares[i](next)
+		}
+		return next
 	}
 }
 
@@ -63,13 +76,24 @@ func run() error {
 	}
 	defer queue.Close()
 
+	deletions, err := account.OpenPublisher(cfg.RabbitMQURL, cfg.AccountDeletionQueue)
+	if err != nil {
+		return err
+	}
+	defer deletions.Close()
+
 	notifier := notify.New(cfg)
 	issuer := auth.NewTokenIssuer(cfg.JWTSecret, cfg.JWTTTL)
 	limiter := auth.NewRateLimiter(rdb, cfg.AuthRateLimit, cfg.AuthRateWindow)
-	authenticate := auth.Middleware(issuer)
+	// A revocation only has to outlive the tokens that existed when it was made.
+	denylist := auth.NewDenylist(rdb, cfg.JWTTTL)
+	// Every authenticated route also consults the denylist, because a deleted
+	// account's token stays validly signed until it expires on its own.
+	active := auth.RequireActive(denylist)
+	authenticate := chain(auth.Middleware(issuer), active)
 
 	authHandler := auth.NewHandler(
-		auth.NewService(pg.Queries, issuer, notifier, cfg.BcryptCost, cfg.PublicAppURL),
+		auth.NewService(pg.Queries, issuer, notifier, cfg.BcryptCost, cfg.PublicAppURL, denylist, deletions),
 		limiter,
 	)
 	coachingHandler := coaching.NewHandler(coaching.NewService(pg.Pool, pg.Queries))
@@ -92,7 +116,7 @@ func run() error {
 	})
 
 	router.Route("/api/v1", func(v1 chi.Router) {
-		v1.Mount("/auth", authHandler.Routes(authenticate))
+		v1.Mount("/auth", authHandler.Routes(auth.Middleware(issuer), active))
 		v1.Group(func(private chi.Router) {
 			private.Use(authenticate)
 			private.Mount("/coaching", coachingHandler.Routes())
