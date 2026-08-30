@@ -46,7 +46,7 @@ func newTestService(t *testing.T) (*Service, *TokenIssuer, *pgxpool.Pool) {
 	}
 
 	issuer := NewTokenIssuer("test-secret")
-	svc := NewService(db.New(pool), issuer, silentNotifier{}, bcrypt.MinCost, "http://app.test", 24*time.Hour, 30*time.Minute)
+	svc := NewService(db.New(pool), issuer, silentNotifier{}, bcrypt.MinCost, "http://app.test", 24*time.Hour, 30*time.Minute, nil, nil)
 	return svc, issuer, pool
 }
 

@@ -15,6 +15,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 
+	"github.com/danielliu30/dating-coach/backend/internal/account"
 	"github.com/danielliu30/dating-coach/backend/internal/analysis"
 	"github.com/danielliu30/dating-coach/backend/internal/auth"
 	"github.com/danielliu30/dating-coach/backend/internal/chat"
@@ -31,6 +32,18 @@ func main() {
 	if err := run(); err != nil {
 		slog.Error("api exited", "error", err)
 		os.Exit(1)
+	}
+}
+
+// chain composes middlewares into one that applies them left to right, so a
+// route group taking a single middleware still gets both authentication and the
+// revocation check.
+func chain(middlewares ...func(http.Handler) http.Handler) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		for i := len(middlewares) - 1; i >= 0; i-- {
+			next = middlewares[i](next)
+		}
+		return next
 	}
 }
 
@@ -63,13 +76,23 @@ func run() error {
 	}
 	defer queue.Close()
 
+	deletions, err := account.OpenPublisher(cfg.RabbitMQURL, cfg.AccountDeletionQueue)
+	if err != nil {
+		return err
+	}
+	defer deletions.Close()
+
 	notifier := notify.New(cfg)
 	issuer := auth.NewTokenIssuer(cfg.JWTSecret)
 	limiter := auth.NewRateLimiter(rdb, cfg.AuthRateLimit, cfg.AuthRateWindow)
-	authenticate := auth.Middleware(issuer)
+	// A revocation only has to outlive the tokens that existed when it was made.
+	denylist := auth.NewDenylist(rdb, cfg.JWTTTL)
+	// Every authenticated route also consults the denylist, because a deleted
+	// account's token stays validly signed until it expires on its own.
+	active := auth.RequireActive(denylist)
 
 	authHandler := auth.NewHandler(
-		auth.NewService(pg.Queries, issuer, notifier, cfg.BcryptCost, cfg.PublicAppURL, cfg.JWTTTL, cfg.VerifyTokenTTL),
+		auth.NewService(pg.Queries, issuer, notifier, cfg.BcryptCost, cfg.PublicAppURL, cfg.JWTTTL, cfg.VerifyTokenTTL, denylist, deletions),
 		limiter,
 	)
 	coachingHandler := coaching.NewHandler(coaching.NewService(pg.Pool, pg.Queries))
@@ -77,7 +100,7 @@ func run() error {
 	chatHandler := chat.NewHandler(chat.NewService(pg.Queries, hub), hub, cfg.CORSOrigins)
 	analysisHandler := analysis.NewHandler(analysis.NewService(pg.Pool, pg.Queries, queue))
 
-	router := newRouter(cfg, authenticate, handlers{
+	router := newRouter(cfg, auth.Middleware(issuer), active, handlers{
 		auth:     authHandler,
 		coaching: coachingHandler,
 		chat:     chatHandler,
@@ -123,9 +146,11 @@ type handlers struct {
 // auth endpoints (reachable by verify-scoped tokens so a fresh sign-up can
 // confirm its address) and a private group every other feature is mounted under,
 // which authenticates the caller and then demands a session-scoped token.
-// authenticate is passed in rather than derived from cfg because the auth
-// endpoints mount the same middleware on their own subset of routes.
-func newRouter(cfg *config.Config, authenticate func(http.Handler) http.Handler, h handlers) http.Handler {
+// verifyToken and active are taken separately rather than pre-chained because
+// the auth endpoints apply the revocation check to only some of their routes.
+func newRouter(cfg *config.Config, verifyToken, active func(http.Handler) http.Handler, h handlers) http.Handler {
+	authenticate := chain(verifyToken, active)
+
 	router := chi.NewRouter()
 	router.Use(middleware.RequestID, middleware.RealIP, middleware.Recoverer, middleware.Logger)
 	router.Use(cors.Handler(cors.Options{
@@ -141,7 +166,7 @@ func newRouter(cfg *config.Config, authenticate func(http.Handler) http.Handler,
 	})
 
 	router.Route("/api/v1", func(v1 chi.Router) {
-		v1.Mount("/auth", h.auth.Routes(authenticate))
+		v1.Mount("/auth", h.auth.Routes(verifyToken, active))
 		v1.Group(func(private chi.Router) {
 			private.Use(authenticate, auth.RequireScope(auth.ScopeSession))
 			private.Mount("/coaching", h.coaching.Routes())

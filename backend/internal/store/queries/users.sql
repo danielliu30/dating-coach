@@ -25,3 +25,6 @@ SET verification_token = $2,
     verification_expires_at = $3,
     updated_at = now()
 WHERE id = $1;
+
+-- name: DeleteUser :execrows
+DELETE FROM users WHERE id = $1;
