@@ -61,7 +61,9 @@ func (h *Handler) signUp(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// signIn handles POST /signin and exchanges credentials for a session.
+// signIn handles POST /signin and exchanges credentials for a session. Correct
+// credentials on an unverified account answer 403, which the clients use to
+// route the user to the verification screen.
 func (h *Handler) signIn(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Email    string `json:"email"`
@@ -75,6 +77,8 @@ func (h *Handler) signIn(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, ErrInvalidCredentials):
 		httpx.Error(w, http.StatusUnauthorized, err.Error())
+	case errors.Is(err, ErrEmailNotVerified):
+		httpx.Error(w, http.StatusForbidden, err.Error())
 	case err != nil:
 		slog.Error("sign in", "error", err)
 		httpx.Error(w, http.StatusInternalServerError, "could not sign in")

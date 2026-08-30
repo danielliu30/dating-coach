@@ -2,6 +2,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import React, { useState } from 'react';
 import { Text, View } from 'react-native';
 
+import { ApiError } from '../api/client';
 import { Button, Field, Screen } from '../components/ui';
 import type { AuthStackParams } from '../navigation/types';
 import { useAuth } from '../state/auth';
@@ -22,6 +23,12 @@ export default function SignInScreen({
     try {
       await signIn(email.trim(), password);
     } catch (err) {
+      // The credentials were right but the address is unconfirmed: the account
+      // has no session to land in, so send the user to finish verification.
+      if (err instanceof ApiError && err.status === 403) {
+        navigation.navigate('Verify', { email: email.trim() });
+        return;
+      }
       setError(err instanceof Error ? err.message : 'could not sign in');
     } finally {
       setBusy(false);

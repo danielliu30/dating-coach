@@ -27,6 +27,7 @@ var (
 	ErrInvalidCredentials = errors.New("invalid email or password")
 	ErrInvalidInput       = errors.New("invalid input")
 	ErrInvalidToken       = errors.New("invalid or expired verification token")
+	ErrEmailNotVerified   = errors.New("email not verified")
 )
 
 const verificationTTL = 48 * time.Hour
@@ -148,6 +149,10 @@ func (s *Service) SignUp(ctx context.Context, in SignUpInput) (Session, error) {
 
 // SignIn verifies the password and issues a session. Unknown emails and wrong
 // passwords both return ErrInvalidCredentials.
+//
+// An account whose address is still unconfirmed gets ErrEmailNotVerified and no
+// token at all. The check runs after the password comparison, so it cannot be
+// used to probe which addresses are registered.
 func (s *Service) SignIn(ctx context.Context, email, password string) (Session, error) {
 	user, err := s.queries.GetUserByEmail(ctx, strings.ToLower(strings.TrimSpace(email)))
 	if err != nil {
@@ -158,6 +163,9 @@ func (s *Service) SignIn(ctx context.Context, email, password string) (Session, 
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
 		return Session{}, ErrInvalidCredentials
+	}
+	if !user.EmailVerified {
+		return Session{}, ErrEmailNotVerified
 	}
 
 	token, expires, err := s.issuer.Issue(user.ID, user.Email, user.Role)
