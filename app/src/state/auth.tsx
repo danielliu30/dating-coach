@@ -118,9 +118,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
         // caller as that account (signed out, expired, or a different account),
         // so any session on hand is dropped rather than paired with the
         // verified profile.
+        const sent = tokenRef.current;
         const session = await api.verifyEmail(verificationToken);
         if (session.token) return persist(session);
-        await clearSession();
+        if (tokenRef.current === sent) await clearSession();
         return session.user;
       },
       resendVerification: async (email) => {
