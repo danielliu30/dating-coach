@@ -19,6 +19,11 @@ func (r *recorder) Revoke(_ context.Context, userID uuid.UUID) error {
 	return nil
 }
 
+func (r *recorder) Restore(_ context.Context, userID uuid.UUID) error {
+	r.steps = append(r.steps, "restore:"+userID.String())
+	return nil
+}
+
 func (r *recorder) Publish(_ context.Context, job Job) error {
 	r.steps = append(r.steps, "publish:"+job.UserID)
 	return r.publishErr
@@ -36,13 +41,16 @@ func TestDeleteRevokesBeforeQueueing(t *testing.T) {
 	}
 }
 
-func TestDeleteKeepsRevocationWhenQueueingFails(t *testing.T) {
+func TestDeleteUndoesRevocationWhenQueueingFails(t *testing.T) {
 	rec := &recorder{publishErr: errors.New("broker down")}
-	err := NewService(rec, rec).Delete(context.Background(), uuid.New())
+	userID := uuid.New()
+	err := NewService(rec, rec).Delete(context.Background(), userID)
 	if err == nil {
 		t.Fatal("expected a publish failure to be reported")
 	}
-	if len(rec.steps) != 2 {
-		t.Fatalf("steps = %v, want the revocation to have happened first", rec.steps)
+	// Without the rollback the account could never retry: its tokens, including
+	// freshly issued ones, would stay denied while its rows still exist.
+	if len(rec.steps) != 3 || rec.steps[2] != "restore:"+userID.String() {
+		t.Fatalf("steps = %v, want the revocation to be undone", rec.steps)
 	}
 }

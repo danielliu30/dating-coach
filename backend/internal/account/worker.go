@@ -23,17 +23,17 @@ func NewWorker(queries *db.Queries) *Worker {
 
 // Handle deletes the account's row, which cascades to its conversations,
 // analyses, chats and coaching sessions. A job for an already deleted account
-// succeeds, so redeliveries are harmless. lastAttempt only affects logging: a
-// returned error is retried once and then dead-lettered by Consume, since the
-// rows must never be silently left behind.
-func (w *Worker) Handle(ctx context.Context, job Job, lastAttempt bool) error {
+// succeeds, so redeliveries are harmless. attempt, the 1-based handler run,
+// only affects logging: a returned error is retried by Consume until MaxAttempts
+// failures dead-letter it, since the rows must never be silently left behind.
+func (w *Worker) Handle(ctx context.Context, job Job, attempt int) error {
 	userID, err := uuid.Parse(job.UserID)
 	if err != nil {
 		return fmt.Errorf("parse user id: %w", err)
 	}
 	deleted, err := w.queries.DeleteUser(ctx, userID)
 	if err != nil {
-		if lastAttempt {
+		if attempt >= MaxAttempts {
 			slog.Error("account deletion will be dead-lettered", "error", err, "user_id", userID)
 		}
 		return fmt.Errorf("delete user %s: %w", userID, err)

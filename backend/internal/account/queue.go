@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
@@ -13,6 +14,19 @@ import (
 // prefetchCount bounds unacked deliveries; deletes are cheap and rare, so one
 // at a time keeps the ordering easy to reason about.
 const prefetchCount = 1
+
+// MaxAttempts is the number of handler failures a deletion is allowed before it
+// is dead-lettered, and RetryDelay is how long a failed job waits in the retry
+// queue before it comes back, so a database outage is not hot-looped.
+const (
+	MaxAttempts = 3
+	RetryDelay  = 30 * time.Second
+)
+
+// attemptHeader carries the 1-based attempt number of a delivery. It is stamped
+// by this package, unlike amqp.Delivery.Redelivered, which the broker also sets
+// when a consumer dies before acknowledging a delivery the handler never ran.
+const attemptHeader = "x-attempts"
 
 // Job is the unit of work handed to the deletion worker: the account whose rows
 // must be removed.
@@ -35,6 +49,10 @@ func DeadLetterExchange(queue string) string { return queue + ".dlx" }
 
 // DeadLetterQueue returns the queue holding deletions that exhausted their retries.
 func DeadLetterQueue(queue string) string { return queue + ".dead" }
+
+// RetryQueue returns the queue that parks failed deletions of queue for
+// RetryDelay before returning them to it.
+func RetryQueue(queue string) string { return queue + ".retry" }
 
 // OpenQueue dials the broker and declares the deletion queue, its dead-letter
 // exchange and the bound dead-letter queue, plus prefetch and publisher
@@ -84,6 +102,16 @@ func (q *Queue) declare(name string) error {
 		"x-dead-letter-exchange": exchange,
 	}); err != nil {
 		return fmt.Errorf("declare queue %q: %w", name, err)
+	}
+	// Messages expiring out of the retry queue are dead-lettered straight back
+	// onto the work queue, which is what makes the delay between attempts.
+	retry := RetryQueue(name)
+	if _, err := q.channel.QueueDeclare(retry, true, false, false, false, amqp.Table{
+		"x-message-ttl":             int32(RetryDelay.Milliseconds()),
+		"x-dead-letter-exchange":    "",
+		"x-dead-letter-routing-key": name,
+	}); err != nil {
+		return fmt.Errorf("declare queue %q: %w", retry, err)
 	}
 	return nil
 }
@@ -204,13 +232,36 @@ func (p *JobPublisher) Close() {
 	}
 }
 
-// JobHandler performs one account deletion. Returning an error asks for another
-// delivery; lastAttempt reports that this delivery was already retried, so a
-// failure now dead-letters the job.
-type JobHandler func(ctx context.Context, job Job, lastAttempt bool) error
+// JobHandler performs one account deletion. Returning an error schedules another
+// attempt; attempt is the 1-based number of this handler run, so a handler can
+// tell that a failure now is the one that dead-letters the job.
+type JobHandler func(ctx context.Context, job Job, attempt int) error
 
-// Consume blocks until ctx is cancelled or the channel drops. A first failure is
-// requeued so a transient database blip does not lose the deletion; a second
+// attemptNumber reports which handler run a delivery represents, from the
+// counter this package stamps when it schedules a retry. A delivery the broker
+// merely redelivered - because a consumer or connection died before acking -
+// keeps its number, so its handler still gets the full MaxAttempts. Missing or
+// unexpected header values count as the first attempt.
+func attemptNumber(headers amqp.Table) int {
+	var attempt int
+	switch raw := headers[attemptHeader].(type) {
+	case int:
+		attempt = raw
+	case int32:
+		attempt = int(raw)
+	case int64:
+		attempt = int(raw)
+	case float64:
+		attempt = int(raw)
+	}
+	if attempt < 1 {
+		return 1
+	}
+	return attempt
+}
+
+// Consume blocks until ctx is cancelled or the channel drops. A failing delivery
+// is parked in the retry queue until it has failed MaxAttempts times; the final
 // failure, and any undecodable delivery, is rejected onto the dead-letter
 // exchange for operators to inspect.
 func (q *Queue) Consume(ctx context.Context, handle JobHandler) error {
@@ -232,9 +283,9 @@ func (q *Queue) Consume(ctx context.Context, handle JobHandler) error {
 				_ = delivery.Nack(false, false)
 				continue
 			}
-			if err := handle(ctx, job, delivery.Redelivered); err != nil {
-				slog.Error("handle account deletion job", "error", err, "user_id", job.UserID, "requeue", !delivery.Redelivered)
-				_ = delivery.Nack(false, !delivery.Redelivered)
+			attempt := attemptNumber(delivery.Headers)
+			if err := handle(ctx, job, attempt); err != nil {
+				q.reschedule(ctx, delivery, job, attempt, err)
 				continue
 			}
 			if err := delivery.Ack(false); err != nil {
@@ -242,6 +293,51 @@ func (q *Queue) Consume(ctx context.Context, handle JobHandler) error {
 			}
 		}
 	}
+}
+
+// reschedule disposes of a delivery whose handler failed: the last allowed
+// attempt is nacked onto the dead-letter exchange, earlier ones are republished
+// to the retry queue with an incremented attempt count and then acked. A retry
+// publish that fails falls back to an immediate requeue, which keeps the
+// deletion at the cost of not advancing its counter.
+func (q *Queue) reschedule(ctx context.Context, delivery amqp.Delivery, job Job, attempt int, cause error) {
+	if attempt >= MaxAttempts {
+		slog.Error("dead-lettering account deletion", "error", cause, "user_id", job.UserID, "attempt", attempt)
+		_ = delivery.Nack(false, false)
+		return
+	}
+	if err := q.publishRetry(ctx, delivery.Body, attempt+1); err != nil {
+		slog.Error("requeueing account deletion after a failed retry publish", "error", err, "user_id", job.UserID)
+		_ = delivery.Nack(false, true)
+		return
+	}
+	slog.Warn("retrying account deletion", "error", cause, "user_id", job.UserID, "next_attempt", attempt+1, "delay", RetryDelay)
+	if err := delivery.Ack(false); err != nil {
+		slog.Error("ack rescheduled account deletion job", "error", err, "user_id", job.UserID)
+	}
+}
+
+// publishRetry puts body on the retry queue stamped with attempt and waits for
+// the broker to confirm it, so the caller only acks the original delivery once
+// the retry is durable.
+func (q *Queue) publishRetry(ctx context.Context, body []byte, attempt int) error {
+	confirm, err := q.channel.PublishWithDeferredConfirmWithContext(ctx, "", RetryQueue(q.name), true, false, amqp.Publishing{
+		ContentType:  "application/json",
+		Body:         body,
+		DeliveryMode: amqp.Persistent,
+		Headers:      amqp.Table{attemptHeader: int32(attempt)},
+	})
+	if err != nil {
+		return fmt.Errorf("publish retry: %w", err)
+	}
+	acked, err := confirm.WaitContext(ctx)
+	if err != nil {
+		return fmt.Errorf("await retry confirm: %w", err)
+	}
+	if !acked {
+		return fmt.Errorf("publish retry: broker nacked attempt %d", attempt)
+	}
+	return nil
 }
 
 // Close shuts the channel and connection down.

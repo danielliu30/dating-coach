@@ -45,6 +45,8 @@ type Config struct {
 }
 
 // Load reads configuration from the environment, falling back to .env files.
+// Unparsable values and non-positive durations are reported as one error listing
+// every offending variable.
 func Load() (*Config, error) {
 	// Missing .env files are not an error: containers get real env vars.
 	_ = godotenv.Load(".env", "../.env", "../../.env")
@@ -105,6 +107,19 @@ func Load() (*Config, error) {
 	}
 	if cfg.JWTSecret == "" {
 		return nil, fmt.Errorf("JWT_SECRET is required")
+	}
+	for _, d := range []struct {
+		key   string
+		value time.Duration
+	}{
+		{"JWT_TTL", cfg.JWTTTL},
+		{"AUTH_RATE_WINDOW", cfg.AuthRateWindow},
+		{"ML_SERVICE_TIMEOUT", cfg.MLServiceTimeout},
+		{"DEAD_LETTER_ALERT_PERIOD", cfg.DeadLetterAlertPeriod},
+	} {
+		if d.value <= 0 {
+			bad = append(bad, fmt.Sprintf("%s=%s must be positive", d.key, d.value))
+		}
 	}
 	if len(bad) > 0 {
 		return nil, fmt.Errorf("invalid configuration: %s", strings.Join(bad, "; "))

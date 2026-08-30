@@ -41,6 +41,15 @@ func (d *Denylist) Revoke(ctx context.Context, userID uuid.UUID) error {
 	return nil
 }
 
+// Restore removes userID from the denylist, undoing a Revoke whose caller could
+// not complete the deletion it was part of. Absent entries are not an error.
+func (d *Denylist) Restore(ctx context.Context, userID uuid.UUID) error {
+	if err := d.rdb.Del(ctx, denylistKey(userID)).Err(); err != nil {
+		return fmt.Errorf("undo denylist for account %s: %w", userID, err)
+	}
+	return nil
+}
+
 // IsRevoked reports whether userID is on the denylist. A Redis failure returns
 // an error rather than false, so callers fail closed.
 func (d *Denylist) IsRevoked(ctx context.Context, userID uuid.UUID) (bool, error) {
