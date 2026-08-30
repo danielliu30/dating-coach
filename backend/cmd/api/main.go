@@ -15,6 +15,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 
+	"github.com/danielliu30/dating-coach/backend/internal/account"
 	"github.com/danielliu30/dating-coach/backend/internal/analysis"
 	"github.com/danielliu30/dating-coach/backend/internal/auth"
 	"github.com/danielliu30/dating-coach/backend/internal/chat"
@@ -63,10 +64,18 @@ func run() error {
 	}
 	defer queue.Close()
 
+	deletions, err := account.OpenPublisher(cfg.RabbitMQURL, cfg.AccountDeletionQueue)
+	if err != nil {
+		return err
+	}
+	defer deletions.Close()
+
 	notifier := notify.New(cfg)
 	issuer := auth.NewTokenIssuer(cfg.JWTSecret, cfg.JWTTTL)
 	limiter := auth.NewRateLimiter(rdb, cfg.AuthRateLimit, cfg.AuthRateWindow)
-	authenticate := auth.Middleware(issuer)
+	// The denylist must outlive the tokens it revokes, hence the JWT lifetime.
+	denylist := auth.NewDenylist(rdb, cfg.JWTTTL)
+	authenticate := auth.Middleware(issuer, denylist)
 
 	authHandler := auth.NewHandler(
 		auth.NewService(pg.Queries, issuer, notifier, cfg.BcryptCost, cfg.PublicAppURL),
@@ -76,6 +85,7 @@ func run() error {
 	hub := chat.NewHub(rdb)
 	chatHandler := chat.NewHandler(chat.NewService(pg.Queries, hub), hub, cfg.CORSOrigins)
 	analysisHandler := analysis.NewHandler(analysis.NewService(pg.Pool, pg.Queries, queue))
+	accountHandler := account.NewHandler(account.NewService(denylist, deletions))
 
 	router := chi.NewRouter()
 	router.Use(middleware.RequestID, middleware.RealIP, middleware.Recoverer, middleware.Logger)
@@ -98,6 +108,7 @@ func run() error {
 			private.Mount("/coaching", coachingHandler.Routes())
 			private.Mount("/chat", chatHandler.Routes())
 			private.Mount("/analysis", analysisHandler.Routes())
+			private.Mount("/account", accountHandler.Routes())
 			private.Route("/coach", func(coach chi.Router) {
 				coach.Use(auth.RequireCoach)
 				coach.Mount("/", coachingHandler.CoachRoutes())

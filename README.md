@@ -20,15 +20,17 @@ Expo app (iOS / Android / web)
    │  REST  /api/v1/...            WebSocket  /api/v1/chat/threads/{id}/ws
    ▼
 Go API ──── PostgreSQL (users, coaches, sessions, chat, conversations, analysis_results)
-   ├─────── Redis        (auth rate limits, chat pub/sub, presence, typing)
+   ├─────── Redis        (auth rate limits, chat pub/sub, presence, typing, token denylist)
    └─────── RabbitMQ ──► Go worker ──HTTP──► ml-analyzer /analyze
                               │
-                              └─ writes analysis_results + "analysis ready" notification
+                              ├─ writes analysis_results + "analysis ready" notification
+                              └─ deletes accounts queued by DELETE /api/v1/account
 ```
 
 - Analysis is asynchronous: `POST /api/v1/analysis/conversations` stores the transcript, creates a `pending` result and publishes a job. The worker calls the ML service, stores per-segment scores as JSONB and notifies the user. The app polls the result endpoint.
 - Live chat messages are persisted in PostgreSQL and fanned out over Redis pub/sub, so any API replica can serve a socket.
 - The ML service is fully decoupled — HTTP only, no shared database.
+- Account deletion is split: `DELETE /api/v1/account` writes the account to a Redis denylist (TTL `JWT_TTL`) before responding and queues the cascading row delete on `ACCOUNT_DELETION_QUEUE`. The auth middleware checks the denylist on every request, so outstanding tokens are rejected with 401 as soon as the call returns, whenever the worker gets to the rows. Deletions that fail twice land on `account.deletion.dead` via the queue's dead-letter exchange; the worker logs that queue's depth every `DEAD_LETTER_ALERT_PERIOD` and **alerting on it is required** — a stuck delete is otherwise invisible once the denylist entry expires and the rows are still there.
 
 ## Quick start (Docker Compose)
 
@@ -68,7 +70,7 @@ docker compose logs api | grep -i verification
 cd backend
 migrate -path migrations -database "$DATABASE_URL" up   # golang-migrate
 go run ./cmd/api        # HTTP + WebSocket API on :8080
-go run ./cmd/worker     # analysis worker
+go run ./cmd/worker     # analysis + account deletion consumers
 sqlc generate           # after editing internal/store/queries/*.sql
 go build ./... && go vet ./...
 ```
@@ -100,6 +102,7 @@ npx expo export --platform web    # production web bundle
 | Coaching | `GET /coaching/coaches` · `/coaches/{id}` · `/coaches/{id}/availability` · `/coaches/{id}/slots` · `POST /coaching/sessions` · `.../cancel` · `.../reschedule`           |
 | Coach    | `PUT /coach/profile` · `PUT /coach/availability` · `GET /coach/sessions` · `POST /coach/sessions/{id}/status` · `.../notes` · `GET /chat/coach/threads`                  |
 | Chat     | `POST /chat/threads` · `GET /chat/threads` · `GET/POST /chat/threads/{id}/messages` · `POST /chat/threads/{id}/close` · `GET /chat/threads/{id}/ws`                      |
+| Account  | `DELETE /api/v1/account` (revokes the caller's tokens immediately, queues the row delete)                                                                                |
 | Analysis | `POST /analysis/conversations` · `GET /analysis/conversations` · `GET /analysis/conversations/{id}/result` · `POST /analysis/conversations/{id}/label` · `GET /analysis/results/{id}` |
 
 All endpoints except the auth ones require `Authorization: Bearer <jwt>`; the WebSocket accepts `?token=<jwt>`.

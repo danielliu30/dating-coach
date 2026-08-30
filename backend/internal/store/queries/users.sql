@@ -19,6 +19,9 @@ WHERE verification_token = $1
   AND verification_expires_at > now()
 RETURNING *;
 
+-- name: DeleteUser :execrows
+DELETE FROM users WHERE id = $1;
+
 -- name: SetVerificationToken :exec
 UPDATE users
 SET verification_token = $2,

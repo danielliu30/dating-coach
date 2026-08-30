@@ -13,6 +13,8 @@ x-backend-env: &backend-env
   ML_SERVICE_URL: http://ml-analyzer:8000
   ML_SERVICE_TIMEOUT: ${ML_SERVICE_TIMEOUT:-60s}
   ANALYSIS_QUEUE: ${ANALYSIS_QUEUE:-conversation.analysis}
+  ACCOUNT_DELETION_QUEUE: ${ACCOUNT_DELETION_QUEUE:-account.deletion}
+  DEAD_LETTER_ALERT_PERIOD: ${DEAD_LETTER_ALERT_PERIOD:-1m}
   PUBLIC_APP_URL: ${PUBLIC_APP_URL:-http://localhost:8081}
   CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8081,http://localhost:19006}
   SMTP_HOST: ${SMTP_HOST:-}

@@ -30,7 +30,9 @@ type Config struct {
 	MLServiceURL     string
 	MLServiceTimeout time.Duration
 
-	AnalysisQueue string
+	AnalysisQueue         string
+	AccountDeletionQueue  string
+	DeadLetterAlertPeriod time.Duration
 
 	SMTPHost     string
 	SMTPPort     int
@@ -74,26 +76,28 @@ func Load() (*Config, error) {
 	}
 
 	cfg := &Config{
-		Env:              env("APP_ENV", "development"),
-		HTTPAddr:         env("HTTP_ADDR", ":8080"),
-		DatabaseURL:      env("DATABASE_URL", ""),
-		RedisURL:         env("REDIS_URL", "redis://localhost:6379/0"),
-		RabbitMQURL:      env("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/"),
-		JWTSecret:        env("JWT_SECRET", ""),
-		JWTTTL:           envDuration("JWT_TTL", 24*time.Hour),
-		BcryptCost:       envInt("BCRYPT_COST", 12),
-		AuthRateLimit:    envInt("AUTH_RATE_LIMIT", 20),
-		AuthRateWindow:   envDuration("AUTH_RATE_WINDOW", time.Minute),
-		MLServiceURL:     env("ML_SERVICE_URL", "http://localhost:8000"),
-		MLServiceTimeout: envDuration("ML_SERVICE_TIMEOUT", 60*time.Second),
-		AnalysisQueue:    env("ANALYSIS_QUEUE", "conversation.analysis"),
-		SMTPHost:         env("SMTP_HOST", ""),
-		SMTPPort:         envInt("SMTP_PORT", 587),
-		SMTPUsername:     env("SMTP_USERNAME", ""),
-		SMTPPassword:     env("SMTP_PASSWORD", ""),
-		MailFrom:         env("MAIL_FROM", "no-reply@datingcoach.local"),
-		PublicAppURL:     env("PUBLIC_APP_URL", "http://localhost:19006"),
-		CORSOrigins:      envList("CORS_ORIGINS", []string{"http://localhost:19006", "http://localhost:8081"}),
+		Env:                   env("APP_ENV", "development"),
+		HTTPAddr:              env("HTTP_ADDR", ":8080"),
+		DatabaseURL:           env("DATABASE_URL", ""),
+		RedisURL:              env("REDIS_URL", "redis://localhost:6379/0"),
+		RabbitMQURL:           env("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/"),
+		JWTSecret:             env("JWT_SECRET", ""),
+		JWTTTL:                envDuration("JWT_TTL", 24*time.Hour),
+		BcryptCost:            envInt("BCRYPT_COST", 12),
+		AuthRateLimit:         envInt("AUTH_RATE_LIMIT", 20),
+		AuthRateWindow:        envDuration("AUTH_RATE_WINDOW", time.Minute),
+		MLServiceURL:          env("ML_SERVICE_URL", "http://localhost:8000"),
+		MLServiceTimeout:      envDuration("ML_SERVICE_TIMEOUT", 60*time.Second),
+		AnalysisQueue:         env("ANALYSIS_QUEUE", "conversation.analysis"),
+		AccountDeletionQueue:  env("ACCOUNT_DELETION_QUEUE", "account.deletion"),
+		DeadLetterAlertPeriod: envDuration("DEAD_LETTER_ALERT_PERIOD", time.Minute),
+		SMTPHost:              env("SMTP_HOST", ""),
+		SMTPPort:              envInt("SMTP_PORT", 587),
+		SMTPUsername:          env("SMTP_USERNAME", ""),
+		SMTPPassword:          env("SMTP_PASSWORD", ""),
+		MailFrom:              env("MAIL_FROM", "no-reply@datingcoach.local"),
+		PublicAppURL:          env("PUBLIC_APP_URL", "http://localhost:19006"),
+		CORSOrigins:           envList("CORS_ORIGINS", []string{"http://localhost:19006", "http://localhost:8081"}),
 	}
 
 	if cfg.DatabaseURL == "" {

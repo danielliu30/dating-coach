@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -25,8 +26,11 @@ type Principal struct {
 // IsCoach reports whether the caller may use the coach-only endpoints.
 func (p Principal) IsCoach() bool { return p.Role == RoleCoach || p.Role == RoleAdmin }
 
-// Middleware rejects requests without a valid bearer token.
-func Middleware(issuer *TokenIssuer) func(http.Handler) http.Handler {
+// Middleware rejects requests without a valid bearer token, and tokens whose
+// account is on revocations. Because the denylist is consulted on every
+// request, revocation takes effect without waiting for the token to expire; an
+// unreachable denylist fails closed with 503 rather than honouring the token.
+func Middleware(issuer *TokenIssuer, revocations Revocations) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			raw := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer"))
@@ -45,6 +49,16 @@ func Middleware(issuer *TokenIssuer) func(http.Handler) http.Handler {
 			userID, err := claims.UserID()
 			if err != nil {
 				httpx.Error(w, http.StatusUnauthorized, "invalid token subject")
+				return
+			}
+			revoked, err := revocations.IsRevoked(r.Context(), userID)
+			if err != nil {
+				slog.Error("token denylist unavailable", "error", err, "user_id", userID)
+				httpx.Error(w, http.StatusServiceUnavailable, "could not verify token")
+				return
+			}
+			if revoked {
+				httpx.Error(w, http.StatusUnauthorized, "token revoked")
 				return
 			}
 			principal := Principal{UserID: userID, Email: claims.Email, Role: claims.Role}
