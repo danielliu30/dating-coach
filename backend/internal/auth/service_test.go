@@ -50,9 +50,10 @@ func newTestService(t *testing.T) (*Service, *TokenIssuer, *pgxpool.Pool) {
 	return svc, issuer, pool
 }
 
-// TestSignUpMintsVerifyScopedToken covers the sign-up half of the scope split
-// end to end, through the real CreateUser query: the account exists but its
-// token is verify-scoped and short-lived, and only signing in upgrades it.
+// TestSignUpMintsVerifyScopedToken covers the scope split end to end, through
+// the real queries: the new account exists but its token is verify-scoped and
+// short-lived, and only signing in — which needs the address confirmed first —
+// upgrades it to a session-scoped one.
 func TestSignUpMintsVerifyScopedToken(t *testing.T) {
 	svc, issuer, pool := newTestService(t)
 	ctx := context.Background()
@@ -76,6 +77,14 @@ func TestSignUpMintsVerifyScopedToken(t *testing.T) {
 		t.Fatal("a new account must not start out verified")
 	}
 	assertTokenScope(t, issuer, signUp.Token, ScopeVerify, 30*time.Minute)
+
+	var verificationToken string
+	if err := pool.QueryRow(ctx, "SELECT verification_token FROM users WHERE email = $1", email).Scan(&verificationToken); err != nil {
+		t.Fatalf("read verification token: %v", err)
+	}
+	if _, err := svc.VerifyEmail(ctx, verificationToken); err != nil {
+		t.Fatalf("verify email: %v", err)
+	}
 
 	signIn, err := svc.SignIn(ctx, email, password)
 	if err != nil {
