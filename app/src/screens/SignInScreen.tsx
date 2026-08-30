@@ -20,13 +20,12 @@ export default function SignInScreen({
   const submit = async () => {
     setBusy(true);
     setError(null);
+    const address = email.trim();
     try {
-      await signIn(email.trim(), password);
+      await signIn(address, password);
     } catch (err) {
-      // The credentials were right but the address is unconfirmed: the account
-      // has no session to land in, so send the user to finish verification.
       if (err instanceof ApiError && err.status === 403) {
-        navigation.navigate('Verify', { email: email.trim() });
+        navigation.navigate('Verify', { email: address });
         return;
       }
       setError(err instanceof Error ? err.message : 'could not sign in');
