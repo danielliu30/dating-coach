@@ -80,6 +80,8 @@ func (h *Handler) signIn(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, ErrInvalidCredentials):
 		httpx.Error(w, http.StatusUnauthorized, err.Error())
+	case errors.Is(err, ErrEmailNotVerified):
+		httpx.Error(w, http.StatusForbidden, err.Error())
 	case err != nil:
 		slog.Error("sign in", "error", err)
 		httpx.Error(w, http.StatusInternalServerError, "could not sign in")
