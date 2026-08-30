@@ -84,6 +84,16 @@ uvicorn app.main:app --reload --port 8000
 
 Without `LLM_API_KEY` the service falls back to a dependency-free heuristic scorer, so the whole stack works offline. See <ml-analyzer/README.md> for the training path, the labelled-data schema and how to switch `/analyze` to a fine-tuned model behind the same contract.
 
+**Backend checks:**
+
+```bash
+cd backend
+go test ./...                     # unit tests only
+TEST_DATABASE_URL=postgres://datingcoach:datingcoach@localhost:5432/datingcoach?sslmode=disable go test ./...
+```
+
+The tests that exercise the real queries (such as the sign-up token scope) skip themselves unless `TEST_DATABASE_URL` points at a migrated database; they clean up the rows they create.
+
 **Expo app checks:**
 
 ```bash

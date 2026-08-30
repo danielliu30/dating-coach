@@ -77,32 +77,11 @@ func run() error {
 	chatHandler := chat.NewHandler(chat.NewService(pg.Queries, hub), hub, cfg.CORSOrigins)
 	analysisHandler := analysis.NewHandler(analysis.NewService(pg.Pool, pg.Queries, queue))
 
-	router := chi.NewRouter()
-	router.Use(middleware.RequestID, middleware.RealIP, middleware.Recoverer, middleware.Logger)
-	router.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   cfg.CORSOrigins,
-		AllowedMethods:   []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodOptions},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type"},
-		AllowCredentials: true,
-		MaxAge:           300,
-	}))
-
-	router.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		httpx.JSON(w, http.StatusOK, map[string]string{"status": "ok", "env": cfg.Env})
-	})
-
-	router.Route("/api/v1", func(v1 chi.Router) {
-		v1.Mount("/auth", authHandler.Routes(authenticate))
-		v1.Group(func(private chi.Router) {
-			private.Use(authenticate, auth.RequireScope(auth.ScopeSession))
-			private.Mount("/coaching", coachingHandler.Routes())
-			private.Mount("/chat", chatHandler.Routes())
-			private.Mount("/analysis", analysisHandler.Routes())
-			private.Route("/coach", func(coach chi.Router) {
-				coach.Use(auth.RequireCoach)
-				coach.Mount("/", coachingHandler.CoachRoutes())
-			})
-		})
+	router := newRouter(cfg, authenticate, handlers{
+		auth:     authHandler,
+		coaching: coachingHandler,
+		chat:     chatHandler,
+		analysis: analysisHandler,
 	})
 
 	server := &http.Server{
@@ -130,4 +109,50 @@ func run() error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	return server.Shutdown(shutdownCtx)
+}
+
+// handlers groups the feature handlers newRouter mounts.
+type handlers struct {
+	auth     *auth.Handler
+	coaching *coaching.Handler
+	chat     *chat.Handler
+	analysis *analysis.Handler
+}
+
+// newRouter builds the API routing tree: an unauthenticated health check, the
+// auth endpoints (reachable by verify-scoped tokens so a fresh sign-up can
+// confirm its address) and a private group every other feature is mounted under,
+// which authenticates the caller and then demands a session-scoped token.
+// authenticate is passed in rather than derived from cfg because the auth
+// endpoints mount the same middleware on their own subset of routes.
+func newRouter(cfg *config.Config, authenticate func(http.Handler) http.Handler, h handlers) http.Handler {
+	router := chi.NewRouter()
+	router.Use(middleware.RequestID, middleware.RealIP, middleware.Recoverer, middleware.Logger)
+	router.Use(cors.Handler(cors.Options{
+		AllowedOrigins:   cfg.CORSOrigins,
+		AllowedMethods:   []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodOptions},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type"},
+		AllowCredentials: true,
+		MaxAge:           300,
+	}))
+
+	router.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		httpx.JSON(w, http.StatusOK, map[string]string{"status": "ok", "env": cfg.Env})
+	})
+
+	router.Route("/api/v1", func(v1 chi.Router) {
+		v1.Mount("/auth", h.auth.Routes(authenticate))
+		v1.Group(func(private chi.Router) {
+			private.Use(authenticate, auth.RequireScope(auth.ScopeSession))
+			private.Mount("/coaching", h.coaching.Routes())
+			private.Mount("/chat", h.chat.Routes())
+			private.Mount("/analysis", h.analysis.Routes())
+			private.Route("/coach", func(coach chi.Router) {
+				coach.Use(auth.RequireCoach)
+				coach.Mount("/", h.coaching.CoachRoutes())
+			})
+		})
+	})
+
+	return router
 }
