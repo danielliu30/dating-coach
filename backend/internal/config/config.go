@@ -21,6 +21,7 @@ type Config struct {
 
 	JWTSecret      string
 	JWTTTL         time.Duration
+	VerifyTokenTTL time.Duration
 	BcryptCost     int
 	AuthRateLimit  int
 	AuthRateWindow time.Duration
@@ -79,6 +80,7 @@ func Load() (*Config, error) {
 		RabbitMQURL:      env("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/"),
 		JWTSecret:        env("JWT_SECRET", ""),
 		JWTTTL:           envDuration("JWT_TTL", 24*time.Hour),
+		VerifyTokenTTL:   envDuration("VERIFY_TOKEN_TTL", 30*time.Minute),
 		BcryptCost:       envInt("BCRYPT_COST", 12),
 		AuthRateLimit:    envInt("AUTH_RATE_LIMIT", 20),
 		AuthRateWindow:   envDuration("AUTH_RATE_WINDOW", time.Minute),

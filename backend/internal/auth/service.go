@@ -31,15 +31,25 @@ var (
 const verificationTTL = 48 * time.Hour
 
 type Service struct {
-	queries    *db.Queries
-	issuer     *TokenIssuer
-	notifier   notify.Notifier
-	bcryptCost int
-	appURL     string
+	queries        *db.Queries
+	issuer         *TokenIssuer
+	notifier       notify.Notifier
+	bcryptCost     int
+	appURL         string
+	sessionTTL     time.Duration
+	verifyTokenTTL time.Duration
 }
 
-func NewService(queries *db.Queries, issuer *TokenIssuer, notifier notify.Notifier, bcryptCost int, appURL string) *Service {
-	return &Service{queries: queries, issuer: issuer, notifier: notifier, bcryptCost: bcryptCost, appURL: appURL}
+func NewService(queries *db.Queries, issuer *TokenIssuer, notifier notify.Notifier, bcryptCost int, appURL string, sessionTTL, verifyTokenTTL time.Duration) *Service {
+	return &Service{
+		queries:        queries,
+		issuer:         issuer,
+		notifier:       notifier,
+		bcryptCost:     bcryptCost,
+		appURL:         appURL,
+		sessionTTL:     sessionTTL,
+		verifyTokenTTL: verifyTokenTTL,
+	}
 }
 
 type SignUpInput struct {
@@ -124,7 +134,9 @@ func (s *Service) SignUp(ctx context.Context, in SignUpInput) (Session, error) {
 
 	s.sendVerificationEmail(ctx, user.Email, token)
 
-	jwtToken, expiresAt, err := s.issuer.Issue(user.ID, user.Email, user.Role)
+	// Sign-up mints a short-lived verify-scoped token: it can drive the verify
+	// screen and reach /auth, but not the rest of the API.
+	jwtToken, expiresAt, err := s.issuer.Issue(user.ID, user.Email, user.Role, ScopeVerify, s.verifyTokenTTL)
 	if err != nil {
 		return Session{}, err
 	}
@@ -147,7 +159,7 @@ func (s *Service) SignIn(ctx context.Context, email, password string) (Session, 
 		return Session{}, ErrInvalidCredentials
 	}
 
-	token, expires, err := s.issuer.Issue(user.ID, user.Email, user.Role)
+	token, expires, err := s.issuer.Issue(user.ID, user.Email, user.Role, ScopeSession, s.sessionTTL)
 	if err != nil {
 		return Session{}, err
 	}

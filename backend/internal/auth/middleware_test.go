@@ -87,3 +87,74 @@ func TestRequireVerified(t *testing.T) {
 		})
 	}
 }
+
+// scopedRequest drives one request through RequireScope(want), with a principal
+// carrying tokenScope in context unless withPrincipal is false, and returns the
+// recorded response. It fails the test when the wrapped handler runs without
+// answering 204, i.e. when rejecting the request did not stop the chain.
+func scopedRequest(t *testing.T, want, tokenScope string, withPrincipal bool) *httptest.ResponseRecorder {
+	t.Helper()
+
+	reached := false
+	handler := RequireScope(want)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		reached = true
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/coaching/coaches", nil)
+	if withPrincipal {
+		req = req.WithContext(WithPrincipal(req.Context(), Principal{UserID: uuid.New(), Role: RoleUser, Scope: tokenScope}))
+	}
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if reached != (rec.Code == http.StatusNoContent) {
+		t.Fatalf("handler reached = %v with status %d", reached, rec.Code)
+	}
+	return rec
+}
+
+func TestRequireScope(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name          string
+		withPrincipal bool
+		tokenScope    string
+		want          int
+	}{
+		{
+			name:          "matching scope passes",
+			withPrincipal: true,
+			tokenScope:    ScopeSession,
+			want:          http.StatusNoContent,
+		},
+		{
+			name:          "verify scope is forbidden on session routes",
+			withPrincipal: true,
+			tokenScope:    ScopeVerify,
+			want:          http.StatusForbidden,
+		},
+		{
+			name:          "empty scope is forbidden",
+			withPrincipal: true,
+			tokenScope:    "",
+			want:          http.StatusForbidden,
+		},
+		{
+			name:          "missing principal is unauthorized",
+			withPrincipal: false,
+			tokenScope:    ScopeSession,
+			want:          http.StatusUnauthorized,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := scopedRequest(t, ScopeSession, tc.tokenScope, tc.withPrincipal).Code; got != tc.want {
+				t.Fatalf("status = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}

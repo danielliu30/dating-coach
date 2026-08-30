@@ -23,6 +23,7 @@ type Principal struct {
 	UserID uuid.UUID
 	Email  string
 	Role   string
+	Scope  string
 }
 
 func (p Principal) IsCoach() bool { return p.Role == RoleCoach || p.Role == RoleAdmin }
@@ -49,7 +50,7 @@ func Middleware(issuer *TokenIssuer) func(http.Handler) http.Handler {
 				httpx.Error(w, http.StatusUnauthorized, "invalid token subject")
 				return
 			}
-			principal := Principal{UserID: userID, Email: claims.Email, Role: claims.Role}
+			principal := Principal{UserID: userID, Email: claims.Email, Role: claims.Role, Scope: claims.Scope}
 			next.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), principal)))
 		})
 	}
@@ -102,6 +103,27 @@ func RequireVerified(lookup VerifiedLookup) func(http.Handler) http.Handler {
 				return
 			case !verified:
 				httpx.Error(w, http.StatusForbidden, "email not verified")
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// RequireScope rejects callers whose token was not issued for the given scope.
+// It must be mounted after Middleware, which supplies the Principal it reads.
+// A verify-scoped token (issued at sign-up) is thereby kept off the private API
+// even while it is still cryptographically valid.
+func RequireScope(scope string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			principal, ok := PrincipalFrom(r.Context())
+			if !ok {
+				httpx.Error(w, http.StatusUnauthorized, "missing bearer token")
+				return
+			}
+			if principal.Scope != scope {
+				httpx.Error(w, http.StatusForbidden, "token scope not permitted")
 				return
 			}
 			next.ServeHTTP(w, r)

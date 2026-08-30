@@ -14,10 +14,19 @@ const (
 	RoleAdmin = "admin"
 )
 
+const (
+	// ScopeVerify tokens are issued at sign-up and may only reach the /auth
+	// endpoints; ScopeSession tokens are issued at sign-in and reach the rest of
+	// the API. The scope is frozen for the token's lifetime.
+	ScopeVerify  = "verify"
+	ScopeSession = "session"
+)
+
 type Claims struct {
 	jwt.RegisteredClaims
 	Role  string `json:"role"`
 	Email string `json:"email"`
+	Scope string `json:"scope"`
 }
 
 func (c Claims) UserID() (uuid.UUID, error) {
@@ -26,15 +35,17 @@ func (c Claims) UserID() (uuid.UUID, error) {
 
 type TokenIssuer struct {
 	secret []byte
-	ttl    time.Duration
 }
 
-func NewTokenIssuer(secret string, ttl time.Duration) *TokenIssuer {
-	return &TokenIssuer{secret: []byte(secret), ttl: ttl}
+func NewTokenIssuer(secret string) *TokenIssuer {
+	return &TokenIssuer{secret: []byte(secret)}
 }
 
-func (t *TokenIssuer) Issue(userID uuid.UUID, email, role string) (string, time.Time, error) {
-	expires := time.Now().Add(t.ttl)
+// Issue signs a token whose lifetime and scope are chosen per call, so sign-up
+// and sign-in can mint short-lived verify tokens and full session tokens from
+// the same issuer.
+func (t *TokenIssuer) Issue(userID uuid.UUID, email, role, scope string, ttl time.Duration) (string, time.Time, error) {
+	expires := time.Now().Add(ttl)
 	claims := Claims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			Subject:   userID.String(),
@@ -44,6 +55,7 @@ func (t *TokenIssuer) Issue(userID uuid.UUID, email, role string) (string, time.
 		},
 		Role:  role,
 		Email: email,
+		Scope: scope,
 	}
 	signed, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(t.secret)
 	if err != nil {
