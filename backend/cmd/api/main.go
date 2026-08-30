@@ -89,7 +89,8 @@ func run() error {
 	denylist := auth.NewDenylist(rdb, cfg.JWTTTL)
 	// Every authenticated route also consults the denylist, because a deleted
 	// account's token stays validly signed until it expires on its own.
-	authenticate := chain(auth.Middleware(issuer), auth.RequireActive(denylist))
+	active := auth.RequireActive(denylist)
+	authenticate := chain(auth.Middleware(issuer), active)
 
 	authHandler := auth.NewHandler(
 		auth.NewService(pg.Queries, issuer, notifier, cfg.BcryptCost, cfg.PublicAppURL, denylist, deletions),
@@ -115,7 +116,7 @@ func run() error {
 	})
 
 	router.Route("/api/v1", func(v1 chi.Router) {
-		v1.Mount("/auth", authHandler.Routes(authenticate))
+		v1.Mount("/auth", authHandler.Routes(auth.Middleware(issuer), active))
 		v1.Group(func(private chi.Router) {
 			private.Use(authenticate)
 			private.Mount("/coaching", coachingHandler.Routes())

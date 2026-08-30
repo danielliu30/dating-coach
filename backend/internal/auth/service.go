@@ -84,7 +84,9 @@ func NewService(
 // fails, the caller is locked out of an account whose data still exists, which
 // an operator can undo, whereas deleting the rows of a caller whose tokens
 // still work cannot be undone. An error therefore means the account may
-// already be unusable and the request should be retried.
+// already be unusable, and the caller should repeat the request: it is
+// idempotent, and DELETE /me stays reachable with a revoked token so the
+// deletion can still be queued once the broker recovers.
 func (s *Service) DeleteAccount(ctx context.Context, userID uuid.UUID) error {
 	if err := s.denylist.Revoke(ctx, userID); err != nil {
 		return fmt.Errorf("revoke sessions: %w", err)

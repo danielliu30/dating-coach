@@ -16,6 +16,16 @@ import (
 // most tables, so they are processed one at a time.
 const prefetchCount = 1
 
+// maxAttempts is how many times a deletion is handed to the handler before it
+// is dead-lettered.
+const maxAttempts = 2
+
+// attemptsHeader carries how many times a deletion has already been handled.
+// RabbitMQ's Redelivered flag cannot serve as the counter: it is also set when
+// a delivery is recovered after a worker or channel dies, which is not a failed
+// attempt.
+const attemptsHeader = "x-attempts"
+
 // Job is one queued account deletion.
 type Job struct {
 	UserID string `json:"user_id"`
@@ -76,6 +86,12 @@ func OpenQueue(url, name string) (*Queue, error) {
 // Publish sends a deletion and waits for the broker to confirm it, so callers
 // only see success once the job is durably queued.
 func (q *Queue) Publish(ctx context.Context, job Job) error {
+	return q.publish(ctx, job, 0)
+}
+
+// publish queues job with its attempt count, which Consume uses to decide
+// between another attempt and the dead-letter queue.
+func (q *Queue) publish(ctx context.Context, job Job, attempts int64) error {
 	body, err := json.Marshal(job)
 	if err != nil {
 		return fmt.Errorf("encode job: %w", err)
@@ -84,6 +100,7 @@ func (q *Queue) Publish(ctx context.Context, job Job) error {
 		ContentType:  "application/json",
 		Body:         body,
 		DeliveryMode: amqp.Persistent,
+		Headers:      amqp.Table{attemptsHeader: attempts},
 	})
 	if err != nil {
 		return fmt.Errorf("publish job: %w", err)
@@ -176,15 +193,33 @@ func (p *JobPublisher) Close() {
 	}
 }
 
-// JobHandler applies one deletion. lastAttempt reports that the delivery was
-// already redelivered once, so a failure now sends the job to the dead-letter
-// queue instead of being retried again.
+// JobHandler applies one deletion. lastAttempt reports that no further attempt
+// follows, so a failure now sends the job to the dead-letter queue.
 type JobHandler func(ctx context.Context, job Job, lastAttempt bool) error
 
-// Consume blocks until ctx is cancelled or the channel drops. A first failure
-// is requeued so a database blip does not strand a revoked account's rows; a
-// second failure, and any job that will not decode, is rejected without requeue
-// and therefore dead-lettered rather than looping forever.
+// attemptsOf reads the attempt count a previous pass stamped on the delivery.
+// AMQP field types are broker- and client-dependent, so the integer widths are
+// all accepted; anything else counts as a first attempt.
+func attemptsOf(headers amqp.Table) int64 {
+	switch v := headers[attemptsHeader].(type) {
+	case int64:
+		return v
+	case int32:
+		return int64(v)
+	case int16:
+		return int64(v)
+	case int:
+		return int64(v)
+	default:
+		return 0
+	}
+}
+
+// Consume blocks until ctx is cancelled or the channel drops. A failed deletion
+// is republished with an incremented attempt count so a database blip does not
+// strand a revoked account's rows; once maxAttempts is reached, and for any job
+// that will not decode, the delivery is rejected without requeue and therefore
+// dead-lettered rather than looping forever.
 func (q *Queue) Consume(ctx context.Context, handle JobHandler) error {
 	deliveries, err := q.channel.Consume(q.name, "", false, false, false, false, nil)
 	if err != nil {
@@ -204,9 +239,26 @@ func (q *Queue) Consume(ctx context.Context, handle JobHandler) error {
 				_ = delivery.Nack(false, false)
 				continue
 			}
-			if err := handle(ctx, job, delivery.Redelivered); err != nil {
-				slog.Error("handle account deletion", "error", err, "user_id", job.UserID, "requeue", !delivery.Redelivered)
-				_ = delivery.Nack(false, !delivery.Redelivered)
+			attempts := attemptsOf(delivery.Headers) + 1
+			lastAttempt := attempts >= maxAttempts
+			if err := handle(ctx, job, lastAttempt); err != nil {
+				slog.Error("handle account deletion", "error", err, "user_id", job.UserID, "attempts", attempts)
+				if lastAttempt {
+					_ = delivery.Nack(false, false)
+					continue
+				}
+				// Republish rather than requeue: a requeued delivery keeps the
+				// original headers, so the count would never advance. A failure
+				// here falls back to a plain requeue, which repeats an attempt
+				// but never drops the deletion.
+				if err := q.publish(ctx, job, attempts); err != nil {
+					slog.Error("requeue account deletion", "error", err, "user_id", job.UserID)
+					_ = delivery.Nack(false, true)
+					continue
+				}
+				if err := delivery.Ack(false); err != nil {
+					slog.Error("ack retried account deletion", "error", err, "user_id", job.UserID)
+				}
 				continue
 			}
 			if err := delivery.Ack(false); err != nil {
