@@ -132,7 +132,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
         setToken(null);
         setScope(null);
         setUser(null);
-        await AsyncStorage.removeItem(STORAGE_KEY);
+        // Best effort, as in onSessionRejected: a storage failure must not make
+        // signing out look like it failed.
+        await AsyncStorage.removeItem(STORAGE_KEY).catch(() => undefined);
       },
     }),
     [persist, persistUser, ready, scope, token, user],
