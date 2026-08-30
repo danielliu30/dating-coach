@@ -127,7 +127,8 @@ func supervise(ctx context.Context, name string, task func(context.Context) erro
 // watchDeadLetters logs the deletion dead-letter queue depth every period, at
 // warn level while it is non-empty. Alerting on that depth is what surfaces
 // deletes that never ran, which otherwise become invisible once the deleted
-// account's denylist entry expires and its rows are still present.
+// account's denylist entry expires and its rows are still present. period must
+// be positive, which config.Load enforces.
 func watchDeadLetters(ctx context.Context, queue *account.Queue, name string, period time.Duration) error {
 	ticker := time.NewTicker(period)
 	defer ticker.Stop()
