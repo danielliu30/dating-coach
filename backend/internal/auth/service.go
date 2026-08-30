@@ -40,11 +40,23 @@ type Service struct {
 	notifier   notify.Notifier
 	bcryptCost int
 	appURL     string
+	sessionTTL time.Duration
+	verifyTTL  time.Duration
 }
 
-// NewService wires the service dependencies; called once from cmd/api.
-func NewService(queries *db.Queries, issuer *TokenIssuer, notifier notify.Notifier, bcryptCost int, appURL string) *Service {
-	return &Service{queries: queries, issuer: issuer, notifier: notifier, bcryptCost: bcryptCost, appURL: appURL}
+// NewService wires the service dependencies; called once from cmd/api. sessionTTL
+// is the lifetime of the session-scoped tokens minted by SignIn and verifyTTL the
+// shorter lifetime of the verify-scoped tokens minted by SignUp.
+func NewService(queries *db.Queries, issuer *TokenIssuer, notifier notify.Notifier, bcryptCost int, appURL string, sessionTTL, verifyTTL time.Duration) *Service {
+	return &Service{
+		queries:    queries,
+		issuer:     issuer,
+		notifier:   notifier,
+		bcryptCost: bcryptCost,
+		appURL:     appURL,
+		sessionTTL: sessionTTL,
+		verifyTTL:  verifyTTL,
+	}
 }
 
 // SignUpInput is the decoded POST /auth/signup body.
@@ -56,10 +68,13 @@ type SignUpInput struct {
 }
 
 // Session is the sign-up/sign-in response: a bearer token plus the profile the
-// clients render right away.
+// clients render right away. Scope tells clients what the token may be used for,
+// so they can send a verify-scoped caller back to sign-in instead of into the
+// authenticated screens.
 type Session struct {
 	Token     string  `json:"token"`
 	ExpiresAt string  `json:"expires_at"`
+	Scope     string  `json:"scope"`
 	User      Profile `json:"user"`
 }
 
@@ -84,8 +99,9 @@ func profileOf(u db.User) Profile {
 	}
 }
 
-// SignUp creates the account and returns a session, so a new account is signed
-// in immediately; email verification is tracked separately on the profile.
+// SignUp creates the account and returns a short-lived verify-scoped token, which
+// drives the verification screen only: the caller must sign in afterwards for a
+// token that reaches the rest of the API.
 func (s *Service) SignUp(ctx context.Context, in SignUpInput) (Session, error) {
 	email := strings.ToLower(strings.TrimSpace(in.Email))
 	if _, err := mail.ParseAddress(email); err != nil {
@@ -135,19 +151,20 @@ func (s *Service) SignUp(ctx context.Context, in SignUpInput) (Session, error) {
 
 	s.sendVerificationEmail(ctx, user.Email, token)
 
-	jwtToken, expiresAt, err := s.issuer.Issue(user.ID, user.Email, user.Role)
+	jwtToken, expiresAt, err := s.issuer.Issue(user.ID, user.Email, user.Role, ScopeVerify, s.verifyTTL)
 	if err != nil {
 		return Session{}, err
 	}
 	return Session{
 		Token:     jwtToken,
 		ExpiresAt: expiresAt.UTC().Format(time.RFC3339),
+		Scope:     ScopeVerify,
 		User:      profileOf(user),
 	}, nil
 }
 
-// SignIn verifies the password and issues a session. Unknown emails and wrong
-// passwords both return ErrInvalidCredentials.
+// SignIn verifies the password and issues a session-scoped token. Unknown emails
+// and wrong passwords both return ErrInvalidCredentials.
 func (s *Service) SignIn(ctx context.Context, email, password string) (Session, error) {
 	user, err := s.queries.GetUserByEmail(ctx, strings.ToLower(strings.TrimSpace(email)))
 	if err != nil {
@@ -160,13 +177,14 @@ func (s *Service) SignIn(ctx context.Context, email, password string) (Session, 
 		return Session{}, ErrInvalidCredentials
 	}
 
-	token, expires, err := s.issuer.Issue(user.ID, user.Email, user.Role)
+	token, expires, err := s.issuer.Issue(user.ID, user.Email, user.Role, ScopeSession, s.sessionTTL)
 	if err != nil {
 		return Session{}, err
 	}
 	return Session{
 		Token:     token,
 		ExpiresAt: expires.UTC().Format(time.RFC3339),
+		Scope:     ScopeSession,
 		User:      profileOf(user),
 	}, nil
 }

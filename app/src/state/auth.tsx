@@ -2,13 +2,15 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
 import { api } from '../api/client';
-import type { AuthSession, Profile, Role } from '../api/types';
+import type { AuthSession, Profile, Role, TokenScope } from '../api/types';
 
 const STORAGE_KEY = 'dating-coach.session';
 
 interface AuthState {
   ready: boolean;
   token: string | null;
+  /** Scope of the held token; a 'verify' token only works on the verification screen. */
+  scope: TokenScope | null;
   user: Profile | null;
   signIn: (email: string, password: string) => Promise<Profile>;
   signUp: (input: { email: string; password: string; displayName: string; role: Role }) => Promise<Profile>;
@@ -31,9 +33,11 @@ const isFresh = (expiresAt: string | undefined): boolean => {
 export function AuthProvider({ children }: { children: React.ReactNode }): React.ReactElement {
   const [ready, setReady] = useState(false);
   const [token, setToken] = useState<string | null>(null);
+  const [scope, setScope] = useState<TokenScope | null>(null);
   const [user, setUser] = useState<Profile | null>(null);
   const tokenRef = useRef<string | null>(null);
   const expiresRef = useRef<string>('');
+  const scopeRef = useRef<TokenScope>('session');
 
   // The client reads the token through a ref so requests always use the latest
   // one without re-creating the client on every render.
@@ -46,6 +50,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
       tokenRef.current = null;
       expiresRef.current = '';
       setToken(null);
+      setScope(null);
       setUser(null);
       void AsyncStorage.removeItem(STORAGE_KEY).catch(() => undefined);
     });
@@ -59,7 +64,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
         if (stored?.token && stored.user && isFresh(stored.expires_at)) {
           tokenRef.current = stored.token;
           expiresRef.current = stored.expires_at ?? '';
+          // Sessions stored before scopes existed were full sessions.
+          scopeRef.current = stored.scope ?? 'session';
           setToken(stored.token);
+          setScope(scopeRef.current);
           setUser(stored.user);
         } else if (raw) {
           await AsyncStorage.removeItem(STORAGE_KEY);
@@ -77,7 +85,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
   const persist = useCallback(async (session: AuthSession) => {
     tokenRef.current = session.token;
     expiresRef.current = session.expires_at ?? '';
+    scopeRef.current = session.scope ?? 'session';
     setToken(session.token);
+    setScope(scopeRef.current);
     setUser(session.user);
     await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(session));
     return session.user;
@@ -89,7 +99,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
     if (!tokenRef.current) return profile;
     await AsyncStorage.setItem(
       STORAGE_KEY,
-      JSON.stringify({ token: tokenRef.current, expires_at: expiresRef.current, user: profile }),
+      JSON.stringify({
+        token: tokenRef.current,
+        expires_at: expiresRef.current,
+        scope: scopeRef.current,
+        user: profile,
+      }),
     );
     return profile;
   }, []);
@@ -98,6 +113,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
     () => ({
       ready,
       token,
+      scope,
       user,
       signIn: async (email, password) => persist(await api.signIn({ email, password })),
       signUp: async ({ email, password, displayName, role }) =>
@@ -114,11 +130,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
         tokenRef.current = null;
         expiresRef.current = '';
         setToken(null);
+        setScope(null);
         setUser(null);
         await AsyncStorage.removeItem(STORAGE_KEY);
       },
     }),
-    [persist, persistUser, ready, token, user],
+    [persist, persistUser, ready, scope, token, user],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

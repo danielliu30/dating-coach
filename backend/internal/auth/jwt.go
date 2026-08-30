@@ -15,12 +15,22 @@ const (
 	RoleAdmin = "admin"
 )
 
-// Claims is the JWT payload: the standard registered claims plus the role and
-// email the middleware needs to build a Principal without a database round trip.
+// Scopes bound to a token at issuance. ScopeVerify tokens come from sign-up and
+// may only reach /auth; ScopeSession tokens come from sign-in and reach the rest
+// of the API.
+const (
+	ScopeVerify  = "verify"
+	ScopeSession = "session"
+)
+
+// Claims is the JWT payload: the standard registered claims plus the role,
+// email and scope the middleware needs to build a Principal without a database
+// round trip.
 type Claims struct {
 	jwt.RegisteredClaims
 	Role  string `json:"role"`
 	Email string `json:"email"`
+	Scope string `json:"scope"`
 }
 
 // UserID parses the subject claim, which holds the user's UUID.
@@ -28,22 +38,23 @@ func (c Claims) UserID() (uuid.UUID, error) {
 	return uuid.Parse(c.Subject)
 }
 
-// TokenIssuer signs and verifies the HS256 session tokens. One instance is
-// shared by Service (issuing) and Middleware (verifying).
+// TokenIssuer signs and verifies the HS256 auth tokens. One instance is shared
+// by Service (issuing) and Middleware (verifying).
 type TokenIssuer struct {
 	secret []byte
-	ttl    time.Duration
 }
 
-// NewTokenIssuer returns an issuer for the configured secret and token lifetime.
-func NewTokenIssuer(secret string, ttl time.Duration) *TokenIssuer {
-	return &TokenIssuer{secret: []byte(secret), ttl: ttl}
+// NewTokenIssuer returns an issuer signing with the configured secret.
+func NewTokenIssuer(secret string) *TokenIssuer {
+	return &TokenIssuer{secret: []byte(secret)}
 }
 
-// Issue mints a signed token for a user and reports when it expires, which the
-// sign-up and sign-in responses hand to clients as the session expiry.
-func (t *TokenIssuer) Issue(userID uuid.UUID, email, role string) (string, time.Time, error) {
-	expires := time.Now().Add(t.ttl)
+// Issue mints a signed token carrying scope for ttl and reports when it expires,
+// which the sign-up and sign-in responses hand to clients as the token expiry.
+// Scope is what the middleware enforces, so callers must pass ScopeSession only
+// for fully authenticated callers.
+func (t *TokenIssuer) Issue(userID uuid.UUID, email, role, scope string, ttl time.Duration) (string, time.Time, error) {
+	expires := time.Now().Add(ttl)
 	claims := Claims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			Subject:   userID.String(),
@@ -53,6 +64,7 @@ func (t *TokenIssuer) Issue(userID uuid.UUID, email, role string) (string, time.
 		},
 		Role:  role,
 		Email: email,
+		Scope: scope,
 	}
 	signed, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(t.secret)
 	if err != nil {

@@ -20,6 +20,7 @@ type Principal struct {
 	UserID uuid.UUID
 	Email  string
 	Role   string
+	Scope  string
 }
 
 // IsCoach reports whether the caller may use the coach-only endpoints.
@@ -47,8 +48,27 @@ func Middleware(issuer *TokenIssuer) func(http.Handler) http.Handler {
 				httpx.Error(w, http.StatusUnauthorized, "invalid token subject")
 				return
 			}
-			principal := Principal{UserID: userID, Email: claims.Email, Role: claims.Role}
+			scope := claims.Scope
+			if scope == "" {
+				scope = ScopeSession // Tokens issued before scopes existed.
+			}
+			principal := Principal{UserID: userID, Email: claims.Email, Role: claims.Role, Scope: scope}
 			next.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), principal)))
+		})
+	}
+}
+
+// RequireScope rejects callers whose token was not issued with scope, using only
+// the claim Middleware already parsed. Mount it inside Middleware.
+func RequireScope(scope string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			principal, ok := PrincipalFrom(r.Context())
+			if !ok || principal.Scope != scope {
+				httpx.Error(w, http.StatusForbidden, scope+" scope required")
+				return
+			}
+			next.ServeHTTP(w, r)
 		})
 	}
 }

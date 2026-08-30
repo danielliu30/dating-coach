@@ -21,7 +21,7 @@ export default function VerifyEmailScreen({
   route,
   navigation,
 }: NativeStackScreenProps<AuthStackParams, 'Verify'>): React.ReactElement {
-  const { verify, resendVerification, signOut, token: session, user } = useAuth();
+  const { verify, resendVerification, signOut, token: session, scope, user } = useAuth();
   const [email, setEmail] = useState(route.params?.email ?? user?.email ?? '');
   const [token, setToken] = useState('');
   const [status, setStatus] = useState<string | null>(null);
@@ -35,6 +35,13 @@ export default function VerifyEmailScreen({
       setStatus(null);
       try {
         await verify(value);
+        // A sign-up token only covers verification, so the account needs a real
+        // sign-in before the authenticated screens will load.
+        if (scope === 'verify') {
+          await signOut();
+          navigation.navigate('SignIn');
+          return;
+        }
         setStatus('Email verified.');
       } catch (err) {
         setError(err instanceof Error ? err.message : 'could not verify');
@@ -42,7 +49,7 @@ export default function VerifyEmailScreen({
         setBusy(false);
       }
     },
-    [verify],
+    [navigation, scope, signOut, verify],
   );
 
   const submit = () => submitToken(token.trim());
