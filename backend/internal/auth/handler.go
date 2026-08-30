@@ -66,7 +66,9 @@ func (h *Handler) signUp(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// signIn handles POST /signin and exchanges credentials for a session.
+// signIn handles POST /signin and exchanges credentials for a session. Correct
+// credentials on an unverified account answer 403, which the clients use to
+// route the user to the verification screen.
 func (h *Handler) signIn(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Email    string `json:"email"`
