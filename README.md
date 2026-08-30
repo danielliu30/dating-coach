@@ -54,7 +54,7 @@ npx expo start                # then press i / a for iOS / Android
 
 Point the app at the backend with `EXPO_PUBLIC_API_URL` (defaults to `http://localhost:8080`, and `http://10.0.2.2:8080` on the Android emulator).
 
-Sign-up returns a session but the app stays on the verify screen until the email is confirmed. With no SMTP credentials configured the verification email is written to the API log instead of being sent, so grab the token locally with:
+Sign-up returns a short-lived `verify`-scoped token that only reaches `/api/v1/auth`; every other endpoint answers 403 until the email is confirmed, at which point verification hands back a full `session`-scoped token. With no SMTP credentials configured the verification email is written to the API log instead of being sent, so grab the token locally with:
 
 ```bash
 docker compose logs api | grep -i verification

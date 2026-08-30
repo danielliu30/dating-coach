@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"golang.org/x/crypto/bcrypt"
@@ -35,16 +36,28 @@ const verificationTTL = 48 * time.Hour
 // passwords, mints sessions through the TokenIssuer and drives the email
 // verification flow. Handler is its only caller.
 type Service struct {
-	queries    *db.Queries
-	issuer     *TokenIssuer
-	notifier   notify.Notifier
-	bcryptCost int
-	appURL     string
+	queries        *db.Queries
+	issuer         *TokenIssuer
+	notifier       notify.Notifier
+	bcryptCost     int
+	appURL         string
+	sessionTTL     time.Duration
+	verifyTokenTTL time.Duration
 }
 
 // NewService wires the service dependencies; called once from cmd/api.
-func NewService(queries *db.Queries, issuer *TokenIssuer, notifier notify.Notifier, bcryptCost int, appURL string) *Service {
-	return &Service{queries: queries, issuer: issuer, notifier: notifier, bcryptCost: bcryptCost, appURL: appURL}
+// sessionTTL is the lifetime of the session token issued at sign-in;
+// verifyTokenTTL that of the verify-scoped token issued at sign-up.
+func NewService(queries *db.Queries, issuer *TokenIssuer, notifier notify.Notifier, bcryptCost int, appURL string, sessionTTL, verifyTokenTTL time.Duration) *Service {
+	return &Service{
+		queries:        queries,
+		issuer:         issuer,
+		notifier:       notifier,
+		bcryptCost:     bcryptCost,
+		appURL:         appURL,
+		sessionTTL:     sessionTTL,
+		verifyTokenTTL: verifyTokenTTL,
+	}
 }
 
 // SignUpInput is the decoded POST /auth/signup body.
@@ -84,8 +97,10 @@ func profileOf(u db.User) Profile {
 	}
 }
 
-// SignUp creates the account and returns a session, so a new account is signed
-// in immediately; email verification is tracked separately on the profile.
+// SignUp creates the account and returns a verify-scoped session: the token it
+// carries reaches the /auth endpoints only, so a brand new account can finish
+// verification but cannot touch coaching, chat or analysis until it trades the
+// token in for a session-scoped one.
 func (s *Service) SignUp(ctx context.Context, in SignUpInput) (Session, error) {
 	email := strings.ToLower(strings.TrimSpace(in.Email))
 	if _, err := mail.ParseAddress(email); err != nil {
@@ -135,7 +150,7 @@ func (s *Service) SignUp(ctx context.Context, in SignUpInput) (Session, error) {
 
 	s.sendVerificationEmail(ctx, user.Email, token)
 
-	jwtToken, expiresAt, err := s.issuer.Issue(user.ID, user.Email, user.Role)
+	jwtToken, expiresAt, err := s.issuer.Issue(user.ID, user.Email, user.Role, ScopeVerify, s.verifyTokenTTL)
 	if err != nil {
 		return Session{}, err
 	}
@@ -146,8 +161,8 @@ func (s *Service) SignUp(ctx context.Context, in SignUpInput) (Session, error) {
 	}, nil
 }
 
-// SignIn verifies the password and issues a session. Unknown emails and wrong
-// passwords both return ErrInvalidCredentials.
+// SignIn verifies the password and issues a session-scoped token. Unknown
+// emails and wrong passwords both return ErrInvalidCredentials.
 func (s *Service) SignIn(ctx context.Context, email, password string) (Session, error) {
 	user, err := s.queries.GetUserByEmail(ctx, strings.ToLower(strings.TrimSpace(email)))
 	if err != nil {
@@ -160,7 +175,7 @@ func (s *Service) SignIn(ctx context.Context, email, password string) (Session, 
 		return Session{}, ErrInvalidCredentials
 	}
 
-	token, expires, err := s.issuer.Issue(user.ID, user.Email, user.Role)
+	token, expires, err := s.issuer.Issue(user.ID, user.Email, user.Role, ScopeSession, s.sessionTTL)
 	if err != nil {
 		return Session{}, err
 	}
@@ -171,16 +186,50 @@ func (s *Service) SignIn(ctx context.Context, email, password string) (Session, 
 	}, nil
 }
 
-// VerifyEmail consumes a verification token and marks the address confirmed.
-func (s *Service) VerifyEmail(ctx context.Context, token string) (Profile, error) {
+// VerifyEmail consumes a verification token, marks the address confirmed and
+// returns the updated profile.
+//
+// bearer is the caller's current JWT, or "" when the request is
+// unauthenticated. When it is the verify-scoped token this very account was
+// given at sign-up, the returned Session also carries a session-scoped token,
+// so the caller leaves verification with credentials that reach the private API
+// instead of one every private route rejects. A bearer belonging to another
+// account, an expired one, or none at all yields the profile only: verifying
+// never hands a session to whoever merely holds the emailed token.
+func (s *Service) VerifyEmail(ctx context.Context, token, bearer string) (Session, error) {
 	user, err := s.queries.VerifyUserEmail(ctx, &token)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return Profile{}, ErrInvalidToken
+			return Session{}, ErrInvalidToken
 		}
-		return Profile{}, fmt.Errorf("verify email: %w", err)
+		return Session{}, fmt.Errorf("verify email: %w", err)
 	}
-	return profileOf(user), nil
+	profile := profileOf(user)
+	if !s.ownsBearer(user.ID, bearer) {
+		return Session{User: profile}, nil
+	}
+	sessionToken, expires, err := s.issuer.Issue(user.ID, user.Email, user.Role, ScopeSession, s.sessionTTL)
+	if err != nil {
+		return Session{}, fmt.Errorf("issue session: %w", err)
+	}
+	return Session{
+		Token:     sessionToken,
+		ExpiresAt: expires.UTC().Format(time.RFC3339),
+		User:      profile,
+	}, nil
+}
+
+// ownsBearer reports whether bearer is a currently valid token for userID.
+func (s *Service) ownsBearer(userID uuid.UUID, bearer string) bool {
+	if bearer == "" {
+		return false
+	}
+	claims, err := s.issuer.Parse(bearer)
+	if err != nil {
+		return false
+	}
+	subject, err := claims.UserID()
+	return err == nil && subject == userID
 }
 
 // ResendVerification issues a fresh token and re-sends the email. It succeeds

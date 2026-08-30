@@ -20,19 +20,28 @@ type Principal struct {
 	UserID uuid.UUID
 	Email  string
 	Role   string
+	Scope  string
 }
 
 // IsCoach reports whether the caller may use the coach-only endpoints.
 func (p Principal) IsCoach() bool { return p.Role == RoleCoach || p.Role == RoleAdmin }
 
+// bearerToken returns the request's JWT from the Authorization header, falling
+// back to the token query parameter that WebSocket clients must use because
+// they cannot set headers. It returns "" when the request carries neither.
+func bearerToken(r *http.Request) string {
+	raw := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer"))
+	if raw == "" {
+		raw = r.URL.Query().Get("token")
+	}
+	return raw
+}
+
 // Middleware rejects requests without a valid bearer token.
 func Middleware(issuer *TokenIssuer) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			raw := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer"))
-			if raw == "" {
-				raw = r.URL.Query().Get("token") // WebSocket clients cannot set headers.
-			}
+			raw := bearerToken(r)
 			if raw == "" {
 				httpx.Error(w, http.StatusUnauthorized, "missing bearer token")
 				return
@@ -47,8 +56,38 @@ func Middleware(issuer *TokenIssuer) func(http.Handler) http.Handler {
 				httpx.Error(w, http.StatusUnauthorized, "invalid token subject")
 				return
 			}
-			principal := Principal{UserID: userID, Email: claims.Email, Role: claims.Role}
+			principal := Principal{UserID: userID, Email: claims.Email, Role: claims.Role, Scope: claims.Scope}
 			next.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), principal)))
+		})
+	}
+}
+
+// RequireScope rejects callers whose token was not issued for the given scope.
+// It must be mounted after Middleware, which supplies the Principal it reads.
+// The verify-scoped token handed out at sign-up is thereby kept off the private
+// API while it is still cryptographically valid, and answers 403.
+//
+// Tokens minted before scopes existed carry no scope at all. Those are not
+// grandfathered in: they answer 401 so clients drop the session and sign in
+// again, rather than 403, which would leave them signed in holding a token that
+// can never satisfy any route.
+func RequireScope(scope string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			principal, ok := PrincipalFrom(r.Context())
+			if !ok {
+				httpx.Error(w, http.StatusUnauthorized, "missing bearer token")
+				return
+			}
+			switch {
+			case principal.Scope == "":
+				httpx.Error(w, http.StatusUnauthorized, "token predates scopes; sign in again")
+				return
+			case principal.Scope != scope:
+				httpx.Error(w, http.StatusForbidden, "token scope not permitted")
+				return
+			}
+			next.ServeHTTP(w, r)
 		})
 	}
 }

@@ -64,12 +64,13 @@ func run() error {
 	defer queue.Close()
 
 	notifier := notify.New(cfg)
-	issuer := auth.NewTokenIssuer(cfg.JWTSecret, cfg.JWTTTL)
+	issuer := auth.NewTokenIssuer(cfg.JWTSecret)
 	limiter := auth.NewRateLimiter(rdb, cfg.AuthRateLimit, cfg.AuthRateWindow)
 	authenticate := auth.Middleware(issuer)
+	session := auth.RequireScope(auth.ScopeSession)
 
 	authHandler := auth.NewHandler(
-		auth.NewService(pg.Queries, issuer, notifier, cfg.BcryptCost, cfg.PublicAppURL),
+		auth.NewService(pg.Queries, issuer, notifier, cfg.BcryptCost, cfg.PublicAppURL, cfg.JWTTTL, cfg.VerifyTokenTTL),
 		limiter,
 	)
 	coachingHandler := coaching.NewHandler(coaching.NewService(pg.Pool, pg.Queries))
@@ -94,7 +95,7 @@ func run() error {
 	router.Route("/api/v1", func(v1 chi.Router) {
 		v1.Mount("/auth", authHandler.Routes(authenticate))
 		v1.Group(func(private chi.Router) {
-			private.Use(authenticate)
+			private.Use(authenticate, session)
 			private.Mount("/coaching", coachingHandler.Routes())
 			private.Mount("/chat", chatHandler.Routes())
 			private.Mount("/analysis", analysisHandler.Routes())
