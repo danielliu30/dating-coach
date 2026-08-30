@@ -24,7 +24,11 @@ func NewHandler(svc *Service, limiter *RateLimiter) *Handler {
 
 // Routes mounts the auth endpoints. The credential endpoints are rate limited
 // per IP; /me sits behind the authentication middleware.
-func (h *Handler) Routes(authenticate func(http.Handler) http.Handler) http.Handler {
+//
+// active is the revocation check, applied on top of authenticate everywhere
+// except DELETE /me: that request is how a revoked account gets its rows
+// removed, so blocking it would make a failed deletion unrepeatable.
+func (h *Handler) Routes(authenticate, active func(http.Handler) http.Handler) http.Handler {
 	r := chi.NewRouter()
 	r.Group(func(public chi.Router) {
 		public.Use(h.limiter.Middleware)
@@ -35,7 +39,8 @@ func (h *Handler) Routes(authenticate func(http.Handler) http.Handler) http.Hand
 	})
 	r.Group(func(private chi.Router) {
 		private.Use(authenticate)
-		private.Get("/me", h.me)
+		private.With(active).Get("/me", h.me)
+		private.Delete("/me", h.deleteMe)
 	})
 	return r
 }
@@ -127,6 +132,24 @@ func (h *Handler) resendVerification(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusAccepted, map[string]string{"status": "sent"})
+}
+
+// deleteMe handles DELETE /me. It answers 202 rather than 204: the caller's
+// sessions are already dead when it returns, but the rows are removed by the
+// worker afterwards. It is idempotent, so a caller whose deletion could not be
+// queued can repeat the request with the same (revoked) token.
+func (h *Handler) deleteMe(w http.ResponseWriter, r *http.Request) {
+	principal, ok := PrincipalFrom(r.Context())
+	if !ok {
+		httpx.Error(w, http.StatusUnauthorized, "unauthenticated")
+		return
+	}
+	if err := h.svc.DeleteAccount(r.Context(), principal.UserID); err != nil {
+		slog.Error("delete account", "error", err, "user_id", principal.UserID)
+		httpx.Error(w, http.StatusInternalServerError, "could not delete account")
+		return
+	}
+	httpx.JSON(w, http.StatusAccepted, map[string]string{"status": "deleted"})
 }
 
 // me handles GET /me and returns the profile of the authenticated caller.
