@@ -36,6 +36,7 @@ func (h *Handler) Routes(authenticate func(http.Handler) http.Handler) http.Hand
 	r.Group(func(private chi.Router) {
 		private.Use(authenticate)
 		private.Get("/me", h.me)
+		private.Delete("/me", h.deleteMe)
 	})
 	return r
 }
@@ -121,6 +122,23 @@ func (h *Handler) resendVerification(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusAccepted, map[string]string{"status": "sent"})
+}
+
+// deleteMe handles DELETE /me. It answers 202 rather than 204: the caller's
+// sessions are already dead when it returns, but the rows are removed by the
+// worker afterwards.
+func (h *Handler) deleteMe(w http.ResponseWriter, r *http.Request) {
+	principal, ok := PrincipalFrom(r.Context())
+	if !ok {
+		httpx.Error(w, http.StatusUnauthorized, "unauthenticated")
+		return
+	}
+	if err := h.svc.DeleteAccount(r.Context(), principal.UserID); err != nil {
+		slog.Error("delete account", "error", err, "user_id", principal.UserID)
+		httpx.Error(w, http.StatusInternalServerError, "could not delete account")
+		return
+	}
+	httpx.JSON(w, http.StatusAccepted, map[string]string{"status": "deleted"})
 }
 
 // me handles GET /me and returns the profile of the authenticated caller.
