@@ -54,7 +54,7 @@ export class ApiClient {
     const payload = text ? (JSON.parse(text) as unknown) : null;
 
     if (!response.ok) {
-      if (response.status === 401 && token) {
+      if (response.status === 401 && token && token === this.token()) {
         this.onUnauthorized();
       }
       const message =
@@ -76,8 +76,13 @@ export class ApiClient {
     return this.request<AuthSession>('POST', '/auth/signin', input);
   }
 
+  /**
+   * Confirms an email address. The session's token is filled in when the
+   * caller is authenticated as the account being verified, and empty otherwise
+   * (e.g. verifying from a signed-out browser).
+   */
   verifyEmail(token: string) {
-    return this.request<Profile>('POST', '/auth/verify', { token });
+    return this.request<AuthSession>('POST', '/auth/verify', { token });
   }
 
   resendVerification(email: string) {

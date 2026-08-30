@@ -48,7 +48,7 @@ func TestRoutesKeepDeletionReachableWhenRevoked(t *testing.T) {
 	// enough to show the request reached the handler rather than the denylist.
 	rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", MaxRetries: -1, DialTimeout: time.Second})
 	t.Cleanup(func() { _ = rdb.Close() })
-	svc := NewService(nil, nil, nil, 0, "", NewDenylist(rdb, time.Minute), &stubPublisher{})
+	svc := NewService(nil, nil, nil, 0, "", NewDenylist(rdb, time.Minute), &stubPublisher{}, time.Hour, time.Minute)
 	principal := Principal{UserID: uuid.New(), Email: "deleted@example.com", Role: "user"}
 	routes := NewHandler(svc, nil).Routes(authenticateAs(principal), blockAll)
 

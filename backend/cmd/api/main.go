@@ -83,7 +83,7 @@ func run() error {
 	defer deletions.Close()
 
 	notifier := notify.New(cfg)
-	issuer := auth.NewTokenIssuer(cfg.JWTSecret, cfg.JWTTTL)
+	issuer := auth.NewTokenIssuer(cfg.JWTSecret)
 	limiter := auth.NewRateLimiter(rdb, cfg.AuthRateLimit, cfg.AuthRateWindow)
 	// A revocation only has to outlive the tokens that existed when it was made.
 	denylist := auth.NewDenylist(rdb, cfg.JWTTTL)
@@ -91,9 +91,10 @@ func run() error {
 	// account's token stays validly signed until it expires on its own.
 	active := auth.RequireActive(denylist)
 	authenticate := chain(auth.Middleware(issuer), active)
+	session := auth.RequireScope(auth.ScopeSession)
 
 	authHandler := auth.NewHandler(
-		auth.NewService(pg.Queries, issuer, notifier, cfg.BcryptCost, cfg.PublicAppURL, denylist, deletions),
+		auth.NewService(pg.Queries, issuer, notifier, cfg.BcryptCost, cfg.PublicAppURL, denylist, deletions, cfg.JWTTTL, cfg.VerifyTokenTTL),
 		limiter,
 	)
 	coachingHandler := coaching.NewHandler(coaching.NewService(pg.Pool, pg.Queries))
@@ -118,7 +119,7 @@ func run() error {
 	router.Route("/api/v1", func(v1 chi.Router) {
 		v1.Mount("/auth", authHandler.Routes(auth.Middleware(issuer), active))
 		v1.Group(func(private chi.Router) {
-			private.Use(authenticate)
+			private.Use(authenticate, session)
 			private.Mount("/coaching", coachingHandler.Routes())
 			private.Mount("/chat", chatHandler.Routes())
 			private.Mount("/analysis", analysisHandler.Routes())
