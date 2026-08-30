@@ -156,10 +156,8 @@ function AuthNavigator({ initialRoute }: { initialRoute: keyof AuthStackParams }
 }
 
 export default function RootNavigator(): React.ReactElement {
-  const { ready, token, scope, user } = useAuth();
-  // A verify-scoped token is rejected by every endpoint outside /auth, so it must
-  // not reach the authenticated tabs even once the address is confirmed.
-  const signedIn = Boolean(token) && scope === 'session' && Boolean(user?.email_verified);
+  const { ready, token, user } = useAuth();
+  const verified = Boolean(user?.email_verified);
   const [linkedVerify, setLinkedVerify] = useState(false);
 
   // Emails link to <app>/verify?token=..., which has to land on the verification
@@ -174,7 +172,7 @@ export default function RootNavigator(): React.ReactElement {
     <NavigationContainer linking={linking}>
       {!ready ? (
         <Loading />
-      ) : signedIn ? (
+      ) : token && verified ? (
         <MainTabs />
       ) : (
         <AuthNavigator initialRoute={token || linkedVerify ? 'Verify' : 'SignIn'} />

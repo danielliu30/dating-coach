@@ -92,7 +92,7 @@ func run() error {
 	active := auth.RequireActive(denylist)
 
 	authHandler := auth.NewHandler(
-		auth.NewService(pg.Queries, issuer, notifier, cfg.BcryptCost, cfg.PublicAppURL, cfg.JWTTTL, cfg.VerifyTokenTTL, denylist, deletions),
+		auth.NewService(pg.Queries, issuer, notifier, cfg.BcryptCost, cfg.PublicAppURL, denylist, deletions, cfg.JWTTTL, cfg.VerifyTokenTTL),
 		limiter,
 	)
 	coachingHandler := coaching.NewHandler(coaching.NewService(pg.Pool, pg.Queries))
@@ -144,10 +144,11 @@ type handlers struct {
 
 // newRouter builds the API routing tree: an unauthenticated health check, the
 // auth endpoints (reachable by verify-scoped tokens so a fresh sign-up can
-// confirm its address) and a private group every other feature is mounted under,
-// which authenticates the caller and then demands a session-scoped token.
-// verifyToken and active are taken separately rather than pre-chained because
-// the auth endpoints apply the revocation check to only some of their routes.
+// confirm its address) and a private group every other feature is mounted
+// under, which authenticates the caller and then demands a session-scoped
+// token. verifyToken and active are taken separately rather than pre-chained
+// because the auth endpoints apply the revocation check to only some of their
+// routes.
 func newRouter(cfg *config.Config, verifyToken, active func(http.Handler) http.Handler, h handlers) http.Handler {
 	authenticate := chain(verifyToken, active)
 
@@ -178,6 +179,5 @@ func newRouter(cfg *config.Config, verifyToken, active func(http.Handler) http.H
 			})
 		})
 	})
-
 	return router
 }

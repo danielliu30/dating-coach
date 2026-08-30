@@ -10,13 +10,9 @@ export interface Profile {
   email_verified: boolean;
 }
 
-/** Scope bound to a token when it was issued: sign-up yields 'verify', sign-in 'session'. */
-export type TokenScope = 'verify' | 'session';
-
 export interface AuthSession {
   token: string;
   expires_at: string;
-  scope: TokenScope;
   user: Profile;
 }
 

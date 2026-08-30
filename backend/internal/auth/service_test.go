@@ -46,14 +46,14 @@ func newTestService(t *testing.T) (*Service, *TokenIssuer, *pgxpool.Pool) {
 	}
 
 	issuer := NewTokenIssuer("test-secret")
-	svc := NewService(db.New(pool), issuer, silentNotifier{}, bcrypt.MinCost, "http://app.test", 24*time.Hour, 30*time.Minute, nil, nil)
+	svc := NewService(db.New(pool), issuer, silentNotifier{}, bcrypt.MinCost, "http://app.test", nil, nil, 24*time.Hour, 30*time.Minute)
 	return svc, issuer, pool
 }
 
 // TestSignUpMintsVerifyScopedToken covers the scope split end to end, through
 // the real queries: the new account exists but its token is verify-scoped and
-// short-lived, and only signing in — which needs the address confirmed first —
-// upgrades it to a session-scoped one.
+// short-lived, and only confirming the address — by verifying with that token,
+// or by signing in afterwards — yields a session-scoped one.
 func TestSignUpMintsVerifyScopedToken(t *testing.T) {
 	svc, issuer, pool := newTestService(t)
 	ctx := context.Background()
@@ -70,9 +70,6 @@ func TestSignUpMintsVerifyScopedToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sign up: %v", err)
 	}
-	if signUp.Scope != ScopeVerify {
-		t.Fatalf("sign-up session scope = %q, want %q", signUp.Scope, ScopeVerify)
-	}
 	if signUp.User.EmailVerified {
 		t.Fatal("a new account must not start out verified")
 	}
@@ -82,16 +79,15 @@ func TestSignUpMintsVerifyScopedToken(t *testing.T) {
 	if err := pool.QueryRow(ctx, "SELECT verification_token FROM users WHERE email = $1", email).Scan(&verificationToken); err != nil {
 		t.Fatalf("read verification token: %v", err)
 	}
-	if _, err := svc.VerifyEmail(ctx, verificationToken); err != nil {
+	verified, err := svc.VerifyEmail(ctx, verificationToken, signUp.Token)
+	if err != nil {
 		t.Fatalf("verify email: %v", err)
 	}
+	assertTokenScope(t, issuer, verified.Token, ScopeSession, 24*time.Hour)
 
 	signIn, err := svc.SignIn(ctx, email, password)
 	if err != nil {
 		t.Fatalf("sign in: %v", err)
-	}
-	if signIn.Scope != ScopeSession {
-		t.Fatalf("sign-in session scope = %q, want %q", signIn.Scope, ScopeSession)
 	}
 	assertTokenScope(t, issuer, signIn.Token, ScopeSession, 24*time.Hour)
 }

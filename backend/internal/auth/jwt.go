@@ -15,9 +15,10 @@ const (
 	RoleAdmin = "admin"
 )
 
-// Scopes bound to a token at issuance. ScopeVerify tokens come from sign-up and
-// may only reach /auth; ScopeSession tokens come from sign-in and reach the rest
-// of the API.
+// Scopes carried in the token. ScopeVerify is issued at sign-up and reaches
+// only the /auth endpoints; ScopeSession is issued once the account is usable
+// and reaches the rest of the API. A token's scope is frozen for its lifetime,
+// so widening it means issuing a new token.
 const (
 	ScopeVerify  = "verify"
 	ScopeSession = "session"
@@ -38,21 +39,21 @@ func (c Claims) UserID() (uuid.UUID, error) {
 	return uuid.Parse(c.Subject)
 }
 
-// TokenIssuer signs and verifies the HS256 auth tokens. One instance is shared
-// by Service (issuing) and Middleware (verifying).
+// TokenIssuer signs and verifies the HS256 tokens. One instance is shared by
+// Service (issuing) and Middleware (verifying).
 type TokenIssuer struct {
 	secret []byte
 }
 
-// NewTokenIssuer returns an issuer signing with the configured secret.
+// NewTokenIssuer returns an issuer for the configured secret.
 func NewTokenIssuer(secret string) *TokenIssuer {
 	return &TokenIssuer{secret: []byte(secret)}
 }
 
-// Issue mints a signed token carrying scope for ttl and reports when it expires,
-// which the sign-up and sign-in responses hand to clients as the token expiry.
-// Scope is what the middleware enforces, so callers must pass ScopeSession only
-// for fully authenticated callers.
+// Issue mints a signed token for a user and reports when it expires, which the
+// sign-up and sign-in responses hand to clients as the session expiry. Scope
+// and ttl are per call, so the same issuer mints both the short-lived verify
+// token and the full session token.
 func (t *TokenIssuer) Issue(userID uuid.UUID, email, role, scope string, ttl time.Duration) (string, time.Time, error) {
 	expires := time.Now().Add(ttl)
 	claims := Claims{

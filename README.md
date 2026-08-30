@@ -55,7 +55,7 @@ npx expo start                # then press i / a for iOS / Android
 
 Point the app at the backend with `EXPO_PUBLIC_API_URL` (defaults to `http://localhost:8080`, and `http://10.0.2.2:8080` on the Android emulator).
 
-Sign-up returns a short-lived verify-scoped token (`VERIFY_TOKEN_TTL`, default 30m) that only works on the auth endpoints, so the app stays on the verify screen until the email is confirmed and the user signs in — and sign-in itself refuses accounts whose address is unconfirmed (403). With no SMTP credentials configured the verification email is written to the API log instead of being sent, so grab the token locally with:
+Sign-up returns a short-lived `verify`-scoped token that only reaches `/api/v1/auth`; every other endpoint answers 403 until the email is confirmed, at which point verification hands back a full `session`-scoped token. Sign-in refuses accounts whose address is unconfirmed (403), and the app sends those users to the verify screen. With no SMTP credentials configured the verification email is written to the API log instead of being sent, so grab the token locally with:
 
 ```bash
 docker compose logs api | grep -i verification
@@ -72,7 +72,12 @@ go run ./cmd/api        # HTTP + WebSocket API on :8080
 go run ./cmd/worker     # analysis + account-deletion worker
 sqlc generate           # after editing internal/store/queries/*.sql
 go build ./... && go vet ./...
+go test ./...           # database-backed tests skip themselves
+TEST_DATABASE_URL="$DATABASE_URL" go test ./...   # …and run with this set
 ```
+
+The tests gated on `TEST_DATABASE_URL` talk to a real PostgreSQL and delete the
+rows they create; point it at a scratch database, never a production one.
 
 **ML analyzer:**
 
@@ -84,16 +89,6 @@ uvicorn app.main:app --reload --port 8000
 ```
 
 Without `LLM_API_KEY` the service falls back to a dependency-free heuristic scorer, so the whole stack works offline. See <ml-analyzer/README.md> for the training path, the labelled-data schema and how to switch `/analyze` to a fine-tuned model behind the same contract.
-
-**Backend checks:**
-
-```bash
-cd backend
-go test ./...                     # unit tests only
-TEST_DATABASE_URL=postgres://datingcoach:datingcoach@localhost:5432/datingcoach?sslmode=disable go test ./...
-```
-
-The tests that exercise the real queries (such as the sign-up token scope) skip themselves unless `TEST_DATABASE_URL` points at a migrated database; they clean up the rows they create.
 
 **Expo app checks:**
 
@@ -113,7 +108,7 @@ npx expo export --platform web    # production web bundle
 | Chat     | `POST /chat/threads` · `GET /chat/threads` · `GET/POST /chat/threads/{id}/messages` · `POST /chat/threads/{id}/close` · `GET /chat/threads/{id}/ws`                      |
 | Analysis | `POST /analysis/conversations` · `GET /analysis/conversations` · `GET /analysis/conversations/{id}/result` · `POST /analysis/conversations/{id}/label` · `GET /analysis/results/{id}` |
 
-All endpoints except the auth ones require `Authorization: Bearer <jwt>` with a session-scoped token from `signin` (a verify-scoped sign-up token gets 403); the WebSocket accepts `?token=<jwt>`.
+All endpoints except the auth ones require `Authorization: Bearer <jwt>`; the WebSocket accepts `?token=<jwt>`.
 
 ## Configuration
 
