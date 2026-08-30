@@ -136,10 +136,10 @@ func TestRequireScope(t *testing.T) {
 			want:          http.StatusForbidden,
 		},
 		{
-			name:          "empty scope is forbidden",
+			name:          "token predating scopes is unauthorized so clients sign in again",
 			withPrincipal: true,
 			tokenScope:    "",
-			want:          http.StatusForbidden,
+			want:          http.StatusUnauthorized,
 		},
 		{
 			name:          "missing principal is unauthorized",

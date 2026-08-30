@@ -78,8 +78,13 @@ export class ApiClient {
     return this.request<AuthSession>('POST', '/auth/signin', input);
   }
 
+  /**
+   * Confirms an email address. The response carries a full session token when
+   * the caller is authenticated as the account being verified, and an empty
+   * one otherwise (e.g. verifying from a signed-out browser).
+   */
   verifyEmail(token: string) {
-    return this.request<Profile>('POST', '/auth/verify', { token });
+    return this.request<AuthSession>('POST', '/auth/verify', { token });
   }
 
   resendVerification(email: string) {

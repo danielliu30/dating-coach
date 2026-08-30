@@ -119,7 +119,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
       signIn: async (email, password) => persist(await api.signIn({ email, password })),
       signUp: async ({ email, password, displayName, role }) =>
         persist(await api.signUp({ email, password, display_name: displayName, role })),
-      verify: async (verificationToken) => persistUser(await api.verifyEmail(verificationToken)),
+      verify: async (verificationToken) => {
+        // Verifying while signed in swaps the sign-up token for a session one;
+        // the sign-up token cannot reach the private API the app is about to
+        // show. Verifying signed out only returns the profile.
+        const session = await api.verifyEmail(verificationToken);
+        return session.token ? persist(session) : persistUser(session.user);
+      },
       resendVerification: async (email) => {
         await api.resendVerification(email);
       },

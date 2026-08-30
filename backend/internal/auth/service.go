@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"golang.org/x/crypto/bcrypt"
@@ -170,15 +171,50 @@ func (s *Service) SignIn(ctx context.Context, email, password string) (Session, 
 	}, nil
 }
 
-func (s *Service) VerifyEmail(ctx context.Context, token string) (Profile, error) {
+// VerifyEmail confirms the address behind a verification token and returns the
+// updated profile.
+//
+// bearer is the caller's current JWT, or empty when the request is
+// unauthenticated. When it is the verify-scoped token this very account was
+// given at sign-up, the returned Session also carries a full session token, so
+// the caller leaves verification with credentials that reach the private API
+// instead of a token every private route rejects. A bearer for a different
+// account, an expired one, or none at all only yields the profile: verifying
+// never hands out a session to whoever merely holds the emailed token.
+func (s *Service) VerifyEmail(ctx context.Context, token, bearer string) (Session, error) {
 	user, err := s.queries.VerifyUserEmail(ctx, &token)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return Profile{}, ErrInvalidToken
+			return Session{}, ErrInvalidToken
 		}
-		return Profile{}, fmt.Errorf("verify email: %w", err)
+		return Session{}, fmt.Errorf("verify email: %w", err)
 	}
-	return profileOf(user), nil
+	profile := profileOf(user)
+	if !s.ownsBearer(user.ID, bearer) {
+		return Session{User: profile}, nil
+	}
+	sessionToken, expires, err := s.issuer.Issue(user.ID, user.Email, user.Role, ScopeSession, s.sessionTTL)
+	if err != nil {
+		return Session{}, fmt.Errorf("issue session: %w", err)
+	}
+	return Session{
+		Token:     sessionToken,
+		ExpiresAt: expires.UTC().Format(time.RFC3339),
+		User:      profile,
+	}, nil
+}
+
+// ownsBearer reports whether bearer is a currently valid token for userID.
+func (s *Service) ownsBearer(userID uuid.UUID, bearer string) bool {
+	if bearer == "" {
+		return false
+	}
+	claims, err := s.issuer.Parse(bearer)
+	if err != nil {
+		return false
+	}
+	subject, err := claims.UserID()
+	return err == nil && subject == userID
 }
 
 func (s *Service) ResendVerification(ctx context.Context, email string) error {

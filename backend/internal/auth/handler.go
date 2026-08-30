@@ -86,7 +86,7 @@ func (h *Handler) verify(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	profile, err := h.svc.VerifyEmail(r.Context(), in.Token)
+	session, err := h.svc.VerifyEmail(r.Context(), in.Token, bearerToken(r))
 	switch {
 	case errors.Is(err, ErrInvalidToken):
 		httpx.Error(w, http.StatusBadRequest, err.Error())
@@ -94,7 +94,7 @@ func (h *Handler) verify(w http.ResponseWriter, r *http.Request) {
 		slog.Error("verify email", "error", err)
 		httpx.Error(w, http.StatusInternalServerError, "could not verify email")
 	default:
-		httpx.JSON(w, http.StatusOK, profile)
+		httpx.JSON(w, http.StatusOK, session)
 	}
 }
 
