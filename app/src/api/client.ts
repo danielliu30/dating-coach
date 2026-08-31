@@ -24,10 +24,14 @@ export class ApiError extends Error {
 
 type TokenProvider = () => string | null;
 
+/** Trades the stored refresh token for a new access token, or null if it fails. */
+type SessionRenewer = () => Promise<string | null>;
+
 /** Typed client for the Go API. One instance per app, token injected lazily. */
 export class ApiClient {
   private token: TokenProvider = () => null;
   private onUnauthorized: () => void = () => undefined;
+  private renewSession: SessionRenewer = async () => null;
 
   useToken(provider: TokenProvider): void {
     this.token = provider;
@@ -38,7 +42,27 @@ export class ApiClient {
     this.onUnauthorized = handler;
   }
 
-  private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  /**
+   * Registers the renewal handler used when an access token is rejected.
+   * Access tokens are short-lived, so a 401 usually means "expired", not
+   * "signed out": the request is retried once with whatever handler returns,
+   * and only a null result signs the user out.
+   */
+  onAccessTokenExpired(handler: SessionRenewer): void {
+    this.renewSession = handler;
+  }
+
+  /**
+   * Performs one API call, retrying it once with a renewed access token when
+   * the first attempt is rejected. retryUnauthorized guards that recursion and
+   * is false on the retry and on /auth/refresh itself.
+   */
+  private async request<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+    retryUnauthorized = true,
+  ): Promise<T> {
     const token = this.token();
     const response = await fetch(`${API_BASE_URL}${API_PREFIX}${path}`, {
       method,
@@ -55,6 +79,10 @@ export class ApiClient {
 
     if (!response.ok) {
       if (response.status === 401 && token && token === this.token()) {
+        if (retryUnauthorized) {
+          const renewed = await this.renewSession();
+          if (renewed) return this.request<T>(method, path, body, false);
+        }
         this.onUnauthorized();
       }
       const message =
@@ -74,6 +102,16 @@ export class ApiClient {
 
   signIn(input: { email: string; password: string }) {
     return this.request<AuthSession>('POST', '/auth/signin', input);
+  }
+
+  /**
+   * Exchanges a refresh token for a new session, rotating the refresh token in
+   * the process: the value passed in is dead once this resolves, so callers
+   * must store the returned one. Throws ApiError(401) when it was already
+   * spent, revoked or expired, which is unrecoverable without signing in.
+   */
+  refresh(refreshToken: string) {
+    return this.request<AuthSession>('POST', '/auth/refresh', { refresh_token: refreshToken }, false);
   }
 
   /**

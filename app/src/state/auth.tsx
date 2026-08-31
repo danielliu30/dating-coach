@@ -34,31 +34,79 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
   const [user, setUser] = useState<Profile | null>(null);
   const tokenRef = useRef<string | null>(null);
   const expiresRef = useRef<string>('');
+  const refreshTokenRef = useRef<string | null>(null);
+  const refreshExpiresRef = useRef<string>('');
+  // One in-flight renewal is shared by every request that hits a 401 at once,
+  // so the rotating refresh token is spent by a single exchange.
+  const renewalRef = useRef<Promise<string | null> | null>(null);
 
   // The client reads the token through a ref so requests always use the latest
   // one without re-creating the client on every render.
   tokenRef.current = token;
+
+  // Writes a session everywhere it is held: refs, state and storage. Kept out
+  // of the render body so the renewal handler registered once on mount can use
+  // it, and declared before the effects that call it.
+  const persist = useCallback(async (session: AuthSession) => {
+    tokenRef.current = session.token;
+    expiresRef.current = session.expires_at ?? '';
+    refreshTokenRef.current = session.refresh_token ?? null;
+    refreshExpiresRef.current = session.refresh_expires_at ?? '';
+    setToken(session.token);
+    setUser(session.user);
+    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(session));
+    return session.user;
+  }, []);
+
   useEffect(() => {
     api.useToken(() => tokenRef.current);
+    // Access tokens last minutes, so a 401 is normally just expiry: trade the
+    // refresh token for a new pair and let the client retry.
+    api.onAccessTokenExpired(() => {
+      if (renewalRef.current) return renewalRef.current;
+      const stored = refreshTokenRef.current;
+      if (!stored) return Promise.resolve(null);
+      renewalRef.current = api
+        .refresh(stored)
+        .then(async (session) => {
+          await persist(session);
+          return session.token;
+        })
+        .catch(() => null)
+        .finally(() => {
+          renewalRef.current = null;
+        });
+      return renewalRef.current;
+    });
     // A token can also expire while the app is open; drop it centrally so the
     // UI leaves the authenticated tabs instead of failing every request.
     api.onSessionRejected(() => {
       tokenRef.current = null;
       expiresRef.current = '';
+      refreshTokenRef.current = null;
+      refreshExpiresRef.current = '';
       setToken(null);
       setUser(null);
       void AsyncStorage.removeItem(STORAGE_KEY).catch(() => undefined);
     });
-  }, []);
+  }, [persist]);
 
   useEffect(() => {
     void (async () => {
       try {
         const raw = await AsyncStorage.getItem(STORAGE_KEY);
         const stored = raw ? (JSON.parse(raw) as Partial<AuthSession>) : null;
-        if (stored?.token && stored.user && isFresh(stored.expires_at)) {
+        // A stale access token is fine to restore as long as the refresh token
+        // behind it still lives: the first request renews it.
+        if (
+          stored?.token &&
+          stored.user &&
+          (isFresh(stored.expires_at) || isFresh(stored.refresh_expires_at))
+        ) {
           tokenRef.current = stored.token;
           expiresRef.current = stored.expires_at ?? '';
+          refreshTokenRef.current = stored.refresh_token ?? null;
+          refreshExpiresRef.current = stored.refresh_expires_at ?? '';
           setToken(stored.token);
           setUser(stored.user);
         } else if (raw) {
@@ -74,19 +122,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
     })();
   }, []);
 
-  const persist = useCallback(async (session: AuthSession) => {
-    tokenRef.current = session.token;
-    expiresRef.current = session.expires_at ?? '';
-    setToken(session.token);
-    setUser(session.user);
-    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(session));
-    return session.user;
-  }, []);
-
   // Drops the session everywhere it is held: refs, state and storage.
   const clearSession = useCallback(async () => {
     tokenRef.current = null;
     expiresRef.current = '';
+    refreshTokenRef.current = null;
+    refreshExpiresRef.current = '';
     setToken(null);
     setUser(null);
     await AsyncStorage.removeItem(STORAGE_KEY);
@@ -98,7 +139,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
     if (!tokenRef.current) return profile;
     await AsyncStorage.setItem(
       STORAGE_KEY,
-      JSON.stringify({ token: tokenRef.current, expires_at: expiresRef.current, user: profile }),
+      JSON.stringify({
+        token: tokenRef.current,
+        expires_at: expiresRef.current,
+        refresh_token: refreshTokenRef.current ?? undefined,
+        refresh_expires_at: refreshExpiresRef.current,
+        user: profile,
+      }),
     );
     return profile;
   }, []);

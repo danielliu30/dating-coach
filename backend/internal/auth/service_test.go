@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -46,14 +47,16 @@ func newTestService(t *testing.T) (*Service, *TokenIssuer, *pgxpool.Pool) {
 	}
 
 	issuer := NewTokenIssuer("test-secret")
-	svc := NewService(db.New(pool), issuer, silentNotifier{}, bcrypt.MinCost, "http://app.test", nil, nil, 24*time.Hour, 30*time.Minute)
+	queries := db.New(pool)
+	svc := NewService(queries, issuer, silentNotifier{}, bcrypt.MinCost, "http://app.test", NewRefreshTokens(queries, 24*time.Hour), nil, 15*time.Minute, 30*time.Minute)
 	return svc, issuer, pool
 }
 
 // TestSignUpMintsVerifyScopedToken covers the scope split end to end, through
 // the real queries: the new account exists but its token is verify-scoped and
 // short-lived, and only confirming the address — by verifying with that token,
-// or by signing in afterwards — yields a session-scoped one.
+// or by signing in afterwards — yields a session-scoped one paired with a
+// refresh token.
 func TestSignUpMintsVerifyScopedToken(t *testing.T) {
 	svc, issuer, pool := newTestService(t)
 	ctx := context.Background()
@@ -83,13 +86,31 @@ func TestSignUpMintsVerifyScopedToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("verify email: %v", err)
 	}
-	assertTokenScope(t, issuer, verified.Token, ScopeSession, 24*time.Hour)
+	assertTokenScope(t, issuer, verified.Token, ScopeSession, 15*time.Minute)
+	if verified.RefreshToken == "" {
+		t.Fatal("verification opened a session without a refresh token, so it dies in 15 minutes")
+	}
 
 	signIn, err := svc.SignIn(ctx, email, password)
 	if err != nil {
 		t.Fatalf("sign in: %v", err)
 	}
-	assertTokenScope(t, issuer, signIn.Token, ScopeSession, 24*time.Hour)
+	assertTokenScope(t, issuer, signIn.Token, ScopeSession, 15*time.Minute)
+	if signIn.RefreshToken == "" || signIn.RefreshToken == verified.RefreshToken {
+		t.Fatal("sign-in must mint its own refresh token")
+	}
+
+	refreshed, err := svc.Refresh(ctx, signIn.RefreshToken)
+	if err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	assertTokenScope(t, issuer, refreshed.Token, ScopeSession, 15*time.Minute)
+	if refreshed.RefreshToken == signIn.RefreshToken {
+		t.Fatal("refresh did not rotate the token")
+	}
+	if _, err := svc.Refresh(ctx, signIn.RefreshToken); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("reusing the spent refresh token: err = %v, want ErrInvalidToken", err)
+	}
 }
 
 // assertTokenScope fails the test unless raw carries the given scope claim and

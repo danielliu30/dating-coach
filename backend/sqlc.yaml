@@ -2,7 +2,9 @@ version: "2"
 sql:
   - engine: postgresql
     queries: internal/store/queries
-    schema: migrations/000001_init.up.sql
+    schema:
+      - migrations/000001_init.up.sql
+      - migrations/000002_refresh_tokens.up.sql
     gen:
       go:
         package: db

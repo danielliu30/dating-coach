@@ -43,7 +43,7 @@ type Service struct {
 	notifier       notify.Notifier
 	bcryptCost     int
 	appURL         string
-	denylist       *Denylist
+	refresh        *RefreshTokens
 	deletions      DeletionPublisher
 	sessionTTL     time.Duration
 	verifyTokenTTL time.Duration
@@ -55,9 +55,10 @@ type DeletionPublisher interface {
 	Publish(ctx context.Context, job account.Job) error
 }
 
-// NewService wires the service dependencies; called once from cmd/api. denylist
-// and deletions are the two halves of account deletion: revoke now, delete rows
-// later. sessionTTL is the lifetime of the session token issued at sign-in;
+// NewService wires the service dependencies; called once from cmd/api. refresh
+// and deletions are the two halves of account deletion: end the sessions now,
+// delete rows later. sessionTTL is the lifetime of the access token issued at
+// sign-in, kept short because nothing withdraws it before it expires;
 // verifyTokenTTL that of the verify-scoped token issued at sign-up.
 func NewService(
 	queries *db.Queries,
@@ -65,7 +66,7 @@ func NewService(
 	notifier notify.Notifier,
 	bcryptCost int,
 	appURL string,
-	denylist *Denylist,
+	refresh *RefreshTokens,
 	deletions DeletionPublisher,
 	sessionTTL time.Duration,
 	verifyTokenTTL time.Duration,
@@ -76,7 +77,7 @@ func NewService(
 		notifier:       notifier,
 		bcryptCost:     bcryptCost,
 		appURL:         appURL,
-		denylist:       denylist,
+		refresh:        refresh,
 		deletions:      deletions,
 		sessionTTL:     sessionTTL,
 		verifyTokenTTL: verifyTokenTTL,
@@ -84,18 +85,20 @@ func NewService(
 }
 
 // DeleteAccount ends every session for userID and queues the removal of its
-// rows. It returns once the revocation is durable in Redis and the broker has
-// confirmed the deletion job.
+// rows. It returns once the refresh tokens are revoked and the broker has
+// confirmed the deletion job. The access token the caller already holds keeps
+// working for the rest of its short lifetime, which is the price of verifying
+// access tokens by signature alone.
 //
-// The revocation is written first and is never rolled back: if queueing then
-// fails, the caller is locked out of an account whose data still exists, which
-// an operator can undo, whereas deleting the rows of a caller whose tokens
-// still work cannot be undone. An error therefore means the account may
-// already be unusable, and the caller should repeat the request: it is
-// idempotent, and DELETE /me stays reachable with a revoked token so the
-// deletion can still be queued once the broker recovers.
+// The revocation is committed first and is never rolled back: if queueing then
+// fails, the caller can no longer obtain new access tokens for an account whose
+// data still exists, which an operator can undo, whereas deleting the rows of a
+// caller who can still refresh cannot be undone. An error therefore means the
+// account may already be unusable, and the caller should repeat the request: it
+// is idempotent, and the unexpired access token keeps DELETE /me reachable so
+// the deletion can still be queued once the broker recovers.
 func (s *Service) DeleteAccount(ctx context.Context, userID uuid.UUID) error {
-	if err := s.denylist.Revoke(ctx, userID); err != nil {
+	if err := s.refresh.RevokeAll(ctx, userID); err != nil {
 		return fmt.Errorf("revoke sessions: %w", err)
 	}
 	if err := s.deletions.Publish(ctx, account.Job{UserID: userID.String()}); err != nil {
@@ -112,12 +115,16 @@ type SignUpInput struct {
 	Role        string `json:"role"`
 }
 
-// Session is the sign-up/sign-in response: a bearer token plus the profile the
-// clients render right away.
+// Session is the sign-up/sign-in response: a short-lived access token plus the
+// profile the clients render right away. The refresh fields are empty on
+// responses that do not open a full session: sign-up, which issues a
+// verify-scoped token, and verification by anyone but the account's owner.
 type Session struct {
-	Token     string  `json:"token"`
-	ExpiresAt string  `json:"expires_at"`
-	User      Profile `json:"user"`
+	Token            string  `json:"token"`
+	ExpiresAt        string  `json:"expires_at"`
+	RefreshToken     string  `json:"refresh_token,omitempty"`
+	RefreshExpiresAt string  `json:"refresh_expires_at,omitempty"`
+	User             Profile `json:"user"`
 }
 
 // Profile is the public view of a user row, also returned by GET /auth/me.
@@ -224,14 +231,58 @@ func (s *Service) SignIn(ctx context.Context, email, password string) (Session, 
 		return Session{}, ErrEmailNotVerified
 	}
 
-	token, expires, err := s.issuer.Issue(user.ID, user.Email, user.Role, ScopeSession, s.sessionTTL)
+	return s.openSession(ctx, user)
+}
+
+// Refresh exchanges a refresh token for a new access token and rotates the
+// refresh token itself. It returns ErrInvalidToken when the token is unknown,
+// expired or already spent, which is also what a deleted account's token looks
+// like, since deletion revokes them.
+func (s *Service) Refresh(ctx context.Context, refreshToken string) (Session, error) {
+	userID, replacement, refreshExpires, err := s.refresh.Rotate(ctx, refreshToken)
+	if err != nil {
+		return Session{}, err
+	}
+	user, err := s.queries.GetUserByID(ctx, userID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Session{}, ErrInvalidToken
+		}
+		return Session{}, fmt.Errorf("lookup user: %w", err)
+	}
+	if !user.EmailVerified {
+		return Session{}, ErrEmailNotVerified
+	}
+	access, expires, err := s.issuer.Issue(user.ID, user.Email, user.Role, ScopeSession, s.sessionTTL)
 	if err != nil {
 		return Session{}, err
 	}
 	return Session{
-		Token:     token,
-		ExpiresAt: expires.UTC().Format(time.RFC3339),
-		User:      profileOf(user),
+		Token:            access,
+		ExpiresAt:        expires.UTC().Format(time.RFC3339),
+		RefreshToken:     replacement,
+		RefreshExpiresAt: refreshExpires.UTC().Format(time.RFC3339),
+		User:             profileOf(user),
+	}, nil
+}
+
+// openSession issues the access/refresh pair that starts a signed-in session.
+// Sign-in and self-verification both end here, so the two cannot drift.
+func (s *Service) openSession(ctx context.Context, user db.User) (Session, error) {
+	access, expires, err := s.issuer.Issue(user.ID, user.Email, user.Role, ScopeSession, s.sessionTTL)
+	if err != nil {
+		return Session{}, err
+	}
+	refreshToken, refreshExpires, err := s.refresh.Issue(ctx, user.ID)
+	if err != nil {
+		return Session{}, err
+	}
+	return Session{
+		Token:            access,
+		ExpiresAt:        expires.UTC().Format(time.RFC3339),
+		RefreshToken:     refreshToken,
+		RefreshExpiresAt: refreshExpires.UTC().Format(time.RFC3339),
+		User:             profileOf(user),
 	}, nil
 }
 
@@ -253,19 +304,10 @@ func (s *Service) VerifyEmail(ctx context.Context, token, bearer string) (Sessio
 		}
 		return Session{}, fmt.Errorf("verify email: %w", err)
 	}
-	profile := profileOf(user)
 	if !s.ownsBearer(user.ID, bearer) {
-		return Session{User: profile}, nil
+		return Session{User: profileOf(user)}, nil
 	}
-	sessionToken, expires, err := s.issuer.Issue(user.ID, user.Email, user.Role, ScopeSession, s.sessionTTL)
-	if err != nil {
-		return Session{}, fmt.Errorf("issue session: %w", err)
-	}
-	return Session{
-		Token:     sessionToken,
-		ExpiresAt: expires.UTC().Format(time.RFC3339),
-		User:      profile,
-	}, nil
+	return s.openSession(ctx, user)
 }
 
 // ownsBearer reports whether bearer is a currently valid token for userID.

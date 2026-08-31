@@ -28,7 +28,8 @@ Go API ──── PostgreSQL (users, coaches, sessions, chat, conversations, a
 
 - Analysis is asynchronous: `POST /api/v1/analysis/conversations` stores the transcript, creates a `pending` result and publishes a job. The worker calls the ML service, stores per-segment scores as JSONB and notifies the user. The app polls the result endpoint.
 - Live chat messages are persisted in PostgreSQL and fanned out over Redis pub/sub, so any API replica can serve a socket.
-- Account deletion is two-phase: `DELETE /api/v1/auth/me` revokes the account in Redis before it answers, so its still-valid JWTs stop working immediately, and queues the row removal (cascading across every table) to the worker. Deletions that keep failing land on `account.deletion.dlq`.
+- Sessions are a short-lived access JWT (15m, verified by signature alone, so no per-request database work) paired with an opaque refresh token stored only as a SHA-256 hash in `refresh_tokens`. `POST /api/v1/auth/refresh` exchanges and rotates it, so a stolen refresh token is usable at most once.
+- Account deletion is two-phase: `DELETE /api/v1/auth/me` revokes the account's refresh tokens before it answers, so it can never obtain another access token and the one it holds dies within 15 minutes, and queues the row removal (cascading across every table) to the worker. Deletions that keep failing land on `account.deletion.dlq`.
 - The ML service is fully decoupled — HTTP only, no shared database.
 
 ## Quick start (Docker Compose)

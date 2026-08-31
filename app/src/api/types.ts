@@ -13,6 +13,9 @@ export interface Profile {
 export interface AuthSession {
   token: string;
   expires_at: string;
+  /** Absent on responses that do not open a session, e.g. sign-up. */
+  refresh_token?: string;
+  refresh_expires_at?: string;
   user: Profile;
 }
 
