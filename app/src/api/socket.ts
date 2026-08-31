@@ -21,6 +21,7 @@ export class ChatSocket {
   private closed = false;
   private opened = false;
   private retry: ReturnType<typeof setTimeout> | null = null;
+  private renewedFor: string | null = null;
   private outbox: ChatEvent[] = [];
 
   constructor(
@@ -58,7 +59,7 @@ export class ChatSocket {
       const unopened = !this.opened;
       this.opened = false;
       this.handlers.onStatus?.('closed');
-      void this.scheduleReconnect(unopened);
+      void this.scheduleReconnect(unopened ? token : null);
     };
     socket.onerror = () => socket.close();
   }
@@ -69,12 +70,20 @@ export class ChatSocket {
    * shared renewal runs first. Only a refused refresh token ends the retries; a
    * renewal that merely could not be reached is treated like any other outage
    * and retried with backoff.
+   *
+   * expired is the token the failed handshake carried, or null if the socket
+   * had opened. Each token buys one renewal: a handshake the server refuses for
+   * its own reasons — a thread that is gone, or not the caller's — otherwise
+   * rotates a fresh refresh token on every retry, forever.
    */
-  private async scheduleReconnect(unopened: boolean): Promise<void> {
+  private async scheduleReconnect(expired: string | null): Promise<void> {
     if (this.closed) return;
-    if (unopened && (await api.renewSession()) === 'rejected') {
-      this.close();
-      return;
+    if (expired !== null && expired !== this.renewedFor) {
+      this.renewedFor = expired;
+      if ((await api.renewSession()) === 'rejected') {
+        this.close();
+        return;
+      }
     }
     if (this.closed) return;
     this.attempts += 1;

@@ -124,6 +124,7 @@ func Load() (*Config, error) {
 	}{
 		{"JWT_TTL", cfg.JWTTTL},
 		{"VERIFY_TOKEN_TTL", cfg.VerifyTokenTTL},
+		{"REFRESH_TOKEN_TTL", cfg.RefreshTokenTTL},
 		{"AUTH_RATE_WINDOW", cfg.AuthRateWindow},
 		{"ML_SERVICE_TIMEOUT", cfg.MLServiceTimeout},
 		{"DEAD_LETTER_ALERT_PERIOD", cfg.DeadLetterAlertPeriod},
