@@ -33,6 +33,19 @@ const isFresh = (stored: Partial<AuthSession>): boolean => {
 // reaching it. Only a refusal is worth throwing the stored session away for.
 const isRefused = (error: unknown): boolean => error instanceof ApiError && error.status === 401;
 
+// Reads a stored session, or null when there is nothing usable to restore:
+// unparseable JSON and a blob missing the token or the profile are both worth
+// forgetting, and neither says anything about the backend.
+const parseSession = (raw: string | null): (Partial<AuthSession> & Pick<AuthSession, 'token' | 'user'>) | null => {
+  if (!raw) return null;
+  try {
+    const stored = JSON.parse(raw) as Partial<AuthSession>;
+    return stored.token && stored.user ? { ...stored, token: stored.token, user: stored.user } : null;
+  } catch {
+    return null;
+  }
+};
+
 export function AuthProvider({ children }: { children: React.ReactNode }): React.ReactElement {
   const [ready, setReady] = useState(false);
   const [token, setToken] = useState<string | null>(null);
@@ -98,28 +111,33 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
   // already expired.
   useEffect(() => {
     void (async () => {
+      const forget = () => AsyncStorage.removeItem(STORAGE_KEY).catch(() => undefined);
       try {
         const raw = await AsyncStorage.getItem(STORAGE_KEY);
-        const stored = raw ? (JSON.parse(raw) as Partial<AuthSession>) : null;
-        if (stored?.token && stored.user && isFresh(stored)) {
+        const stored = parseSession(raw);
+        if (!stored) {
+          if (raw) await forget();
+        } else if (isFresh(stored)) {
           await persist({
             token: stored.token,
             refresh_token: stored.refresh_token,
             expires_at: stored.expires_at ?? '',
             user: stored.user,
           });
-        } else if (stored?.refresh_token) {
-          await persist(await api.refreshSession(stored.refresh_token));
-        } else if (raw) {
-          await AsyncStorage.removeItem(STORAGE_KEY);
+        } else if (!stored.refresh_token) {
+          await forget();
+        } else {
+          try {
+            await persist(await api.refreshSession(stored.refresh_token));
+          } catch (error) {
+            // Only a refusal is final. An unreachable backend leaves the app
+            // signed out for now but keeps the session for the next launch.
+            if (isRefused(error)) await forget();
+          }
         }
-      } catch (error) {
-        // Start signed out rather than leaving the app on the loading screen,
-        // but only forget the session if it was refused or is unreadable: an
-        // unreachable backend is worth another try on the next launch.
-        if (!(error instanceof ApiError) || isRefused(error)) {
-          await AsyncStorage.removeItem(STORAGE_KEY).catch(() => undefined);
-        }
+      } catch {
+        // Storage itself failed; start signed out rather than leaving the app
+        // on the loading screen.
       } finally {
         setReady(true);
       }
