@@ -20,11 +20,11 @@ interface AuthState {
 
 const AuthContext = createContext<AuthState | null>(null);
 
-// A persisted session is usable while its access token is still valid, or while
-// it holds a refresh token to mint a new one with. Restoring a session with
-// neither lands the user in authenticated tabs where every request 401s.
-const isUsable = (stored: Partial<AuthSession>): boolean => {
-  if (stored.refresh_token) return true;
+// Whether the stored access token is still worth sending. Restoring an expired
+// one lands the user in authenticated tabs where every request 401s — and the
+// chat WebSocket, which carries the token in its URL and never sees a 401,
+// would just retry forever.
+const isFresh = (stored: Partial<AuthSession>): boolean => {
   const expiry = Date.parse(stored.expires_at ?? '');
   return Number.isFinite(expiry) && expiry > Date.now();
 };
@@ -54,30 +54,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
     });
   }, []);
 
-  useEffect(() => {
-    void (async () => {
-      try {
-        const raw = await AsyncStorage.getItem(STORAGE_KEY);
-        const stored = raw ? (JSON.parse(raw) as Partial<AuthSession>) : null;
-        if (stored?.token && stored.user && isUsable(stored)) {
-          tokenRef.current = stored.token;
-          refreshRef.current = stored.refresh_token ?? '';
-          expiresRef.current = stored.expires_at ?? '';
-          setToken(stored.token);
-          setUser(stored.user);
-        } else if (raw) {
-          await AsyncStorage.removeItem(STORAGE_KEY);
-        }
-      } catch {
-        // Unreadable or corrupt session: drop it and start signed out rather
-        // than leaving the app stuck on the loading screen.
-        await AsyncStorage.removeItem(STORAGE_KEY).catch(() => undefined);
-      } finally {
-        setReady(true);
-      }
-    })();
-  }, []);
-
   const persist = useCallback(async (session: AuthSession) => {
     tokenRef.current = session.token;
     refreshRef.current = session.refresh_token ?? '';
@@ -101,6 +77,36 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
         return false;
       }
     });
+  }, [persist]);
+
+  // Restores the stored session, renewing it up front when the app was closed
+  // for longer than an access token lives, so nothing is handed a token that is
+  // already expired.
+  useEffect(() => {
+    void (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(STORAGE_KEY);
+        const stored = raw ? (JSON.parse(raw) as Partial<AuthSession>) : null;
+        if (stored?.token && stored.user && isFresh(stored)) {
+          await persist({
+            token: stored.token,
+            refresh_token: stored.refresh_token,
+            expires_at: stored.expires_at ?? '',
+            user: stored.user,
+          });
+        } else if (stored?.refresh_token) {
+          await persist(await api.refreshSession(stored.refresh_token));
+        } else if (raw) {
+          await AsyncStorage.removeItem(STORAGE_KEY);
+        }
+      } catch {
+        // Unreadable session, or one the backend refused to renew: drop it and
+        // start signed out rather than leaving the app on the loading screen.
+        await AsyncStorage.removeItem(STORAGE_KEY).catch(() => undefined);
+      } finally {
+        setReady(true);
+      }
+    })();
   }, [persist]);
 
   // Drops the session everywhere it is held: refs, state and storage.

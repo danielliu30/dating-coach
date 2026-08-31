@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/danielliu30/dating-coach/backend/internal/account"
@@ -38,6 +39,7 @@ const verificationTTL = 48 * time.Hour
 // passwords, mints sessions through the TokenIssuer and drives the email
 // verification flow. Handler is its only caller.
 type Service struct {
+	pool           *pgxpool.Pool
 	queries        *db.Queries
 	issuer         *TokenIssuer
 	notifier       notify.Notifier
@@ -55,11 +57,13 @@ type DeletionPublisher interface {
 	Publish(ctx context.Context, job account.Job) error
 }
 
-// NewService wires the service dependencies; called once from cmd/api.
+// NewService wires the service dependencies; called once from cmd/api. pool is
+// needed for the one operation that spans statements, refresh-token rotation.
 // sessionTTL is the lifetime of the access token issued at sign-in and is kept
 // short, verifyTokenTTL that of the verify-scoped token issued at sign-up, and
 // refreshTTL that of the refresh token clients trade in for new access tokens.
 func NewService(
+	pool *pgxpool.Pool,
 	queries *db.Queries,
 	issuer *TokenIssuer,
 	notifier notify.Notifier,
@@ -71,6 +75,7 @@ func NewService(
 	refreshTTL time.Duration,
 ) *Service {
 	return &Service{
+		pool:           pool,
 		queries:        queries,
 		issuer:         issuer,
 		notifier:       notifier,
@@ -229,7 +234,7 @@ func (s *Service) SignIn(ctx context.Context, email, password string) (Session, 
 		return Session{}, ErrEmailNotVerified
 	}
 
-	return s.openSession(ctx, user)
+	return s.openSession(ctx, s.queries, user)
 }
 
 // VerifyEmail consumes a verification token, marks the address confirmed and
@@ -255,7 +260,7 @@ func (s *Service) VerifyEmail(ctx context.Context, token, bearer string) (Sessio
 	if !s.ownsBearer(user.ID, bearer) {
 		return Session{User: profile}, nil
 	}
-	return s.openSession(ctx, user)
+	return s.openSession(ctx, s.queries, user)
 }
 
 // ownsBearer reports whether bearer is a currently valid token for userID.

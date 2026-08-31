@@ -58,7 +58,11 @@ func run() error {
 	)
 
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		deleter.PurgeExpiredRefreshTokens(ctx, refreshTokenPurgeInterval)
+	}()
 	go func() {
 		defer wg.Done()
 		consume(ctx, "analysis", func(ctx context.Context) error {
@@ -78,6 +82,9 @@ func run() error {
 const (
 	minBackoff = time.Second
 	maxBackoff = 30 * time.Second
+	// Expired refresh tokens are only dead weight, so sweeping them hourly is
+	// frequent enough to keep the table bounded.
+	refreshTokenPurgeInterval = time.Hour
 )
 
 // consume runs one consumer for the life of ctx, restarting it with exponential

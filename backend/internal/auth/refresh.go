@@ -23,12 +23,15 @@ var ErrInvalidRefreshToken = errors.New("invalid or expired refresh token")
 // session-scoped access token, and a refresh token to mint the next one with.
 // The expiry it reports is the access token's, so clients renew before it runs
 // out rather than after a request has already failed.
-func (s *Service) openSession(ctx context.Context, user db.User) (Session, error) {
+//
+// q is the handle the refresh token is written through, so a caller rotating
+// one can pass a transaction and have the new token share its fate.
+func (s *Service) openSession(ctx context.Context, q *db.Queries, user db.User) (Session, error) {
 	token, expires, err := s.issuer.Issue(user.ID, user.Email, user.Role, ScopeSession, s.sessionTTL)
 	if err != nil {
 		return Session{}, err
 	}
-	refresh, err := s.issueRefreshToken(ctx, user)
+	refresh, err := s.issueRefreshToken(ctx, q, user)
 	if err != nil {
 		return Session{}, err
 	}
@@ -43,12 +46,12 @@ func (s *Service) openSession(ctx context.Context, user db.User) (Session, error
 // issueRefreshToken stores a new refresh token for user and returns its plain
 // text, which is the only moment that value exists outside the client: the row
 // holds nothing but its hash, so the table cannot be replayed against the API.
-func (s *Service) issueRefreshToken(ctx context.Context, user db.User) (string, error) {
+func (s *Service) issueRefreshToken(ctx context.Context, q *db.Queries, user db.User) (string, error) {
 	token, err := randomToken()
 	if err != nil {
 		return "", err
 	}
-	if _, err := s.queries.CreateRefreshToken(ctx, db.CreateRefreshTokenParams{
+	if _, err := q.CreateRefreshToken(ctx, db.CreateRefreshTokenParams{
 		UserID:    user.ID,
 		TokenHash: hashRefreshToken(token),
 		ExpiresAt: time.Now().Add(s.refreshTTL),
@@ -66,6 +69,10 @@ func (s *Service) issueRefreshToken(ctx context.Context, user db.User) (string, 
 // every refresh token of that account is deleted, which ends the sessions of
 // both the attacker and the victim, and the account has to sign in again. The
 // access tokens already minted survive until they expire, which is minutes.
+//
+// Spending the presented token and storing its replacement share a
+// transaction, so a failure half way through cannot leave the caller holding a
+// token that is spent but was never exchanged for another.
 //
 // It returns ErrInvalidRefreshToken for a token that is unknown, expired or
 // spent, including the reuse case.
@@ -88,9 +95,16 @@ func (s *Service) Refresh(ctx context.Context, raw string) (Session, error) {
 		return Session{}, ErrInvalidRefreshToken
 	}
 
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Session{}, fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := s.queries.WithTx(tx)
+
 	// The update is the rotation: it only matches a token that is still unspent
 	// and unexpired, so two concurrent requests cannot both be served.
-	rows, err := s.queries.UseRefreshToken(ctx, row.ID)
+	rows, err := q.UseRefreshToken(ctx, row.ID)
 	if err != nil {
 		return Session{}, fmt.Errorf("spend refresh token: %w", err)
 	}
@@ -98,14 +112,21 @@ func (s *Service) Refresh(ctx context.Context, raw string) (Session, error) {
 		return Session{}, ErrInvalidRefreshToken
 	}
 
-	user, err := s.queries.GetUserByID(ctx, row.UserID)
+	user, err := q.GetUserByID(ctx, row.UserID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Session{}, ErrInvalidRefreshToken
 		}
 		return Session{}, fmt.Errorf("get user: %w", err)
 	}
-	return s.openSession(ctx, user)
+	session, err := s.openSession(ctx, q, user)
+	if err != nil {
+		return Session{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Session{}, fmt.Errorf("commit rotation: %w", err)
+	}
+	return session, nil
 }
 
 // hashRefreshToken returns the hex SHA-256 of a refresh token, which is what

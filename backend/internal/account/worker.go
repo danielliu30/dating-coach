@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -43,22 +44,32 @@ func (w *Worker) Handle(ctx context.Context, job Job, lastAttempt bool) error {
 		return nil
 	}
 	slog.Info("account deleted", "user_id", userID)
-	w.purgeExpiredRefreshTokens(ctx)
 	return nil
 }
 
-// purgeExpiredRefreshTokens drops refresh tokens that can no longer be
+// PurgeExpiredRefreshTokens drops refresh tokens that can no longer be
 // exchanged, so the table stays bounded: spent tokens are kept until they
-// expire to make reuse detectable, and are dead weight afterwards. Failures are
-// logged and swallowed, since the deletion the job was queued for has already
-// committed.
-func (w *Worker) purgeExpiredRefreshTokens(ctx context.Context) {
-	rows, err := w.queries.DeleteExpiredRefreshTokens(ctx)
-	if err != nil {
-		slog.Warn("purge expired refresh tokens", "error", err)
-		return
-	}
-	if rows > 0 {
-		slog.Info("purged expired refresh tokens", "rows", rows)
+// expire to make reuse detectable, and are dead weight afterwards. It runs on
+// its own schedule rather than off the deletion queue, because rotation creates
+// them for every active account, not only the ones being deleted.
+//
+// It repeats every interval until ctx is cancelled, and logs failures rather
+// than returning them: a purge that cannot run only leaves rows behind.
+func (w *Worker) PurgeExpiredRefreshTokens(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		rows, err := w.queries.DeleteExpiredRefreshTokens(ctx)
+		switch {
+		case err != nil && ctx.Err() == nil:
+			slog.Warn("purge expired refresh tokens", "error", err)
+		case rows > 0:
+			slog.Info("purged expired refresh tokens", "rows", rows)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
 	}
 }
