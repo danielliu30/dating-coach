@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
@@ -26,6 +27,11 @@ const maxAttempts = 2
 // attempt.
 const attemptsHeader = "x-attempts"
 
+// retryDelay is how long a failed deletion waits before the next attempt. The
+// usual cause of a failure is a database that is down or overloaded, and an
+// immediate republish would spend every attempt inside the same outage.
+const retryDelay = 30 * time.Second
+
 // Job is one queued account deletion.
 type Job struct {
 	UserID string `json:"user_id"`
@@ -34,6 +40,11 @@ type Job struct {
 // DeadLetterQueue returns the name of the queue that holds deletions the worker
 // could not apply, derived from the work queue's name.
 func DeadLetterQueue(name string) string { return name + ".dlq" }
+
+// RetryQueue returns the name of the queue that holds deletions waiting for
+// their next attempt, derived from the work queue's name. Nothing consumes it:
+// its messages expire back onto the work queue.
+func RetryQueue(name string) string { return name + ".retry" }
 
 // Queue is a thin RabbitMQ wrapper used by the API (publish) and the worker
 // (consume). Its work queue dead-letters into DeadLetterQueue(name): a deletion
@@ -72,6 +83,17 @@ func OpenQueue(url, name string) (*Queue, error) {
 	if _, err := channel.QueueDeclare(name, true, false, false, false, args); err != nil {
 		return closeAll(fmt.Errorf("declare queue %q: %w", name, err))
 	}
+	// The retry queue has no consumer: a message sits there until its TTL runs
+	// out and the broker dead-letters it back onto the work queue.
+	retry := RetryQueue(name)
+	retryArgs := amqp.Table{
+		"x-message-ttl":             retryDelay.Milliseconds(),
+		"x-dead-letter-exchange":    "",
+		"x-dead-letter-routing-key": name,
+	}
+	if _, err := channel.QueueDeclare(retry, true, false, false, false, retryArgs); err != nil {
+		return closeAll(fmt.Errorf("declare queue %q: %w", retry, err))
+	}
 	if err := channel.Qos(prefetchCount, 0, false); err != nil {
 		return closeAll(fmt.Errorf("set qos: %w", err))
 	}
@@ -86,17 +108,19 @@ func OpenQueue(url, name string) (*Queue, error) {
 // Publish sends a deletion and waits for the broker to confirm it, so callers
 // only see success once the job is durably queued.
 func (q *Queue) Publish(ctx context.Context, job Job) error {
-	return q.publish(ctx, job, 0)
+	return q.publish(ctx, q.name, job, 0)
 }
 
-// publish queues job with its attempt count, which Consume uses to decide
-// between another attempt and the dead-letter queue.
-func (q *Queue) publish(ctx context.Context, job Job, attempts int64) error {
+// publish queues job on routingKey with its attempt count, which Consume uses
+// to decide between another attempt and the dead-letter queue. Retries go to
+// RetryQueue rather than the work queue, so they are only redelivered once the
+// retry queue's TTL has elapsed.
+func (q *Queue) publish(ctx context.Context, routingKey string, job Job, attempts int64) error {
 	body, err := json.Marshal(job)
 	if err != nil {
 		return fmt.Errorf("encode job: %w", err)
 	}
-	confirm, err := q.channel.PublishWithDeferredConfirmWithContext(ctx, "", q.name, true, false, amqp.Publishing{
+	confirm, err := q.channel.PublishWithDeferredConfirmWithContext(ctx, "", routingKey, true, false, amqp.Publishing{
 		ContentType:  "application/json",
 		Body:         body,
 		DeliveryMode: amqp.Persistent,
@@ -251,7 +275,7 @@ func (q *Queue) Consume(ctx context.Context, handle JobHandler) error {
 				// original headers, so the count would never advance. A failure
 				// here falls back to a plain requeue, which repeats an attempt
 				// but never drops the deletion.
-				if err := q.publish(ctx, job, attempts); err != nil {
+				if err := q.publish(ctx, RetryQueue(q.name), job, attempts); err != nil {
 					slog.Error("requeue account deletion", "error", err, "user_id", job.UserID)
 					_ = delivery.Nack(false, true)
 					continue
@@ -266,6 +290,21 @@ func (q *Queue) Consume(ctx context.Context, handle JobHandler) error {
 			}
 		}
 	}
+}
+
+// DeadLetterDepth reports how many deletions are sitting in the dead-letter
+// queue. Those accounts are revoked but still hold rows, and their revocation
+// entries expire with the JWT TTL, so a non-zero depth needs an operator before
+// then. The passive declare closes the channel if the queue is missing, which
+// makes the owning Queue unusable; callers should hold a connection of their
+// own rather than share the consumer's.
+func (q *Queue) DeadLetterDepth() (int, error) {
+	dlq := DeadLetterQueue(q.name)
+	state, err := q.channel.QueueDeclarePassive(dlq, true, false, false, false, nil)
+	if err != nil {
+		return 0, fmt.Errorf("inspect queue %q: %w", dlq, err)
+	}
+	return state.Messages, nil
 }
 
 // Close shuts the channel and connection down.

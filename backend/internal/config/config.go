@@ -34,6 +34,11 @@ type Config struct {
 	AnalysisQueue        string
 	AccountDeletionQueue string
 
+	// DeadLetterAlertPeriod is how often the worker reports the depth of the
+	// account-deletion dead-letter queue. It drives a ticker, so it must be
+	// positive.
+	DeadLetterAlertPeriod time.Duration
+
 	SMTPHost     string
 	SMTPPort     int
 	SMTPUsername string
@@ -91,13 +96,16 @@ func Load() (*Config, error) {
 		MLServiceTimeout:     envDuration("ML_SERVICE_TIMEOUT", 60*time.Second),
 		AnalysisQueue:        env("ANALYSIS_QUEUE", "conversation.analysis"),
 		AccountDeletionQueue: env("ACCOUNT_DELETION_QUEUE", "account.deletion"),
-		SMTPHost:             env("SMTP_HOST", ""),
-		SMTPPort:             envInt("SMTP_PORT", 587),
-		SMTPUsername:         env("SMTP_USERNAME", ""),
-		SMTPPassword:         env("SMTP_PASSWORD", ""),
-		MailFrom:             env("MAIL_FROM", "no-reply@datingcoach.local"),
-		PublicAppURL:         env("PUBLIC_APP_URL", "http://localhost:19006"),
-		CORSOrigins:          envList("CORS_ORIGINS", []string{"http://localhost:19006", "http://localhost:8081"}),
+
+		DeadLetterAlertPeriod: envDuration("DEAD_LETTER_ALERT_PERIOD", time.Minute),
+
+		SMTPHost:     env("SMTP_HOST", ""),
+		SMTPPort:     envInt("SMTP_PORT", 587),
+		SMTPUsername: env("SMTP_USERNAME", ""),
+		SMTPPassword: env("SMTP_PASSWORD", ""),
+		MailFrom:     env("MAIL_FROM", "no-reply@datingcoach.local"),
+		PublicAppURL: env("PUBLIC_APP_URL", "http://localhost:19006"),
+		CORSOrigins:  envList("CORS_ORIGINS", []string{"http://localhost:19006", "http://localhost:8081"}),
 	}
 
 	if cfg.DatabaseURL == "" {
@@ -106,6 +114,23 @@ func Load() (*Config, error) {
 	if cfg.JWTSecret == "" {
 		return nil, fmt.Errorf("JWT_SECRET is required")
 	}
+	// A non-positive duration is accepted by ParseDuration but is never a
+	// usable timeout, window or ticker interval.
+	for _, d := range []struct {
+		key   string
+		value time.Duration
+	}{
+		{"JWT_TTL", cfg.JWTTTL},
+		{"VERIFY_TOKEN_TTL", cfg.VerifyTokenTTL},
+		{"AUTH_RATE_WINDOW", cfg.AuthRateWindow},
+		{"ML_SERVICE_TIMEOUT", cfg.MLServiceTimeout},
+		{"DEAD_LETTER_ALERT_PERIOD", cfg.DeadLetterAlertPeriod},
+	} {
+		if d.value <= 0 {
+			bad = append(bad, fmt.Sprintf("%s=%s must be positive", d.key, d.value))
+		}
+	}
+
 	if len(bad) > 0 {
 		return nil, fmt.Errorf("invalid configuration: %s", strings.Join(bad, "; "))
 	}
