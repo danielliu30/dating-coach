@@ -76,6 +76,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
     // A token can also expire while the app is open; drop it centrally so the
     // UI leaves the authenticated tabs instead of failing every request.
     api.onSessionRejected(() => {
+      // A request already in flight when the user signed out lands here with
+      // nothing left to reject: dropping an absent session is a no-op, and
+      // blaming an expiry for a sign-out the user asked for is a lie.
+      if (!tokenRef.current) return;
       generationRef.current += 1;
       tokenRef.current = null;
       refreshRef.current = '';
