@@ -173,6 +173,28 @@ func TestRotateRejectsUnusableTokens(t *testing.T) {
 	}
 }
 
+// TestRotateKeepsTheTokenWhenTheReplacementFails guards the ordering inside
+// Rotate: a failure to store the replacement must leave the presented token
+// exchangeable, or the client is stranded with no way back into its session.
+func TestRotateKeepsTheTokenWhenTheReplacementFails(t *testing.T) {
+	store := &stubRefreshStore{}
+	refresh := NewRefreshTokens(store, time.Hour)
+	token, _, err := refresh.Issue(context.Background(), uuid.New())
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+
+	store.createErr = errors.New("connection refused")
+	if _, _, _, err := refresh.Rotate(context.Background(), token); err == nil || errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("err = %v, want a store failure", err)
+	}
+
+	store.createErr = nil
+	if _, _, _, err := refresh.Rotate(context.Background(), token); err != nil {
+		t.Fatalf("retrying the rotation: %v", err)
+	}
+}
+
 // TestRotateSurfacesStoreFailures keeps an unreachable database distinct from a
 // bad token, so a client is not signed out over an outage.
 func TestRotateSurfacesStoreFailures(t *testing.T) {

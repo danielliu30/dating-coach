@@ -24,14 +24,21 @@ export class ApiError extends Error {
 
 type TokenProvider = () => string | null;
 
-/** Trades the stored refresh token for a new access token, or null if it fails. */
-type SessionRenewer = () => Promise<string | null>;
+/**
+ * Outcome of trading the stored refresh token for a new access token:
+ * 'renewed' when a fresh one is in place, 'invalid' when the refresh token is
+ * gone or rejected and the session is over, 'unavailable' when the exchange
+ * could not be completed (offline, 5xx) and the session may still be good.
+ */
+export type RenewalOutcome = 'renewed' | 'invalid' | 'unavailable';
+
+type SessionRenewer = () => Promise<RenewalOutcome>;
 
 /** Typed client for the Go API. One instance per app, token injected lazily. */
 export class ApiClient {
   private token: TokenProvider = () => null;
   private onUnauthorized: () => void = () => undefined;
-  private renewSession: SessionRenewer = async () => null;
+  private renewSession: SessionRenewer = async () => 'invalid';
 
   useToken(provider: TokenProvider): void {
     this.token = provider;
@@ -45,8 +52,9 @@ export class ApiClient {
   /**
    * Registers the renewal handler used when an access token is rejected.
    * Access tokens are short-lived, so a 401 usually means "expired", not
-   * "signed out": the request is retried once with whatever handler returns,
-   * and only a null result signs the user out.
+   * "signed out": the request is retried once after a successful renewal, and
+   * only an 'invalid' outcome signs the user out — a renewal that merely could
+   * not be completed fails the request and leaves the session in place.
    */
   onAccessTokenExpired(handler: SessionRenewer): void {
     this.renewSession = handler;
@@ -79,11 +87,9 @@ export class ApiClient {
 
     if (!response.ok) {
       if (response.status === 401 && token && token === this.token()) {
-        if (retryUnauthorized) {
-          const renewed = await this.renewSession();
-          if (renewed) return this.request<T>(method, path, body, false);
-        }
-        this.onUnauthorized();
+        const outcome = retryUnauthorized ? await this.renewSession() : 'invalid';
+        if (outcome === 'renewed') return this.request<T>(method, path, body, false);
+        if (outcome === 'invalid') this.onUnauthorized();
       }
       const message =
         payload && typeof payload === 'object' && 'error' in payload

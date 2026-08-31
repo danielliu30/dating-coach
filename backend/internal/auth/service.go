@@ -353,10 +353,16 @@ func (s *Service) ResendVerification(ctx context.Context, email string) error {
 }
 
 // Profile reloads the authenticated caller from the database, so clients see
-// changes made since the token was issued.
+// changes made since the token was issued. It returns ErrInvalidToken once the
+// account behind the token is gone.
 func (s *Service) Profile(ctx context.Context, principal Principal) (Profile, error) {
 	user, err := s.queries.GetUserByID(ctx, principal.UserID)
 	if err != nil {
+		// The access token outlives the deletion of the rows behind it, so a
+		// missing user is an ended session rather than a server fault.
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Profile{}, ErrInvalidToken
+		}
 		return Profile{}, fmt.Errorf("get user: %w", err)
 	}
 	return profileOf(user), nil

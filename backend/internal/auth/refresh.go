@@ -74,17 +74,21 @@ func (r *RefreshTokens) Rotate(ctx context.Context, token string) (uuid.UUID, st
 		}
 		return uuid.Nil, "", time.Time{}, fmt.Errorf("lookup refresh token: %w", err)
 	}
-	// Losing the race to a concurrent refresh means the token was already spent.
+	// The replacement is minted before the presented token is spent, so a
+	// failure here leaves the client with a token it can retry rather than no
+	// session at all. The cost is an unreachable row when the revocation below
+	// fails or loses the race, which the expiry sweep collects.
+	replacement, expires, err := r.Issue(ctx, row.UserID)
+	if err != nil {
+		return uuid.Nil, "", time.Time{}, err
+	}
 	rows, err := r.store.RevokeRefreshToken(ctx, hash)
 	if err != nil {
 		return uuid.Nil, "", time.Time{}, fmt.Errorf("revoke refresh token: %w", err)
 	}
+	// Losing the race to a concurrent refresh means the token was already spent.
 	if rows == 0 {
 		return uuid.Nil, "", time.Time{}, ErrInvalidToken
-	}
-	replacement, expires, err := r.Issue(ctx, row.UserID)
-	if err != nil {
-		return uuid.Nil, "", time.Time{}, err
 	}
 	return row.UserID, replacement, expires, nil
 }

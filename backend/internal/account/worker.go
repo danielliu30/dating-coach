@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -43,20 +44,31 @@ func (w *Worker) Handle(ctx context.Context, job Job, lastAttempt bool) error {
 		return nil
 	}
 	slog.Info("account deleted", "user_id", userID)
-	w.purgeExpiredRefreshTokens(ctx)
 	return nil
 }
 
-// purgeExpiredRefreshTokens drops refresh tokens that can no longer be
-// exchanged, so the table stays bounded. Failures are logged and swallowed: the
-// rows are inert, and the deletion the job was queued for has already committed.
-func (w *Worker) purgeExpiredRefreshTokens(ctx context.Context) {
-	rows, err := w.queries.DeleteExpiredRefreshTokens(ctx)
-	if err != nil {
-		slog.Warn("purge expired refresh tokens", "error", err)
-		return
-	}
-	if rows > 0 {
-		slog.Info("purged expired refresh tokens", "rows", rows)
+// PurgeExpiredRefreshTokens deletes refresh tokens that can no longer be
+// exchanged, every interval until ctx is cancelled, so the table stays bounded
+// whether or not accounts are being deleted. It blocks, and is meant to run in
+// its own goroutine.
+//
+// Failures are logged and retried on the next tick rather than returned: the
+// leftover rows are inert, and nothing else depends on the sweep.
+func (w *Worker) PurgeExpiredRefreshTokens(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		rows, err := w.queries.DeleteExpiredRefreshTokens(ctx)
+		switch {
+		case err != nil && ctx.Err() == nil:
+			slog.Warn("purge expired refresh tokens", "error", err)
+		case err == nil && rows > 0:
+			slog.Info("purged expired refresh tokens", "rows", rows)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
 	}
 }

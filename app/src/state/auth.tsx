@@ -1,7 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
-import { api } from '../api/client';
+import { ApiError, api } from '../api/client';
+import type { RenewalOutcome } from '../api/client';
 import type { AuthSession, Profile, Role } from '../api/types';
 
 const STORAGE_KEY = 'dating-coach.session';
@@ -38,7 +39,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
   const refreshExpiresRef = useRef<string>('');
   // One in-flight renewal is shared by every request that hits a 401 at once,
   // so the rotating refresh token is spent by a single exchange.
-  const renewalRef = useRef<Promise<string | null> | null>(null);
+  const renewalRef = useRef<Promise<RenewalOutcome> | null>(null);
 
   // The client reads the token through a ref so requests always use the latest
   // one without re-creating the client on every render.
@@ -65,14 +66,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
     api.onAccessTokenExpired(() => {
       if (renewalRef.current) return renewalRef.current;
       const stored = refreshTokenRef.current;
-      if (!stored) return Promise.resolve(null);
+      if (!stored) return Promise.resolve<RenewalOutcome>('invalid');
       renewalRef.current = api
         .refresh(stored)
-        .then(async (session) => {
+        .then(async (session): Promise<RenewalOutcome> => {
+          // Signing out or signing in elsewhere while the exchange was in
+          // flight wins: reviving the session it replaced would sign the user
+          // back in behind their back.
+          if (refreshTokenRef.current !== stored) return 'unavailable';
           await persist(session);
-          return session.token;
+          return 'renewed';
         })
-        .catch(() => null)
+        // Only a rejected refresh token ends the session; an outage or a failed
+        // write leaves it in place to be retried.
+        .catch((error: unknown): RenewalOutcome =>
+          error instanceof ApiError && error.status === 401 ? 'invalid' : 'unavailable',
+        )
         .finally(() => {
           renewalRef.current = null;
         });

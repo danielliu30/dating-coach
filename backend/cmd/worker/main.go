@@ -58,7 +58,11 @@ func run() error {
 	)
 
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		deleter.PurgeExpiredRefreshTokens(ctx, refreshTokenPurgeInterval)
+	}()
 	go func() {
 		defer wg.Done()
 		consume(ctx, "analysis", func(ctx context.Context) error {
@@ -76,6 +80,10 @@ func run() error {
 }
 
 const (
+	// Expired refresh tokens are unusable, so sweeping them is housekeeping
+	// rather than a security measure and can run infrequently.
+	refreshTokenPurgeInterval = time.Hour
+
 	minBackoff = time.Second
 	maxBackoff = 30 * time.Second
 )

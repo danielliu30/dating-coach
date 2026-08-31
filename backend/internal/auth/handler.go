@@ -184,6 +184,10 @@ func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	profile, err := h.svc.Profile(r.Context(), principal)
+	if errors.Is(err, ErrInvalidToken) {
+		httpx.Error(w, http.StatusUnauthorized, "session is no longer valid")
+		return
+	}
 	if err != nil {
 		slog.Error("load profile", "error", err)
 		httpx.Error(w, http.StatusInternalServerError, "could not load profile")
