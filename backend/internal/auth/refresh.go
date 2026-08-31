@@ -35,6 +35,8 @@ func (s *Service) openSession(ctx context.Context, q *db.Queries, user db.User) 
 	if err != nil {
 		return Session{}, err
 	}
+	// Neither token value is logged: the log would be a credential store.
+	slog.Info("session issued", "user_id", user.ID, "expires_at", expires.UTC())
 	return Session{
 		Token:        token,
 		RefreshToken: refresh,
@@ -126,6 +128,7 @@ func (s *Service) Refresh(ctx context.Context, raw string) (Session, error) {
 	if err := tx.Commit(ctx); err != nil {
 		return Session{}, fmt.Errorf("commit rotation: %w", err)
 	}
+	slog.Info("refresh token rotated", "user_id", row.UserID, "spent_token_id", row.ID)
 	return session, nil
 }
 
