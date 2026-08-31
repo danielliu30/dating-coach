@@ -15,6 +15,11 @@ import (
 // revokedKeyPrefix namespaces the per-account revocation keys in Redis.
 const revokedKeyPrefix = "auth:revoked:"
 
+// revocationGrace pads an entry beyond the token lifetime it is given, covering
+// a sign-in that read the account row just before deletion marked it and minted
+// its token just after the revocation was written.
+const revocationGrace = 5 * time.Minute
+
 // Revocations reports whether an account's outstanding tokens must be refused.
 // Middleware depends on the interface rather than Denylist so it can be
 // exercised without a live Redis.
@@ -30,11 +35,12 @@ type Denylist struct {
 	ttl time.Duration
 }
 
-// NewDenylist returns a denylist whose entries live for ttl. Pass the session
-// token lifetime: once every token minted before the revocation has expired the
-// entry can no longer make a difference, so keeping it wastes memory.
+// NewDenylist returns a denylist whose entries live for ttl plus a short grace
+// period. Pass the session token lifetime: deletion marks the account row
+// before revoking, so no later token exists and the entry can no longer make a
+// difference once the tokens that predate it have expired.
 func NewDenylist(rdb *redis.Client, ttl time.Duration) *Denylist {
-	return &Denylist{rdb: rdb, ttl: ttl}
+	return &Denylist{rdb: rdb, ttl: ttl + revocationGrace}
 }
 
 // Revoke marks every outstanding token for userID as unusable. It is
