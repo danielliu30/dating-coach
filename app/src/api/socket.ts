@@ -3,13 +3,14 @@ import { wsURL } from '../config';
 import type { ChatEvent } from './types';
 
 /**
- * How long a socket waits between renewals while it cannot connect. A
- * handshake carries no status code, so an expired token and a thread the
- * server will never serve look identical; this bounds what the second case can
- * cost to one rotation a minute, while the first still renews on its first
- * failure.
+ * Failed handshakes between renewals. A handshake carries no status code, so
+ * an expired token and a thread the server will never serve look identical;
+ * spacing renewals bounds what the second case costs, while the first still
+ * renews on its first failure. Counted in attempts rather than wall-clock
+ * time, which a device is free to move backwards. At the 10s backoff ceiling
+ * this is roughly one renewal a minute.
  */
-const renewalCooldown = 60_000;
+const attemptsPerRenewal = 6;
 
 interface Handlers {
   onEvent: (event: ChatEvent) => void;
@@ -30,7 +31,7 @@ export class ChatSocket {
   private closed = false;
   private opened = false;
   private retry: ReturnType<typeof setTimeout> | null = null;
-  private renewedAt = 0;
+  private failures = 0;
   private outbox: ChatEvent[] = [];
 
   constructor(
@@ -54,7 +55,7 @@ export class ChatSocket {
     socket.onopen = () => {
       this.attempts = 0;
       this.opened = true;
-      this.renewedAt = 0;
+      this.failures = 0;
       this.handlers.onStatus?.('open');
       this.flush();
     };
@@ -81,16 +82,16 @@ export class ChatSocket {
    * renewal that merely could not be reached is treated like any other outage
    * and retried with backoff.
    *
-   * Renewals are spaced by renewalCooldown, measured as elapsed time rather
-   * than against any expiry claim, so neither a skewed device clock nor a
-   * handshake the server refuses for its own reasons can turn the retry loop
-   * into a refresh-token mill.
+   * Renewals are spaced every attemptsPerRenewal failures, so a handshake the
+   * server refuses for its own reasons cannot turn the retry loop into a
+   * refresh-token mill.
    */
   private async scheduleReconnect(unopened: boolean): Promise<void> {
     if (this.closed) return;
-    if (unopened && Date.now() - this.renewedAt >= renewalCooldown) {
-      this.renewedAt = Date.now();
-      if ((await api.renewSession()) === 'rejected') {
+    if (unopened) {
+      const due = this.failures % attemptsPerRenewal === 0;
+      this.failures += 1;
+      if (due && (await api.renewSession()) === 'rejected') {
         this.close();
         return;
       }
