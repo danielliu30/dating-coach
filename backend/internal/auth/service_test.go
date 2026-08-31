@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -46,7 +47,7 @@ func newTestService(t *testing.T) (*Service, *TokenIssuer, *pgxpool.Pool) {
 	}
 
 	issuer := NewTokenIssuer("test-secret")
-	svc := NewService(db.New(pool), issuer, silentNotifier{}, bcrypt.MinCost, "http://app.test", nil, nil, 24*time.Hour, 30*time.Minute)
+	svc := NewService(db.New(pool), issuer, silentNotifier{}, bcrypt.MinCost, "http://app.test", nil, 15*time.Minute, 30*time.Minute, 24*time.Hour)
 	return svc, issuer, pool
 }
 
@@ -83,13 +84,100 @@ func TestSignUpMintsVerifyScopedToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("verify email: %v", err)
 	}
-	assertTokenScope(t, issuer, verified.Token, ScopeSession, 24*time.Hour)
+	assertTokenScope(t, issuer, verified.Token, ScopeSession, 15*time.Minute)
+	if verified.RefreshToken == "" {
+		t.Fatal("verifying as the account being verified must return a refresh token")
+	}
 
 	signIn, err := svc.SignIn(ctx, email, password)
 	if err != nil {
 		t.Fatalf("sign in: %v", err)
 	}
-	assertTokenScope(t, issuer, signIn.Token, ScopeSession, 24*time.Hour)
+	assertTokenScope(t, issuer, signIn.Token, ScopeSession, 15*time.Minute)
+	if signIn.RefreshToken == "" {
+		t.Fatal("signing in must return a refresh token")
+	}
+}
+
+// TestRefreshRotatesAndDetectsReuse covers the whole rotation contract against
+// the real queries: an exchange yields a new pair, the token it consumed is
+// dead, and presenting that dead token takes the account's other refresh tokens
+// down with it.
+func TestRefreshRotatesAndDetectsReuse(t *testing.T) {
+	svc, issuer, pool := newTestService(t)
+	ctx := context.Background()
+
+	user := verifiedUser(t, svc, pool)
+	first, err := svc.SignIn(ctx, user.email, user.password)
+	if err != nil {
+		t.Fatalf("sign in: %v", err)
+	}
+
+	second, err := svc.Refresh(ctx, first.RefreshToken)
+	if err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	assertTokenScope(t, issuer, second.Token, ScopeSession, 15*time.Minute)
+	if second.RefreshToken == first.RefreshToken {
+		t.Fatal("refresh must rotate the token, not hand the same one back")
+	}
+
+	if _, err := svc.Refresh(ctx, first.RefreshToken); !errors.Is(err, ErrInvalidRefreshToken) {
+		t.Fatalf("reusing a spent token: error = %v, want %v", err, ErrInvalidRefreshToken)
+	}
+	if _, err := svc.Refresh(ctx, second.RefreshToken); !errors.Is(err, ErrInvalidRefreshToken) {
+		t.Fatalf("after detected reuse: error = %v, want %v", err, ErrInvalidRefreshToken)
+	}
+}
+
+// TestDeleteAccountEndsRefreshing covers the replacement for the denylist:
+// deleting an account leaves its refresh tokens unusable, so the sessions it
+// holds cannot outlive their own access tokens.
+func TestDeleteAccountEndsRefreshing(t *testing.T) {
+	svc, _, pool := newTestService(t)
+	ctx := context.Background()
+
+	publisher := &stubPublisher{}
+	svc.deletions = publisher
+	user := verifiedUser(t, svc, pool)
+	session, err := svc.SignIn(ctx, user.email, user.password)
+	if err != nil {
+		t.Fatalf("sign in: %v", err)
+	}
+
+	if err := svc.DeleteAccount(ctx, uuid.MustParse(session.User.ID)); err != nil {
+		t.Fatalf("delete account: %v", err)
+	}
+	if len(publisher.jobs) != 1 {
+		t.Fatalf("queued %d deletion jobs, want 1", len(publisher.jobs))
+	}
+	if _, err := svc.Refresh(ctx, session.RefreshToken); !errors.Is(err, ErrInvalidRefreshToken) {
+		t.Fatalf("refresh after deletion: error = %v, want %v", err, ErrInvalidRefreshToken)
+	}
+}
+
+// credentials identifies the throwaway account a test signs in as.
+type credentials struct{ email, password string }
+
+// verifiedUser signs a fresh account up, confirms its address straight in the
+// database and registers its removal, so a test can sign in as it.
+func verifiedUser(t *testing.T, svc *Service, pool *pgxpool.Pool) credentials {
+	t.Helper()
+
+	ctx := context.Background()
+	user := credentials{email: "refresh-test-" + uuid.NewString() + "@example.com", password: "correct-horse"}
+	t.Cleanup(func() {
+		if _, err := pool.Exec(context.Background(), "DELETE FROM users WHERE email = $1", user.email); err != nil {
+			t.Errorf("delete test user: %v", err)
+		}
+	})
+	if _, err := svc.SignUp(ctx, SignUpInput{Email: user.email, Password: user.password, DisplayName: "Refresh Test"}); err != nil {
+		t.Fatalf("sign up: %v", err)
+	}
+	if _, err := pool.Exec(ctx, "UPDATE users SET email_verified = true WHERE email = $1", user.email); err != nil {
+		t.Fatalf("verify test user: %v", err)
+	}
+	return user
 }
 
 // assertTokenScope fails the test unless raw carries the given scope claim and

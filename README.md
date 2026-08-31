@@ -28,7 +28,8 @@ Go API ──── PostgreSQL (users, coaches, sessions, chat, conversations, a
 
 - Analysis is asynchronous: `POST /api/v1/analysis/conversations` stores the transcript, creates a `pending` result and publishes a job. The worker calls the ML service, stores per-segment scores as JSONB and notifies the user. The app polls the result endpoint.
 - Live chat messages are persisted in PostgreSQL and fanned out over Redis pub/sub, so any API replica can serve a socket.
-- Account deletion is two-phase: `DELETE /api/v1/auth/me` revokes the account in Redis before it answers, so its still-valid JWTs stop working immediately, and queues the row removal (cascading across every table) to the worker. Deletions that keep failing land on `account.deletion.dlq`.
+- Sessions are a short-lived access JWT (15m) plus a rotating refresh token stored hashed in PostgreSQL. Authenticating a request is pure signature checking — no database round trip — and ending a session means deleting its refresh tokens: `POST /api/v1/auth/refresh` rotates one into a new pair, and replaying a spent token drops every refresh token of that account.
+- Account deletion is two-phase: `DELETE /api/v1/auth/me` deletes the account's refresh tokens before it answers, so the session cannot be renewed past the few minutes its access token has left, and queues the row removal (cascading across every table) to the worker. Deletions that keep failing land on `account.deletion.dlq`.
 - The ML service is fully decoupled — HTTP only, no shared database.
 
 ## Quick start (Docker Compose)
@@ -102,7 +103,7 @@ npx expo export --platform web    # production web bundle
 
 | Area     | Endpoints                                                                                                                                                              |
 | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Auth     | `POST /api/v1/auth/signup` · `signin` · `verify` · `resend-verification` · `GET /me` · `DELETE /me` (rate limited per IP)                                               |
+| Auth     | `POST /api/v1/auth/signup` · `signin` · `refresh` · `verify` · `resend-verification` · `GET /me` · `DELETE /me` (rate limited per IP)                                  |
 | Coaching | `GET /coaching/coaches` · `/coaches/{id}` · `/coaches/{id}/availability` · `/coaches/{id}/slots` · `POST /coaching/sessions` · `.../cancel` · `.../reschedule`           |
 | Coach    | `PUT /coach/profile` · `PUT /coach/availability` · `GET /coach/sessions` · `POST /coach/sessions/{id}/status` · `.../notes` · `GET /chat/coach/threads`                  |
 | Chat     | `POST /chat/threads` · `GET /chat/threads` · `GET/POST /chat/threads/{id}/messages` · `POST /chat/threads/{id}/close` · `GET /chat/threads/{id}/ws`                      |

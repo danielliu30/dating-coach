@@ -43,5 +43,22 @@ func (w *Worker) Handle(ctx context.Context, job Job, lastAttempt bool) error {
 		return nil
 	}
 	slog.Info("account deleted", "user_id", userID)
+	w.purgeExpiredRefreshTokens(ctx)
 	return nil
+}
+
+// purgeExpiredRefreshTokens drops refresh tokens that can no longer be
+// exchanged, so the table stays bounded: spent tokens are kept until they
+// expire to make reuse detectable, and are dead weight afterwards. Failures are
+// logged and swallowed, since the deletion the job was queued for has already
+// committed.
+func (w *Worker) purgeExpiredRefreshTokens(ctx context.Context) {
+	rows, err := w.queries.DeleteExpiredRefreshTokens(ctx)
+	if err != nil {
+		slog.Warn("purge expired refresh tokens", "error", err)
+		return
+	}
+	if rows > 0 {
+		slog.Info("purged expired refresh tokens", "rows", rows)
+	}
 }

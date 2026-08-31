@@ -25,21 +25,23 @@ func NewHandler(svc *Service, limiter *RateLimiter) *Handler {
 // Routes mounts the auth endpoints. The credential endpoints are rate limited
 // per IP; /me sits behind the authentication middleware.
 //
-// active is the revocation check, applied on top of authenticate everywhere
-// except DELETE /me: that request is how a revoked account gets its rows
-// removed, so blocking it would make a failed deletion unrepeatable.
-func (h *Handler) Routes(authenticate, active func(http.Handler) http.Handler) http.Handler {
+// /refresh is one of the rate limited public routes rather than an
+// authenticated one: it is the endpoint a client reaches for once its access
+// token has expired, so requiring a usable one would defeat it. The refresh
+// token in the body is the credential.
+func (h *Handler) Routes(authenticate func(http.Handler) http.Handler) http.Handler {
 	r := chi.NewRouter()
 	r.Group(func(public chi.Router) {
 		public.Use(h.limiter.Middleware)
 		public.Post("/signup", h.signUp)
 		public.Post("/signin", h.signIn)
+		public.Post("/refresh", h.refresh)
 		public.Post("/verify", h.verify)
 		public.Post("/resend-verification", h.resendVerification)
 	})
 	r.Group(func(private chi.Router) {
 		private.Use(authenticate)
-		private.With(active).Get("/me", h.me)
+		private.Get("/me", h.me)
 		private.Delete("/me", h.deleteMe)
 	})
 	return r
@@ -92,6 +94,29 @@ func (h *Handler) signIn(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// refresh handles POST /refresh, rotating the caller's refresh token into a
+// fresh session. A rejected token answers 401, which clients treat as "sign in
+// again" rather than as something to retry.
+func (h *Handler) refresh(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		RefreshToken string `json:"refresh_token"`
+	}
+	if err := httpx.Decode(r, &in); err != nil {
+		httpx.Error(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	session, err := h.svc.Refresh(r.Context(), in.RefreshToken)
+	switch {
+	case errors.Is(err, ErrInvalidRefreshToken):
+		httpx.Error(w, http.StatusUnauthorized, err.Error())
+	case err != nil:
+		slog.Error("refresh session", "error", err)
+		httpx.Error(w, http.StatusInternalServerError, "could not refresh session")
+	default:
+		httpx.JSON(w, http.StatusOK, session)
+	}
+}
+
 // verify handles POST /verify, consuming the token from the verification
 // email. The response carries a session token when the caller is authenticated
 // as the account being verified, so the app does not have to sign in again.
@@ -134,10 +159,10 @@ func (h *Handler) resendVerification(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusAccepted, map[string]string{"status": "sent"})
 }
 
-// deleteMe handles DELETE /me. It answers 202 rather than 204: the caller's
-// sessions are already dead when it returns, but the rows are removed by the
+// deleteMe handles DELETE /me. It answers 202 rather than 204: the caller can
+// no longer renew its session when it returns, but the rows are removed by the
 // worker afterwards. It is idempotent, so a caller whose deletion could not be
-// queued can repeat the request with the same (revoked) token.
+// queued can repeat the request with the same access token.
 func (h *Handler) deleteMe(w http.ResponseWriter, r *http.Request) {
 	principal, ok := PrincipalFrom(r.Context())
 	if !ok {

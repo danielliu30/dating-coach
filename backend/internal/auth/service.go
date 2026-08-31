@@ -43,10 +43,10 @@ type Service struct {
 	notifier       notify.Notifier
 	bcryptCost     int
 	appURL         string
-	denylist       *Denylist
 	deletions      DeletionPublisher
 	sessionTTL     time.Duration
 	verifyTokenTTL time.Duration
+	refreshTTL     time.Duration
 }
 
 // DeletionPublisher queues the row removal that follows a revoked account.
@@ -55,20 +55,20 @@ type DeletionPublisher interface {
 	Publish(ctx context.Context, job account.Job) error
 }
 
-// NewService wires the service dependencies; called once from cmd/api. denylist
-// and deletions are the two halves of account deletion: revoke now, delete rows
-// later. sessionTTL is the lifetime of the session token issued at sign-in;
-// verifyTokenTTL that of the verify-scoped token issued at sign-up.
+// NewService wires the service dependencies; called once from cmd/api.
+// sessionTTL is the lifetime of the access token issued at sign-in and is kept
+// short, verifyTokenTTL that of the verify-scoped token issued at sign-up, and
+// refreshTTL that of the refresh token clients trade in for new access tokens.
 func NewService(
 	queries *db.Queries,
 	issuer *TokenIssuer,
 	notifier notify.Notifier,
 	bcryptCost int,
 	appURL string,
-	denylist *Denylist,
 	deletions DeletionPublisher,
 	sessionTTL time.Duration,
 	verifyTokenTTL time.Duration,
+	refreshTTL time.Duration,
 ) *Service {
 	return &Service{
 		queries:        queries,
@@ -76,27 +76,28 @@ func NewService(
 		notifier:       notifier,
 		bcryptCost:     bcryptCost,
 		appURL:         appURL,
-		denylist:       denylist,
 		deletions:      deletions,
 		sessionTTL:     sessionTTL,
 		verifyTokenTTL: verifyTokenTTL,
+		refreshTTL:     refreshTTL,
 	}
 }
 
 // DeleteAccount ends every session for userID and queues the removal of its
-// rows. It returns once the revocation is durable in Redis and the broker has
-// confirmed the deletion job.
+// rows. It returns once the account's refresh tokens are gone and the broker
+// has confirmed the deletion job. The access token in the caller's hand keeps
+// working until it expires, which is minutes away, and cannot be renewed.
 //
-// The revocation is written first and is never rolled back: if queueing then
+// The refresh tokens are deleted first and never restored: if queueing then
 // fails, the caller is locked out of an account whose data still exists, which
-// an operator can undo, whereas deleting the rows of a caller whose tokens
-// still work cannot be undone. An error therefore means the account may
+// an operator can undo, whereas deleting the rows of a caller who can still
+// mint sessions cannot be undone. An error therefore means the account may
 // already be unusable, and the caller should repeat the request: it is
-// idempotent, and DELETE /me stays reachable with a revoked token so the
-// deletion can still be queued once the broker recovers.
+// idempotent, and DELETE /me needs only the access token, so the deletion can
+// still be queued once the broker recovers.
 func (s *Service) DeleteAccount(ctx context.Context, userID uuid.UUID) error {
-	if err := s.denylist.Revoke(ctx, userID); err != nil {
-		return fmt.Errorf("revoke sessions: %w", err)
+	if _, err := s.queries.RevokeUserRefreshTokens(ctx, userID); err != nil {
+		return fmt.Errorf("revoke refresh tokens: %w", err)
 	}
 	if err := s.deletions.Publish(ctx, account.Job{UserID: userID.String()}); err != nil {
 		return fmt.Errorf("queue account deletion: %w", err)
@@ -114,10 +115,15 @@ type SignUpInput struct {
 
 // Session is the sign-up/sign-in response: a bearer token plus the profile the
 // clients render right away.
+//
+// RefreshToken is empty on responses that do not open a full session (sign-up,
+// and verifying an address the caller does not hold a token for): only a caller
+// given a session-scoped access token also gets the means to renew it.
 type Session struct {
-	Token     string  `json:"token"`
-	ExpiresAt string  `json:"expires_at"`
-	User      Profile `json:"user"`
+	Token        string  `json:"token"`
+	RefreshToken string  `json:"refresh_token,omitempty"`
+	ExpiresAt    string  `json:"expires_at"`
+	User         Profile `json:"user"`
 }
 
 // Profile is the public view of a user row, also returned by GET /auth/me.
@@ -205,10 +211,9 @@ func (s *Service) SignUp(ctx context.Context, in SignUpInput) (Session, error) {
 	}, nil
 }
 
-// SignIn verifies the password and issues a session-scoped token. Unknown
-// emails and wrong passwords both return ErrInvalidCredentials; an unverified
-// account returns ErrEmailNotVerified, only after the password has been
-// checked.
+// SignIn verifies the password and opens a session. Unknown emails and wrong
+// passwords both return ErrInvalidCredentials; an unverified account returns
+// ErrEmailNotVerified, only after the password has been checked.
 func (s *Service) SignIn(ctx context.Context, email, password string) (Session, error) {
 	user, err := s.queries.GetUserByEmail(ctx, strings.ToLower(strings.TrimSpace(email)))
 	if err != nil {
@@ -224,15 +229,7 @@ func (s *Service) SignIn(ctx context.Context, email, password string) (Session, 
 		return Session{}, ErrEmailNotVerified
 	}
 
-	token, expires, err := s.issuer.Issue(user.ID, user.Email, user.Role, ScopeSession, s.sessionTTL)
-	if err != nil {
-		return Session{}, err
-	}
-	return Session{
-		Token:     token,
-		ExpiresAt: expires.UTC().Format(time.RFC3339),
-		User:      profileOf(user),
-	}, nil
+	return s.openSession(ctx, user)
 }
 
 // VerifyEmail consumes a verification token, marks the address confirmed and
@@ -240,11 +237,12 @@ func (s *Service) SignIn(ctx context.Context, email, password string) (Session, 
 //
 // bearer is the caller's current JWT, or "" when the request is
 // unauthenticated. When it is the verify-scoped token this very account was
-// given at sign-up, the returned Session also carries a session-scoped token,
-// so the caller leaves verification with credentials that reach the private API
-// instead of one every private route rejects. A bearer belonging to another
-// account, an expired one, or none at all yields the profile only: verifying
-// never hands a session to whoever merely holds the emailed token.
+// given at sign-up, the returned Session also carries a session-scoped access
+// token and a refresh token, so the caller leaves verification with credentials
+// that reach the private API instead of one every private route rejects. A
+// bearer belonging to another account, an expired one, or none at all yields
+// the profile only: verifying never hands a session to whoever merely holds the
+// emailed token.
 func (s *Service) VerifyEmail(ctx context.Context, token, bearer string) (Session, error) {
 	user, err := s.queries.VerifyUserEmail(ctx, &token)
 	if err != nil {
@@ -257,15 +255,7 @@ func (s *Service) VerifyEmail(ctx context.Context, token, bearer string) (Sessio
 	if !s.ownsBearer(user.ID, bearer) {
 		return Session{User: profile}, nil
 	}
-	sessionToken, expires, err := s.issuer.Issue(user.ID, user.Email, user.Role, ScopeSession, s.sessionTTL)
-	if err != nil {
-		return Session{}, fmt.Errorf("issue session: %w", err)
-	}
-	return Session{
-		Token:     sessionToken,
-		ExpiresAt: expires.UTC().Format(time.RFC3339),
-		User:      profile,
-	}, nil
+	return s.openSession(ctx, user)
 }
 
 // ownsBearer reports whether bearer is a currently valid token for userID.
