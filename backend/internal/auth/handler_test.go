@@ -2,13 +2,13 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/redis/go-redis/v9"
 
 	"github.com/danielliu30/dating-coach/backend/internal/account"
 )
@@ -44,11 +44,10 @@ func authenticateAs(principal Principal) func(http.Handler) http.Handler {
 // denylist: deleting an already revoked account must stay possible, because a
 // deletion whose queueing failed can only be retried by its own owner.
 func TestRoutesKeepDeletionReachableWhenRevoked(t *testing.T) {
-	// A Redis client pointed at a closed port: Revoke fails fast, which is
-	// enough to show the request reached the handler rather than the denylist.
-	rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", MaxRetries: -1, DialTimeout: time.Second})
-	t.Cleanup(func() { _ = rdb.Close() })
-	svc := NewService(nil, nil, nil, 0, "", NewDenylist(rdb, time.Minute), &stubPublisher{}, time.Hour, time.Minute)
+	// A store whose writes always fail: Revoke errors out, which is enough to
+	// show the request reached the handler rather than the denylist.
+	store := &fakeRevocationStore{revokeErr: errors.New("database unavailable")}
+	svc := NewService(nil, nil, nil, 0, "", NewDenylist(store, time.Minute), &stubPublisher{}, time.Hour, time.Minute)
 	principal := Principal{UserID: uuid.New(), Email: "deleted@example.com", Role: "user"}
 	routes := NewHandler(svc, nil).Routes(authenticateAs(principal), blockAll)
 

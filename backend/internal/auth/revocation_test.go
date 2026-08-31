@@ -6,11 +6,84 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/danielliu30/dating-coach/backend/internal/store/db"
 )
 
-// stubRevocations answers Revoked from fixed values, standing in for Redis.
+// fakeRevocationStore is an in-memory RevocationStore: it keeps the expiry per
+// account the way the table does, so the denylist can be exercised without a
+// database. Zero value accepts writes and reports nothing revoked.
+type fakeRevocationStore struct {
+	expiries  map[uuid.UUID]time.Time
+	revokeErr error
+	lookupErr error
+}
+
+// RevokeUserSessions records the expiry, keeping the later one on a repeat call.
+func (f *fakeRevocationStore) RevokeUserSessions(_ context.Context, arg db.RevokeUserSessionsParams) error {
+	if f.revokeErr != nil {
+		return f.revokeErr
+	}
+	if f.expiries == nil {
+		f.expiries = make(map[uuid.UUID]time.Time)
+	}
+	if existing, ok := f.expiries[arg.UserID]; !ok || arg.ExpiresAt.After(existing) {
+		f.expiries[arg.UserID] = arg.ExpiresAt
+	}
+	return nil
+}
+
+// IsSessionRevoked reports whether an unexpired entry exists for userID.
+func (f *fakeRevocationStore) IsSessionRevoked(_ context.Context, userID uuid.UUID) (bool, error) {
+	if f.lookupErr != nil {
+		return false, f.lookupErr
+	}
+	expires, ok := f.expiries[userID]
+	return ok && expires.After(time.Now()), nil
+}
+
+// TestDenylistOutlivesProcessState covers the durability the middleware relies
+// on: a revocation written by one Denylist is seen by another built over the
+// same store, and it stops mattering only once the tokens it refuses expire.
+func TestDenylistOutlivesProcessState(t *testing.T) {
+	store := &fakeRevocationStore{}
+	userID := uuid.New()
+
+	if err := NewDenylist(store, time.Hour).Revoke(context.Background(), userID); err != nil {
+		t.Fatalf("Revoke() error = %v", err)
+	}
+
+	revoked, err := NewDenylist(store, time.Hour).Revoked(context.Background(), userID)
+	if err != nil {
+		t.Fatalf("Revoked() error = %v", err)
+	}
+	if !revoked {
+		t.Fatal("Revoked() = false for an account revoked through another denylist")
+	}
+
+	store.expiries[userID] = time.Now().Add(-time.Second)
+	revoked, err = NewDenylist(store, time.Hour).Revoked(context.Background(), userID)
+	if err != nil {
+		t.Fatalf("Revoked() error = %v", err)
+	}
+	if revoked {
+		t.Fatal("Revoked() = true for an entry whose tokens have all expired")
+	}
+}
+
+// TestDenylistRevokedPropagatesFailures checks the middleware gets an error, not
+// a false "active", when the revocation state cannot be read.
+func TestDenylistRevokedPropagatesFailures(t *testing.T) {
+	store := &fakeRevocationStore{lookupErr: errors.New("database unavailable")}
+	if _, err := NewDenylist(store, time.Hour).Revoked(context.Background(), uuid.New()); err == nil {
+		t.Fatal("Revoked() error = nil, want the store failure")
+	}
+}
+
+// stubRevocations answers Revoked from fixed values, standing in for a store.
 type stubRevocations struct {
 	revoked bool
 	err     error
@@ -40,9 +113,9 @@ func TestRequireActive(t *testing.T) {
 			want:          http.StatusUnauthorized,
 		},
 		{
-			name:          "unreachable redis fails closed",
+			name:          "unreachable store fails closed",
 			withPrincipal: true,
-			revocations:   stubRevocations{err: errors.New("dial redis: connection refused")},
+			revocations:   stubRevocations{err: errors.New("query revoked_sessions: connection refused")},
 			want:          http.StatusServiceUnavailable,
 		},
 		{

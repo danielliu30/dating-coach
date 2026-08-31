@@ -86,7 +86,8 @@ func run() error {
 	issuer := auth.NewTokenIssuer(cfg.JWTSecret)
 	limiter := auth.NewRateLimiter(rdb, cfg.AuthRateLimit, cfg.AuthRateWindow)
 	// A revocation only has to outlive the tokens that existed when it was made.
-	denylist := auth.NewDenylist(rdb, cfg.JWTTTL)
+	// It is kept in PostgreSQL, so it survives a restart of any process.
+	denylist := auth.NewDenylist(pg.Queries, cfg.JWTTTL)
 	// Every authenticated route also consults the denylist, because a deleted
 	// account's token stays validly signed until it expires on its own.
 	active := auth.RequireActive(denylist)
