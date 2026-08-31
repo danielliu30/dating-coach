@@ -6,10 +6,20 @@ import type { AuthSession, Profile, Role } from '../api/types';
 
 const STORAGE_KEY = 'dating-coach.session';
 
+/**
+ * Why the app signed the user out without being asked to. `expired` is the
+ * only involuntary case: the refresh token was refused, either because it aged
+ * out or because a replay revoked the account's tokens.
+ */
+export type SignedOutReason = 'expired';
+
 interface AuthState {
   ready: boolean;
   token: string | null;
   user: Profile | null;
+  /** Set when the app signed the user out on its own, so a screen can say so. */
+  signedOutReason: SignedOutReason | null;
+  dismissSignedOutReason: () => void;
   signIn: (email: string, password: string) => Promise<Profile>;
   signUp: (input: { email: string; password: string; displayName: string; role: Role }) => Promise<Profile>;
   verify: (token: string) => Promise<Profile>;
@@ -50,6 +60,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
   const [ready, setReady] = useState(false);
   const [token, setToken] = useState<string | null>(null);
   const [user, setUser] = useState<Profile | null>(null);
+  const [signedOutReason, setSignedOutReason] = useState<SignedOutReason | null>(null);
   const tokenRef = useRef<string | null>(null);
   const refreshRef = useRef<string>('');
   const expiresRef = useRef<string>('');
@@ -71,6 +82,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
       expiresRef.current = '';
       setToken(null);
       setUser(null);
+      setSignedOutReason('expired');
       void AsyncStorage.removeItem(STORAGE_KEY).catch(() => undefined);
     });
   }, []);
@@ -82,6 +94,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
     expiresRef.current = session.expires_at ?? '';
     setToken(session.token);
     setUser(session.user);
+    setSignedOutReason(null);
     await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(session));
     return session.user;
   }, []);
@@ -130,9 +143,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
           try {
             await persist(await api.refreshSession(stored.refresh_token));
           } catch (error) {
-            // Only a refusal is final. An unreachable backend leaves the app
-            // signed out for now but keeps the session for the next launch.
-            if (isRefused(error)) await forget();
+            // Only a refusal is final, and only a refusal is worth explaining:
+            // an unreachable backend leaves the app signed out for now but
+            // keeps the session for the next launch.
+            if (isRefused(error)) {
+              setSignedOutReason('expired');
+              await forget();
+            }
           }
         }
       } catch {
@@ -152,6 +169,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
     expiresRef.current = '';
     setToken(null);
     setUser(null);
+    setSignedOutReason(null);
     await AsyncStorage.removeItem(STORAGE_KEY);
   }, []);
 
@@ -176,6 +194,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
       ready,
       token,
       user,
+      signedOutReason,
+      dismissSignedOutReason: () => setSignedOutReason(null),
       signIn: async (email, password) => persist(await api.signIn({ email, password })),
       signUp: async ({ email, password, displayName, role }) =>
         persist(await api.signUp({ email, password, display_name: displayName, role })),
@@ -201,7 +221,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
       },
       signOut: clearSession,
     }),
-    [clearSession, persist, persistUser, ready, token, user],
+    [clearSession, persist, persistUser, ready, signedOutReason, token, user],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
