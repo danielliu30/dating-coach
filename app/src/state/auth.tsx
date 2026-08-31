@@ -118,6 +118,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
         await persist(session);
         return 'renewed';
       } catch (error) {
+        // A refusal only condemns the session it was asked about. Once that
+        // session has been replaced, it says nothing about the one on hand.
+        if (generation !== generationRef.current) return 'unavailable';
         return isRefused(error) ? 'rejected' : 'unavailable';
       }
     });
