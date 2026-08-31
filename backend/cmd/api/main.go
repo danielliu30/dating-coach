@@ -90,8 +90,6 @@ func run() error {
 	// Every authenticated route also consults the denylist, because a deleted
 	// account's token stays validly signed until it expires on its own.
 	active := auth.RequireActive(denylist)
-	authenticate := chain(auth.Middleware(issuer), active)
-	session := auth.RequireScope(auth.ScopeSession)
 
 	authHandler := auth.NewHandler(
 		auth.NewService(pg.Queries, issuer, notifier, cfg.BcryptCost, cfg.PublicAppURL, denylist, deletions, cfg.JWTTTL, cfg.VerifyTokenTTL),
@@ -102,32 +100,11 @@ func run() error {
 	chatHandler := chat.NewHandler(chat.NewService(pg.Queries, hub), hub, cfg.CORSOrigins)
 	analysisHandler := analysis.NewHandler(analysis.NewService(pg.Pool, pg.Queries, queue))
 
-	router := chi.NewRouter()
-	router.Use(middleware.RequestID, middleware.RealIP, middleware.Recoverer, middleware.Logger)
-	router.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   cfg.CORSOrigins,
-		AllowedMethods:   []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodOptions},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type"},
-		AllowCredentials: true,
-		MaxAge:           300,
-	}))
-
-	router.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		httpx.JSON(w, http.StatusOK, map[string]string{"status": "ok", "env": cfg.Env})
-	})
-
-	router.Route("/api/v1", func(v1 chi.Router) {
-		v1.Mount("/auth", authHandler.Routes(auth.Middleware(issuer), active))
-		v1.Group(func(private chi.Router) {
-			private.Use(authenticate, session)
-			private.Mount("/coaching", coachingHandler.Routes())
-			private.Mount("/chat", chatHandler.Routes())
-			private.Mount("/analysis", analysisHandler.Routes())
-			private.Route("/coach", func(coach chi.Router) {
-				coach.Use(auth.RequireCoach)
-				coach.Mount("/", coachingHandler.CoachRoutes())
-			})
-		})
+	router := newRouter(cfg, auth.Middleware(issuer), active, handlers{
+		auth:     authHandler,
+		coaching: coachingHandler,
+		chat:     chatHandler,
+		analysis: analysisHandler,
 	})
 
 	server := &http.Server{
@@ -155,4 +132,52 @@ func run() error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	return server.Shutdown(shutdownCtx)
+}
+
+// handlers groups the feature handlers newRouter mounts.
+type handlers struct {
+	auth     *auth.Handler
+	coaching *coaching.Handler
+	chat     *chat.Handler
+	analysis *analysis.Handler
+}
+
+// newRouter builds the API routing tree: an unauthenticated health check, the
+// auth endpoints (reachable by verify-scoped tokens so a fresh sign-up can
+// confirm its address) and a private group every other feature is mounted
+// under, which authenticates the caller and then demands a session-scoped
+// token. verifyToken and active are taken separately rather than pre-chained
+// because the auth endpoints apply the revocation check to only some of their
+// routes.
+func newRouter(cfg *config.Config, verifyToken, active func(http.Handler) http.Handler, h handlers) http.Handler {
+	authenticate := chain(verifyToken, active)
+
+	router := chi.NewRouter()
+	router.Use(middleware.RequestID, middleware.RealIP, middleware.Recoverer, middleware.Logger)
+	router.Use(cors.Handler(cors.Options{
+		AllowedOrigins:   cfg.CORSOrigins,
+		AllowedMethods:   []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodOptions},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type"},
+		AllowCredentials: true,
+		MaxAge:           300,
+	}))
+
+	router.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		httpx.JSON(w, http.StatusOK, map[string]string{"status": "ok", "env": cfg.Env})
+	})
+
+	router.Route("/api/v1", func(v1 chi.Router) {
+		v1.Mount("/auth", h.auth.Routes(verifyToken, active))
+		v1.Group(func(private chi.Router) {
+			private.Use(authenticate, auth.RequireScope(auth.ScopeSession))
+			private.Mount("/coaching", h.coaching.Routes())
+			private.Mount("/chat", h.chat.Routes())
+			private.Mount("/analysis", h.analysis.Routes())
+			private.Route("/coach", func(coach chi.Router) {
+				coach.Use(auth.RequireCoach)
+				coach.Mount("/", h.coaching.CoachRoutes())
+			})
+		})
+	})
+	return router
 }

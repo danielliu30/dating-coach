@@ -72,7 +72,12 @@ go run ./cmd/api        # HTTP + WebSocket API on :8080
 go run ./cmd/worker     # analysis + account-deletion worker
 sqlc generate           # after editing internal/store/queries/*.sql
 go build ./... && go vet ./...
+go test ./...           # database-backed tests skip themselves
+TEST_DATABASE_URL="$DATABASE_URL" go test ./...   # …and run with this set
 ```
+
+The tests gated on `TEST_DATABASE_URL` talk to a real PostgreSQL and delete the
+rows they create; point it at a scratch database, never a production one.
 
 **ML analyzer:**
 
