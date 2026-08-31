@@ -97,6 +97,9 @@ func run() error {
 	)
 	coachingHandler := coaching.NewHandler(coaching.NewService(pg.Pool, pg.Queries))
 	hub := chat.NewHub(rdb)
+	// Sockets authenticated before a deletion would otherwise keep running
+	// until their next scheduled re-check; this closes them as it happens.
+	go auth.WatchRevocations(ctx, rdb, hub.EndSessions)
 	chatHandler := chat.NewHandler(chat.NewService(pg.Queries, hub), hub, denylist, cfg.CORSOrigins)
 	analysisHandler := analysis.NewHandler(analysis.NewService(pg.Pool, pg.Queries, queue))
 

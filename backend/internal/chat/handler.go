@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/coder/websocket"
@@ -234,6 +235,12 @@ func (h *Handler) websocket(w http.ResponseWriter, r *http.Request) {
 		h.write(ctx, conn, Event{Type: EventHistory, ThreadID: threadID.String(), Messages: history})
 	}
 
+	// A revocation announced while this socket is open closes it at once; the
+	// ticker below is the backstop for announcements that never arrive.
+	revoked := make(chan struct{})
+	drop := sync.OnceFunc(func() { close(revoked) })
+	defer h.hub.Register(principal.UserID, connID, drop)()
+
 	incoming := make(chan Event, 8)
 	go h.readLoop(ctx, cancel, conn, incoming)
 
@@ -246,6 +253,9 @@ func (h *Handler) websocket(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case <-ctx.Done():
+			return
+		case <-revoked:
+			closeSocket(conn, socketRevoked)
 			return
 		case <-revocationTicker.C:
 			if verdict := h.sessionStatus(ctx, principal.UserID); verdict != socketActive {
