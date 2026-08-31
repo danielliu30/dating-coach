@@ -34,6 +34,15 @@ export type RenewalOutcome = 'renewed' | 'invalid' | 'unavailable';
 
 type SessionRenewer = () => Promise<RenewalOutcome>;
 
+/**
+ * What a request does with a 401 it cannot use its own token to avoid:
+ * 'renew' trades the refresh token and retries once, 'sign-out' ends the
+ * session immediately, and 'defer' leaves the decision to the caller — the
+ * renewal exchange itself uses that, since its 401 is the input to the
+ * decision rather than a second one.
+ */
+type UnauthorizedPolicy = 'renew' | 'sign-out' | 'defer';
+
 /** Typed client for the Go API. One instance per app, token injected lazily. */
 export class ApiClient {
   private token: TokenProvider = () => null;
@@ -62,14 +71,14 @@ export class ApiClient {
 
   /**
    * Performs one API call, retrying it once with a renewed access token when
-   * the first attempt is rejected. retryUnauthorized guards that recursion and
-   * is false on the retry and on /auth/refresh itself.
+   * the first attempt is rejected. unauthorized decides what a 401 means here;
+   * the retry uses 'sign-out' so the recursion stops after one renewal.
    */
   private async request<T>(
     method: string,
     path: string,
     body?: unknown,
-    retryUnauthorized = true,
+    unauthorized: UnauthorizedPolicy = 'renew',
   ): Promise<T> {
     const token = this.token();
     const response = await fetch(`${API_BASE_URL}${API_PREFIX}${path}`, {
@@ -86,9 +95,9 @@ export class ApiClient {
     const payload = text ? (JSON.parse(text) as unknown) : null;
 
     if (!response.ok) {
-      if (response.status === 401 && token && token === this.token()) {
-        const outcome = retryUnauthorized ? await this.renewSession() : 'invalid';
-        if (outcome === 'renewed') return this.request<T>(method, path, body, false);
+      if (response.status === 401 && unauthorized !== 'defer' && token && token === this.token()) {
+        const outcome = unauthorized === 'renew' ? await this.renewSession() : 'invalid';
+        if (outcome === 'renewed') return this.request<T>(method, path, body, 'sign-out');
         if (outcome === 'invalid') this.onUnauthorized();
       }
       const message =
@@ -117,7 +126,7 @@ export class ApiClient {
    * spent, revoked or expired, which is unrecoverable without signing in.
    */
   refresh(refreshToken: string) {
-    return this.request<AuthSession>('POST', '/auth/refresh', { refresh_token: refreshToken }, false);
+    return this.request<AuthSession>('POST', '/auth/refresh', { refresh_token: refreshToken }, 'defer');
   }
 
   /**
