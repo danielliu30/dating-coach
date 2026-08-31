@@ -234,7 +234,13 @@ func (s *Service) SignIn(ctx context.Context, email, password string) (Session, 
 		return Session{}, ErrEmailNotVerified
 	}
 
-	return s.openSession(ctx, s.queries, user)
+	session, err := s.openSession(ctx, s.queries, user)
+	if err != nil {
+		return Session{}, err
+	}
+	slog.Info("session issued", "user_id", user.ID, "reason", "sign in",
+		"expires_at", session.ExpiresAt)
+	return session, nil
 }
 
 // VerifyEmail consumes a verification token, marks the address confirmed and
@@ -260,7 +266,13 @@ func (s *Service) VerifyEmail(ctx context.Context, token, bearer string) (Sessio
 	if !s.ownsBearer(user.ID, bearer) {
 		return Session{User: profile}, nil
 	}
-	return s.openSession(ctx, s.queries, user)
+	session, err := s.openSession(ctx, s.queries, user)
+	if err != nil {
+		return Session{}, err
+	}
+	slog.Info("session issued", "user_id", user.ID, "reason", "verify email",
+		"expires_at", session.ExpiresAt)
+	return session, nil
 }
 
 // ownsBearer reports whether bearer is a currently valid token for userID.
