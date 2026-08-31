@@ -33,7 +33,7 @@ func testRouter(t *testing.T, issuer *auth.TokenIssuer) http.Handler {
 		handlers{
 			auth:     auth.NewHandler(auth.NewService(nil, issuer, nil, 4, "", nil, nil, time.Hour, 30*time.Minute), auth.NewRateLimiter(nil, 100, time.Minute)),
 			coaching: coaching.NewHandler(coaching.NewService(nil, nil)),
-			chat:     chat.NewHandler(chat.NewService(nil, hub), hub, []string{"*"}),
+			chat:     chat.NewHandler(chat.NewService(nil, hub), hub, nil, []string{"*"}),
 			analysis: analysis.NewHandler(analysis.NewService(nil, nil, nil)),
 		},
 	)

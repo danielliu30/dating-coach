@@ -17,9 +17,10 @@ import (
 )
 
 const (
-	presenceRefresh = 20 * time.Second
-	writeTimeout    = 10 * time.Second
-	historyOnJoin   = 50
+	presenceRefresh   = 20 * time.Second
+	revocationRefresh = 15 * time.Second
+	writeTimeout      = 10 * time.Second
+	historyOnJoin     = 50
 )
 
 // Handler is the HTTP layer for /api/v1/chat: the REST endpoints plus the
@@ -27,13 +28,17 @@ const (
 type Handler struct {
 	svc            *Service
 	hub            *Hub
+	revocations    auth.Revocations
 	originPatterns []string
 }
 
 // NewHandler builds the chat handler. originPatterns are the origins allowed to
-// open a socket, and mirror the API's CORS configuration.
-func NewHandler(svc *Service, hub *Hub, originPatterns []string) *Handler {
-	return &Handler{svc: svc, hub: hub, originPatterns: originPatterns}
+// open a socket, and mirror the API's CORS configuration. revocations is the
+// same denylist the REST middleware consults, re-checked for the lifetime of a
+// socket because a connection authenticated once outlives the token that opened
+// it.
+func NewHandler(svc *Service, hub *Hub, revocations auth.Revocations, originPatterns []string) *Handler {
+	return &Handler{svc: svc, hub: hub, revocations: revocations, originPatterns: originPatterns}
 }
 
 // Routes mounts the chat endpoints. All of them require authentication; the
@@ -235,10 +240,18 @@ func (h *Handler) websocket(w http.ResponseWriter, r *http.Request) {
 	ticker := time.NewTicker(presenceRefresh)
 	defer ticker.Stop()
 
+	revocationTicker := time.NewTicker(revocationRefresh)
+	defer revocationTicker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-revocationTicker.C:
+			if !h.sessionActive(ctx, principal.UserID) {
+				closeRevoked(conn)
+				return
+			}
 		case <-ticker.C:
 			if err := h.hub.MarkOnline(ctx, principal.UserID, connID); err != nil {
 				slog.Error("refresh presence", "error", err)
@@ -252,15 +265,49 @@ func (h *Handler) websocket(w http.ResponseWriter, r *http.Request) {
 			if !open {
 				return
 			}
-			h.handleIncoming(ctx, conn, threadID, principal, connID, event)
+			if !h.handleIncoming(ctx, conn, threadID, principal, connID, event) {
+				return
+			}
 		}
+	}
+}
+
+// sessionActive reports whether the socket's account may still act. It is the
+// socket-lifetime counterpart of auth.RequireActive, which only runs once, at
+// the upgrade: without this a connection opened before an account was deleted
+// would keep working until its token expired on its own.
+//
+// It fails closed, so an unreachable Redis drops sockets rather than serving
+// accounts whose status cannot be established; clients reconnect and are then
+// answered by the REST middleware, which fails closed the same way.
+func (h *Handler) sessionActive(ctx context.Context, userID uuid.UUID) bool {
+	revoked, err := h.revocations.Revoked(ctx, userID)
+	if err != nil {
+		slog.Error("check socket revocation", "error", err, "user_id", userID)
+		return false
+	}
+	return !revoked
+}
+
+// closeRevoked tells the client its session ended before dropping the socket,
+// so it can clear local credentials instead of reconnecting in a loop.
+func closeRevoked(conn *websocket.Conn) {
+	if err := conn.Close(websocket.StatusPolicyViolation, "session revoked"); err != nil {
+		slog.Debug("close revoked socket", "error", err)
 	}
 }
 
 // handleIncoming dispatches one client event: sending a message, relaying a
 // typing indicator or refreshing presence. Rejected sends are reported back on
-// the socket instead of closing it.
-func (h *Handler) handleIncoming(ctx context.Context, conn *websocket.Conn, threadID uuid.UUID, principal auth.Principal, connID uuid.UUID, event Event) {
+// the socket instead of closing it. It returns false once the caller's account
+// has been revoked, having closed the socket: every client event is a privileged
+// action, so none is dispatched without a fresh revocation check rather than
+// waiting for the next heartbeat.
+func (h *Handler) handleIncoming(ctx context.Context, conn *websocket.Conn, threadID uuid.UUID, principal auth.Principal, connID uuid.UUID, event Event) bool {
+	if !h.sessionActive(ctx, principal.UserID) {
+		closeRevoked(conn)
+		return false
+	}
 	switch event.Type {
 	case EventMessage:
 		if _, err := h.svc.Send(ctx, threadID, principal.UserID, event.Body); err != nil {
@@ -277,6 +324,7 @@ func (h *Handler) handleIncoming(ctx context.Context, conn *websocket.Conn, thre
 	default:
 		h.write(ctx, conn, Event{Type: EventError, Body: "unknown event type"})
 	}
+	return true
 }
 
 // readLoop decodes client frames onto out until the socket fails, then cancels

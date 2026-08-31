@@ -97,7 +97,7 @@ func run() error {
 	)
 	coachingHandler := coaching.NewHandler(coaching.NewService(pg.Pool, pg.Queries))
 	hub := chat.NewHub(rdb)
-	chatHandler := chat.NewHandler(chat.NewService(pg.Queries, hub), hub, cfg.CORSOrigins)
+	chatHandler := chat.NewHandler(chat.NewService(pg.Queries, hub), hub, denylist, cfg.CORSOrigins)
 	analysisHandler := analysis.NewHandler(analysis.NewService(pg.Pool, pg.Queries, queue))
 
 	router := newRouter(cfg, auth.Middleware(issuer), active, handlers{
