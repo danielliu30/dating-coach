@@ -237,9 +237,10 @@ func (s *Service) SignIn(ctx context.Context, email, password string) (Session, 
 // Refresh exchanges a refresh token for a new access token and rotates the
 // refresh token itself. It returns ErrInvalidToken when the token is unknown,
 // expired or already spent, which is also what a deleted account's token looks
-// like, since deletion revokes them.
+// like, since deletion revokes them. The presented token is only consumed once
+// the replacement session is ready, so a failed exchange can be retried.
 func (s *Service) Refresh(ctx context.Context, refreshToken string) (Session, error) {
-	userID, replacement, refreshExpires, err := s.refresh.Rotate(ctx, refreshToken)
+	userID, err := s.refresh.Owner(ctx, refreshToken)
 	if err != nil {
 		return Session{}, err
 	}
@@ -254,6 +255,12 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (Session, er
 		return Session{}, ErrEmailNotVerified
 	}
 	access, expires, err := s.issuer.Issue(user.ID, user.Email, user.Role, ScopeSession, s.sessionTTL)
+	if err != nil {
+		return Session{}, err
+	}
+	// Spending the token last means every way this can fail leaves the client
+	// holding a token it can present again.
+	_, replacement, refreshExpires, err := s.refresh.Rotate(ctx, refreshToken)
 	if err != nil {
 		return Session{}, err
 	}

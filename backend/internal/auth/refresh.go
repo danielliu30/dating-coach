@@ -58,6 +58,22 @@ func (r *RefreshTokens) Issue(ctx context.Context, userID uuid.UUID) (string, ti
 	return token, expires, nil
 }
 
+// Owner returns the user a refresh token belongs to without spending it, so a
+// caller can do the work that must succeed before the exchange is committed.
+//
+// It returns ErrInvalidToken when the token is unknown, already used, revoked
+// or expired.
+func (r *RefreshTokens) Owner(ctx context.Context, token string) (uuid.UUID, error) {
+	row, err := r.store.GetActiveRefreshToken(ctx, hashToken(token))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return uuid.Nil, ErrInvalidToken
+		}
+		return uuid.Nil, fmt.Errorf("lookup refresh token: %w", err)
+	}
+	return row.UserID, nil
+}
+
 // Rotate consumes a refresh token and returns its owner along with the
 // replacement token, so a leaked token is usable at most once before the
 // legitimate client's next refresh invalidates it.
