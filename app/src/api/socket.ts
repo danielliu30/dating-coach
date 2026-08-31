@@ -3,22 +3,13 @@ import { wsURL } from '../config';
 import type { ChatEvent } from './types';
 
 /**
- * Reads a JWT's `exp` claim as milliseconds since the epoch, or null when the
- * token is not a readable JWT. Nothing is verified here — the signature is the
- * server's business; this only asks when the server will stop accepting it.
+ * How long a socket waits between renewals while it cannot connect. A
+ * handshake carries no status code, so an expired token and a thread the
+ * server will never serve look identical; this bounds what the second case can
+ * cost to one rotation a minute, while the first still renews on its first
+ * failure.
  */
-function expiryOf(token: string): number | null {
-  const payload = token.split('.')[1];
-  if (!payload) return null;
-  try {
-    const claims = JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/'))) as {
-      exp?: number;
-    };
-    return typeof claims.exp === 'number' ? claims.exp * 1000 : null;
-  } catch {
-    return null;
-  }
-}
+const renewalCooldown = 60_000;
 
 interface Handlers {
   onEvent: (event: ChatEvent) => void;
@@ -39,7 +30,7 @@ export class ChatSocket {
   private closed = false;
   private opened = false;
   private retry: ReturnType<typeof setTimeout> | null = null;
-  private renewed = false;
+  private renewedAt = 0;
   private outbox: ChatEvent[] = [];
 
   constructor(
@@ -63,7 +54,7 @@ export class ChatSocket {
     socket.onopen = () => {
       this.attempts = 0;
       this.opened = true;
-      this.renewed = false;
+      this.renewedAt = 0;
       this.handlers.onStatus?.('open');
       this.flush();
     };
@@ -78,7 +69,7 @@ export class ChatSocket {
       const unopened = !this.opened;
       this.opened = false;
       this.handlers.onStatus?.('closed');
-      void this.scheduleReconnect(unopened ? token : null);
+      void this.scheduleReconnect(unopened);
     };
     socket.onerror = () => socket.close();
   }
@@ -90,38 +81,24 @@ export class ChatSocket {
    * renewal that merely could not be reached is treated like any other outage
    * and retried with backoff.
    *
-   * used is the token the failed handshake carried, or null if the socket had
-   * opened; renewal is asked for only once that token is spent, so a handshake
-   * the server refuses for its own reasons — a thread that is gone, or not the
-   * caller's — retries on backoff instead of rotating a fresh refresh token
-   * every time.
+   * Renewals are spaced by renewalCooldown, measured as elapsed time rather
+   * than against any expiry claim, so neither a skewed device clock nor a
+   * handshake the server refuses for its own reasons can turn the retry loop
+   * into a refresh-token mill.
    */
-  private async scheduleReconnect(used: string | null): Promise<void> {
+  private async scheduleReconnect(unopened: boolean): Promise<void> {
     if (this.closed) return;
-    if (used !== null && this.spent(used)) {
-      const result = await api.renewSession();
-      if (result === 'rejected') {
+    if (unopened && Date.now() - this.renewedAt >= renewalCooldown) {
+      this.renewedAt = Date.now();
+      if ((await api.renewSession()) === 'rejected') {
         this.close();
         return;
       }
-      // Only a renewal that happened spends the fallback's single attempt: an
-      // unreachable backend must not strand the socket on a dead token.
-      if (result === 'renewed') this.renewed = true;
     }
     if (this.closed) return;
     this.attempts += 1;
     const delay = Math.min(1000 * this.attempts, 10_000);
     this.retry = setTimeout(() => this.connect(), delay);
-  }
-
-  /**
-   * Whether token has run out and is worth renewing. A token whose expiry
-   * cannot be read falls back to one renewal per connected run, which is the
-   * most that can be justified without knowing when it dies.
-   */
-  private spent(token: string): boolean {
-    const expiry = expiryOf(token);
-    return expiry === null ? !this.renewed : expiry <= Date.now();
   }
 
   send(body: string): void {
