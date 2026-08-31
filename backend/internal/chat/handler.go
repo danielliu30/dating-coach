@@ -248,8 +248,8 @@ func (h *Handler) websocket(w http.ResponseWriter, r *http.Request) {
 		case <-ctx.Done():
 			return
 		case <-revocationTicker.C:
-			if !h.sessionActive(ctx, principal.UserID) {
-				closeRevoked(conn)
+			if verdict := h.sessionStatus(ctx, principal.UserID); verdict != socketActive {
+				closeSocket(conn, verdict)
 				return
 			}
 		case <-ticker.C:
@@ -272,40 +272,63 @@ func (h *Handler) websocket(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// sessionActive reports whether the socket's account may still act. It is the
+// socketVerdict is the outcome of re-checking the account behind a live socket.
+type socketVerdict int
+
+const (
+	socketActive socketVerdict = iota
+	socketRevoked
+	socketUnverifiable
+)
+
+// sessionStatus re-checks the account behind a socket. It is the
 // socket-lifetime counterpart of auth.RequireActive, which only runs once, at
 // the upgrade: without this a connection opened before an account was deleted
 // would keep working until its token expired on its own.
 //
-// It fails closed, so an unreachable Redis drops sockets rather than serving
-// accounts whose status cannot be established; clients reconnect and are then
-// answered by the REST middleware, which fails closed the same way.
-func (h *Handler) sessionActive(ctx context.Context, userID uuid.UUID) bool {
+// It fails closed, so a denylist it cannot read ends the connection rather than
+// serving an account whose status is unknown. That case is reported as
+// socketUnverifiable rather than socketRevoked, so a Redis outage does not tell
+// clients their session is gone for good.
+func (h *Handler) sessionStatus(ctx context.Context, userID uuid.UUID) socketVerdict {
 	revoked, err := h.revocations.Revoked(ctx, userID)
-	if err != nil {
+	switch {
+	case err != nil:
 		slog.Error("check socket revocation", "error", err, "user_id", userID)
-		return false
+		return socketUnverifiable
+	case revoked:
+		return socketRevoked
 	}
-	return !revoked
+	return socketActive
 }
 
-// closeRevoked tells the client its session ended before dropping the socket,
-// so it can clear local credentials instead of reconnecting in a loop.
-func closeRevoked(conn *websocket.Conn) {
-	if err := conn.Close(websocket.StatusPolicyViolation, "session revoked"); err != nil {
-		slog.Debug("close revoked socket", "error", err)
+// closeSocket drops a connection with the close code matching verdict, so a
+// client can tell a session that is gone for good, which it answers by clearing
+// its credentials, from one worth reconnecting to. Passing socketActive is a
+// no-op.
+func closeSocket(conn *websocket.Conn, verdict socketVerdict) {
+	status, reason := websocket.StatusTryAgainLater, "could not verify session"
+	switch verdict {
+	case socketActive:
+		return
+	case socketRevoked:
+		status, reason = websocket.StatusPolicyViolation, "session revoked"
+	case socketUnverifiable:
+	}
+	if err := conn.Close(status, reason); err != nil {
+		slog.Debug("close socket", "error", err, "reason", reason)
 	}
 }
 
 // handleIncoming dispatches one client event: sending a message, relaying a
 // typing indicator or refreshing presence. Rejected sends are reported back on
 // the socket instead of closing it. It returns false once the caller's account
-// has been revoked, having closed the socket: every client event is a privileged
-// action, so none is dispatched without a fresh revocation check rather than
-// waiting for the next heartbeat.
+// can no longer act, having closed the socket: every client event is a
+// privileged action, so none is dispatched without a fresh revocation check
+// rather than waiting for the next heartbeat.
 func (h *Handler) handleIncoming(ctx context.Context, conn *websocket.Conn, threadID uuid.UUID, principal auth.Principal, connID uuid.UUID, event Event) bool {
-	if !h.sessionActive(ctx, principal.UserID) {
-		closeRevoked(conn)
+	if verdict := h.sessionStatus(ctx, principal.UserID); verdict != socketActive {
+		closeSocket(conn, verdict)
 		return false
 	}
 	switch event.Type {

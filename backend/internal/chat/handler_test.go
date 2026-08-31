@@ -25,31 +25,52 @@ func (s stubRevocations) Revoked(context.Context, uuid.UUID) (bool, error) {
 	return s.revoked, s.err
 }
 
-func TestSessionActive(t *testing.T) {
+func TestSessionStatus(t *testing.T) {
 	tests := []struct {
 		name        string
 		revocations stubRevocations
-		want        bool
+		want        socketVerdict
 	}{
-		{"active account keeps its socket", stubRevocations{}, true},
-		{"revoked account loses its socket", stubRevocations{revoked: true}, false},
-		{"unreachable redis fails closed", stubRevocations{err: errors.New("dial redis: connection refused")}, false},
+		{"active account keeps its socket", stubRevocations{}, socketActive},
+		{"revoked account loses its socket", stubRevocations{revoked: true}, socketRevoked},
+		{"unreachable redis fails closed but stays retryable", stubRevocations{err: errors.New("dial redis: connection refused")}, socketUnverifiable},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			h := NewHandler(nil, nil, tc.revocations, nil)
-			if got := h.sessionActive(context.Background(), uuid.New()); got != tc.want {
-				t.Fatalf("sessionActive = %t, want %t", got, tc.want)
+			if got := h.sessionStatus(context.Background(), uuid.New()); got != tc.want {
+				t.Fatalf("sessionStatus = %d, want %d", got, tc.want)
 			}
 		})
 	}
 }
 
-// TestHandleIncomingRevoked drives one client event through a live socket whose
-// account was revoked after the upgrade, and asserts the event is not
-// dispatched: the handler has no service or hub, so acting on it would panic.
-func TestHandleIncomingRevoked(t *testing.T) {
-	h := NewHandler(nil, nil, stubRevocations{revoked: true}, nil)
+// TestHandleIncomingClosesInactiveSocket drives one client event through a live
+// socket whose account no longer checks out, and asserts the event is not
+// dispatched (the handler has no service or hub, so acting on it would panic)
+// and that the client can tell a revoked session from an unverifiable one.
+func TestHandleIncomingClosesInactiveSocket(t *testing.T) {
+	tests := []struct {
+		name        string
+		revocations stubRevocations
+		want        websocket.StatusCode
+	}{
+		{"revoked account is told to stop reconnecting", stubRevocations{revoked: true}, websocket.StatusPolicyViolation},
+		{"unverifiable account may reconnect", stubRevocations{err: errors.New("dial redis: connection refused")}, websocket.StatusTryAgainLater},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assertSocketClosed(t, tc.revocations, tc.want)
+		})
+	}
+}
+
+// assertSocketClosed serves one socket with a handler backed by revocations,
+// feeds it a message event and fails the test unless the socket was closed with
+// want and the event went undispatched.
+func assertSocketClosed(t *testing.T, revocations stubRevocations, want websocket.StatusCode) {
+	t.Helper()
+	h := NewHandler(nil, nil, revocations, nil)
 
 	dispatched := make(chan bool, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -74,10 +95,10 @@ func TestHandleIncomingRevoked(t *testing.T) {
 	}
 	defer conn.CloseNow()
 
-	if _, _, err := conn.Read(ctx); websocket.CloseStatus(err) != websocket.StatusPolicyViolation {
-		t.Fatalf("close status = %v, want %v", websocket.CloseStatus(err), websocket.StatusPolicyViolation)
+	if _, _, err := conn.Read(ctx); websocket.CloseStatus(err) != want {
+		t.Fatalf("close status = %v, want %v", websocket.CloseStatus(err), want)
 	}
 	if <-dispatched {
-		t.Fatal("handleIncoming kept the socket open for a revoked account")
+		t.Fatal("handleIncoming kept the socket open for an inactive account")
 	}
 }
