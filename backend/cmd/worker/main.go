@@ -54,11 +54,12 @@ func run() error {
 	slog.Info("worker started",
 		"analysis_queue", cfg.AnalysisQueue,
 		"deletion_queue", cfg.AccountDeletionQueue,
+		"dead_letter_alert_period", cfg.DeadLetterAlertPeriod,
 		"ml_service", cfg.MLServiceURL,
 	)
 
 	var wg sync.WaitGroup
-	wg.Add(3)
+	wg.Add(4)
 	go func() {
 		defer wg.Done()
 		deleter.PurgeExpiredRefreshTokens(ctx, refreshTokenPurgeInterval)
@@ -73,6 +74,12 @@ func run() error {
 		defer wg.Done()
 		consume(ctx, "account deletion", func(ctx context.Context) error {
 			return runDeletionConsumer(ctx, cfg.RabbitMQURL, cfg.AccountDeletionQueue, deleter.Handle)
+		})
+	}()
+	go func() {
+		defer wg.Done()
+		consume(ctx, "dead letter monitor", func(ctx context.Context) error {
+			return watchDeadLetters(ctx, cfg.RabbitMQURL, cfg.AccountDeletionQueue, cfg.DeadLetterAlertPeriod)
 		})
 	}()
 	wg.Wait()
@@ -118,6 +125,40 @@ func runAnalysisConsumer(ctx context.Context, url, name string, handle analysis.
 	}
 	defer queue.Close()
 	return queue.Consume(ctx, handle)
+}
+
+// watchDeadLetters logs the depth of the deletion dead-letter queue every
+// period until ctx ends, so a deployment can alert on deletions that failed
+// after the API already answered the account holder. It holds its own broker
+// connection: a failed inspection closes the channel, which must not take the
+// consumer down with it. period must be positive; config.Load rejects anything
+// else.
+func watchDeadLetters(ctx context.Context, url, name string, period time.Duration) error {
+	queue, err := account.OpenQueue(url, name)
+	if err != nil {
+		return err
+	}
+	defer queue.Close()
+
+	ticker := time.NewTicker(period)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			depth, err := queue.DeadLetterDepth()
+			if err != nil {
+				return err
+			}
+			if depth > 0 {
+				slog.Warn("account deletions need an operator",
+					"queue", account.DeadLetterQueue(name),
+					"depth", depth,
+				)
+			}
+		}
+	}
 }
 
 // runDeletionConsumer holds one broker connection for as long as it stays
