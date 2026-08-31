@@ -48,6 +48,9 @@ export class ApiClient {
   private token: TokenProvider = () => null;
   private onUnauthorized: () => void = () => undefined;
   private renewSession: SessionRenewer = async () => 'invalid';
+  // Counts completed renewals, so a request that started before one can tell a
+  // token replaced by renewal from one replaced by a different sign-in.
+  private renewals = 0;
 
   useToken(provider: TokenProvider): void {
     this.token = provider;
@@ -66,13 +69,19 @@ export class ApiClient {
    * not be completed fails the request and leaves the session in place.
    */
   onAccessTokenExpired(handler: SessionRenewer): void {
-    this.renewSession = handler;
+    this.renewSession = async () => {
+      const outcome = await handler();
+      if (outcome === 'renewed') this.renewals += 1;
+      return outcome;
+    };
   }
 
   /**
    * Performs one API call, retrying it once with a renewed access token when
-   * the first attempt is rejected. unauthorized decides what a 401 means here;
-   * the retry uses 'sign-out' so the recursion stops after one renewal.
+   * the first attempt is rejected — whether this request triggered the renewal
+   * or merely raced one another request had already started. unauthorized
+   * decides what a 401 means here; the retry uses 'sign-out' so the recursion
+   * stops after one renewal.
    */
   private async request<T>(
     method: string,
@@ -81,6 +90,7 @@ export class ApiClient {
     unauthorized: UnauthorizedPolicy = 'renew',
   ): Promise<T> {
     const token = this.token();
+    const renewals = this.renewals;
     const response = await fetch(`${API_BASE_URL}${API_PREFIX}${path}`, {
       method,
       headers: {
@@ -95,10 +105,18 @@ export class ApiClient {
     const payload = text ? (JSON.parse(text) as unknown) : null;
 
     if (!response.ok) {
-      if (response.status === 401 && unauthorized !== 'defer' && token && token === this.token()) {
-        const outcome = unauthorized === 'renew' ? await this.renewSession() : 'invalid';
-        if (outcome === 'renewed') return this.request<T>(method, path, body, 'sign-out');
-        if (outcome === 'invalid') this.onUnauthorized();
+      if (response.status === 401 && unauthorized !== 'defer' && token) {
+        if (token === this.token()) {
+          const outcome = unauthorized === 'renew' ? await this.renewSession() : 'invalid';
+          if (outcome === 'renewed') return this.request<T>(method, path, body, 'sign-out');
+          if (outcome === 'invalid') this.onUnauthorized();
+        } else if (unauthorized === 'renew' && this.renewals !== renewals && this.token()) {
+          // A concurrent renewal replaced the token this request was sent with:
+          // the rejection is stale, not a verdict on the session. Any other
+          // change of token is a different session, which must not be replayed
+          // into.
+          return this.request<T>(method, path, body, 'sign-out');
+        }
       }
       const message =
         payload && typeof payload === 'object' && 'error' in payload

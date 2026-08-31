@@ -123,6 +123,7 @@ func Load() (*Config, error) {
 		value time.Duration
 	}{
 		{"JWT_TTL", cfg.JWTTTL},
+		{"REFRESH_TOKEN_TTL", cfg.RefreshTokenTTL},
 		{"VERIFY_TOKEN_TTL", cfg.VerifyTokenTTL},
 		{"AUTH_RATE_WINDOW", cfg.AuthRateWindow},
 		{"ML_SERVICE_TIMEOUT", cfg.MLServiceTimeout},
