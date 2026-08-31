@@ -23,14 +23,23 @@ export class ApiError extends Error {
 }
 
 type TokenProvider = () => string | null;
-type SessionRenewer = () => Promise<boolean>;
+
+/**
+ * Outcome of a renewal attempt. `unavailable` covers everything that is not a
+ * verdict on the refresh token — a network failure, or a renewal superseded by
+ * a sign-out or a different sign-in — and leaves the session alone; only
+ * `rejected` means the refresh token itself is no good.
+ */
+export type RenewalResult = 'renewed' | 'rejected' | 'unavailable';
+
+type SessionRenewer = () => Promise<RenewalResult>;
 
 /** Typed client for the Go API. One instance per app, token injected lazily. */
 export class ApiClient {
   private token: TokenProvider = () => null;
   private onUnauthorized: () => void = () => undefined;
-  private renew: SessionRenewer = async () => false;
-  private renewal: Promise<boolean> | null = null;
+  private renew: SessionRenewer = async () => 'rejected';
+  private renewal: Promise<RenewalResult> | null = null;
 
   useToken(provider: TokenProvider): void {
     this.token = provider;
@@ -39,7 +48,7 @@ export class ApiClient {
   /**
    * Registers how to trade the refresh token in for a new access token. It is
    * called at most once per rejected request, and concurrent requests share the
-   * one renewal in flight; resolving false means the session is unrecoverable.
+   * one renewal in flight.
    */
   useRenewal(renew: SessionRenewer): void {
     this.renew = renew;
@@ -52,18 +61,18 @@ export class ApiClient {
 
   /**
    * Trades the refresh token in for a new access token, collapsing concurrent
-   * callers onto the one renewal in flight. Resolving false means the refresh
-   * token was refused and the session is unrecoverable, so the app is signed
-   * out before the caller sees the answer. Callers outside the HTTP path use
-   * this too: the chat socket has no 401 to react to.
+   * callers onto the one renewal in flight. A `rejected` refresh token is
+   * unrecoverable, so the app is signed out before the caller sees the answer;
+   * an `unavailable` one leaves the session in place to be retried. Callers
+   * outside the HTTP path use this too: the chat socket has no 401 to react to.
    */
-  async renewSession(): Promise<boolean> {
+  async renewSession(): Promise<RenewalResult> {
     this.renewal ??= this.renew().finally(() => {
       this.renewal = null;
     });
-    if (await this.renewal) return true;
-    this.onUnauthorized();
-    return false;
+    const result = await this.renewal;
+    if (result === 'rejected') this.onUnauthorized();
+    return result;
   }
 
   private async request<T>(method: string, path: string, body?: unknown, renewed = false): Promise<T> {
@@ -89,7 +98,7 @@ export class ApiClient {
         // token it missed instead of rotating the fresh one away.
         const current = this.token();
         if (current && current !== token) return this.request<T>(method, path, body, true);
-        if (await this.renewSession()) return this.request<T>(method, path, body, true);
+        if ((await this.renewSession()) === 'renewed') return this.request<T>(method, path, body, true);
       }
       const message =
         payload && typeof payload === 'object' && 'error' in payload

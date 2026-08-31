@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
-import { api } from '../api/client';
+import { ApiError, api } from '../api/client';
 import type { AuthSession, Profile, Role } from '../api/types';
 
 const STORAGE_KEY = 'dating-coach.session';
@@ -28,6 +28,10 @@ const isFresh = (stored: Partial<AuthSession>): boolean => {
   const expiry = Date.parse(stored.expires_at ?? '');
   return Number.isFinite(expiry) && expiry > Date.now();
 };
+
+// Whether the backend refused the refresh token, as opposed to the request not
+// reaching it. Only a refusal is worth throwing the stored session away for.
+const isRefused = (error: unknown): boolean => error instanceof ApiError && error.status === 401;
 
 export function AuthProvider({ children }: { children: React.ReactNode }): React.ReactElement {
   const [ready, setReady] = useState(false);
@@ -74,16 +78,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
   // refused refresh token is unrecoverable: the client signs the user out.
   useEffect(() => {
     api.useRenewal(async () => {
-      if (!refreshRef.current) return false;
+      if (!refreshRef.current) return 'rejected';
       const generation = generationRef.current;
       try {
         const session = await api.refreshSession(refreshRef.current);
-        // Signed out, or signed in as someone else, while this was in flight.
-        if (generation !== generationRef.current) return false;
+        // Signed out, or signed in as someone else, while this was in flight:
+        // the session on hand now is newer than the one just minted.
+        if (generation !== generationRef.current) return 'unavailable';
         await persist(session);
-        return true;
-      } catch {
-        return false;
+        return 'renewed';
+      } catch (error) {
+        return isRefused(error) ? 'rejected' : 'unavailable';
       }
     });
   }, [persist]);
@@ -108,10 +113,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
         } else if (raw) {
           await AsyncStorage.removeItem(STORAGE_KEY);
         }
-      } catch {
-        // Unreadable session, or one the backend refused to renew: drop it and
-        // start signed out rather than leaving the app on the loading screen.
-        await AsyncStorage.removeItem(STORAGE_KEY).catch(() => undefined);
+      } catch (error) {
+        // Start signed out rather than leaving the app on the loading screen,
+        // but only forget the session if it was refused or is unreadable: an
+        // unreachable backend is worth another try on the next launch.
+        if (!(error instanceof ApiError) || isRefused(error)) {
+          await AsyncStorage.removeItem(STORAGE_KEY).catch(() => undefined);
+        }
       } finally {
         setReady(true);
       }

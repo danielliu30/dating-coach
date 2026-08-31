@@ -55,23 +55,24 @@ export class ChatSocket {
       }
     };
     socket.onclose = () => {
-      const rejected = !this.opened;
+      const unopened = !this.opened;
       this.opened = false;
       this.handlers.onStatus?.('closed');
-      void this.scheduleReconnect(rejected);
+      void this.scheduleReconnect(unopened);
     };
     socket.onerror = () => socket.close();
   }
 
   /**
-   * Queues the next attempt. A handshake that closed without ever opening is
-   * usually an expired access token, and no HTTP 401 exists here to renew it,
-   * so the shared renewal runs first; a refused refresh token ends the retries
-   * instead of looping on a credential that will never be accepted.
+   * Queues the next attempt. A handshake that closed without ever opening may
+   * be an expired access token, and no HTTP 401 exists here to renew it, so the
+   * shared renewal runs first. Only a refused refresh token ends the retries; a
+   * renewal that merely could not be reached is treated like any other outage
+   * and retried with backoff.
    */
-  private async scheduleReconnect(rejected: boolean): Promise<void> {
+  private async scheduleReconnect(unopened: boolean): Promise<void> {
     if (this.closed) return;
-    if (rejected && !(await api.renewSession())) {
+    if (unopened && (await api.renewSession()) === 'rejected') {
       this.close();
       return;
     }
