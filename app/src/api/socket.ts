@@ -21,7 +21,7 @@ export class ChatSocket {
   private closed = false;
   private opened = false;
   private retry: ReturnType<typeof setTimeout> | null = null;
-  private renewedFor: string | null = null;
+  private renewed = false;
   private outbox: ChatEvent[] = [];
 
   constructor(
@@ -45,6 +45,7 @@ export class ChatSocket {
     socket.onopen = () => {
       this.attempts = 0;
       this.opened = true;
+      this.renewed = false;
       this.handlers.onStatus?.('open');
       this.flush();
     };
@@ -59,7 +60,7 @@ export class ChatSocket {
       const unopened = !this.opened;
       this.opened = false;
       this.handlers.onStatus?.('closed');
-      void this.scheduleReconnect(unopened ? token : null);
+      void this.scheduleReconnect(unopened);
     };
     socket.onerror = () => socket.close();
   }
@@ -71,19 +72,21 @@ export class ChatSocket {
    * renewal that merely could not be reached is treated like any other outage
    * and retried with backoff.
    *
-   * expired is the token the failed handshake carried, or null if the socket
-   * had opened. Each token buys one renewal: a handshake the server refuses for
-   * its own reasons — a thread that is gone, or not the caller's — otherwise
-   * rotates a fresh refresh token on every retry, forever.
+   * One renewal is spent per connected run, reset the next time the socket
+   * opens: a handshake the server refuses for its own reasons — a thread that
+   * is gone, or not the caller's — would otherwise rotate a fresh refresh token
+   * on every retry, forever. A renewal that could not be reached spends
+   * nothing, so the socket still recovers once the backend returns.
    */
-  private async scheduleReconnect(expired: string | null): Promise<void> {
+  private async scheduleReconnect(unopened: boolean): Promise<void> {
     if (this.closed) return;
-    if (expired !== null && expired !== this.renewedFor) {
-      this.renewedFor = expired;
-      if ((await api.renewSession()) === 'rejected') {
+    if (unopened && !this.renewed) {
+      const result = await api.renewSession();
+      if (result === 'rejected') {
         this.close();
         return;
       }
+      this.renewed = result === 'renewed';
     }
     if (this.closed) return;
     this.attempts += 1;
