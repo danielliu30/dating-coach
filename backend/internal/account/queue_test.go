@@ -13,6 +13,14 @@ func TestDeadLetterQueue(t *testing.T) {
 	}
 }
 
+// TestRetryQueue pins the retry queue's name: it is referenced by the work
+// queue's dead-letter routing and by the republish path, which must agree.
+func TestRetryQueue(t *testing.T) {
+	if got := RetryQueue("account.deletion"); got != "account.deletion.retry" {
+		t.Fatalf("RetryQueue = %q, want %q", got, "account.deletion.retry")
+	}
+}
+
 // TestJobRoundTrip pins the wire format: the API and the worker are separate
 // processes, so a renamed field would strand queued deletions.
 func TestJobRoundTrip(t *testing.T) {
