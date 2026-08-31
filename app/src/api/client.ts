@@ -50,12 +50,20 @@ export class ApiClient {
     this.onUnauthorized = handler;
   }
 
-  /** Runs the registered renewal, collapsing concurrent callers onto one call. */
-  private async renewSession(): Promise<boolean> {
+  /**
+   * Trades the refresh token in for a new access token, collapsing concurrent
+   * callers onto the one renewal in flight. Resolving false means the refresh
+   * token was refused and the session is unrecoverable, so the app is signed
+   * out before the caller sees the answer. Callers outside the HTTP path use
+   * this too: the chat socket has no 401 to react to.
+   */
+  async renewSession(): Promise<boolean> {
     this.renewal ??= this.renew().finally(() => {
       this.renewal = null;
     });
-    return this.renewal;
+    if (await this.renewal) return true;
+    this.onUnauthorized();
+    return false;
   }
 
   private async request<T>(method: string, path: string, body?: unknown, renewed = false): Promise<T> {
@@ -76,9 +84,12 @@ export class ApiClient {
     if (!response.ok) {
       if (response.status === 401 && token && !renewed) {
         // Access tokens expire within minutes, so a 401 on a request that
-        // carried one usually means "renew", not "signed out".
+        // carried one usually means "renew", not "signed out". A request that
+        // was already in flight when someone else renewed is retried with the
+        // token it missed instead of rotating the fresh one away.
+        const current = this.token();
+        if (current && current !== token) return this.request<T>(method, path, body, true);
         if (await this.renewSession()) return this.request<T>(method, path, body, true);
-        if (token === this.token()) this.onUnauthorized();
       }
       const message =
         payload && typeof payload === 'object' && 'error' in payload

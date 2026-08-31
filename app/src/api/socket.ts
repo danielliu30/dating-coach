@@ -1,3 +1,4 @@
+import { api } from './client';
 import { wsURL } from '../config';
 import type { ChatEvent } from './types';
 
@@ -9,29 +10,40 @@ interface Handlers {
 /**
  * Thin WebSocket wrapper for a chat thread. Reconnects with linear backoff so a
  * backgrounded phone or a redeployed API does not silently break the chat.
+ *
+ * The access token is read per attempt rather than captured once: it lives for
+ * minutes, and the handshake carries it, so a socket holding the value it was
+ * built with would reconnect on an expired credential forever.
  */
 export class ChatSocket {
   private socket: WebSocket | null = null;
   private attempts = 0;
   private closed = false;
+  private opened = false;
   private retry: ReturnType<typeof setTimeout> | null = null;
   private outbox: ChatEvent[] = [];
 
   constructor(
     private readonly threadID: string,
-    private readonly token: string,
+    private readonly token: () => string | null,
     private readonly handlers: Handlers,
   ) {}
 
   connect(): void {
     if (this.closed) return;
+    const token = this.token();
+    if (!token) {
+      this.handlers.onStatus?.('closed');
+      return;
+    }
     this.handlers.onStatus?.('connecting');
 
-    const socket = new WebSocket(wsURL(`/chat/threads/${this.threadID}/ws`, this.token));
+    const socket = new WebSocket(wsURL(`/chat/threads/${this.threadID}/ws`, token));
     this.socket = socket;
 
     socket.onopen = () => {
       this.attempts = 0;
+      this.opened = true;
       this.handlers.onStatus?.('open');
       this.flush();
     };
@@ -43,13 +55,26 @@ export class ChatSocket {
       }
     };
     socket.onclose = () => {
+      const rejected = !this.opened;
+      this.opened = false;
       this.handlers.onStatus?.('closed');
-      this.scheduleReconnect();
+      void this.scheduleReconnect(rejected);
     };
     socket.onerror = () => socket.close();
   }
 
-  private scheduleReconnect(): void {
+  /**
+   * Queues the next attempt. A handshake that closed without ever opening is
+   * usually an expired access token, and no HTTP 401 exists here to renew it,
+   * so the shared renewal runs first; a refused refresh token ends the retries
+   * instead of looping on a credential that will never be accepted.
+   */
+  private async scheduleReconnect(rejected: boolean): Promise<void> {
+    if (this.closed) return;
+    if (rejected && !(await api.renewSession())) {
+      this.close();
+      return;
+    }
     if (this.closed) return;
     this.attempts += 1;
     const delay = Math.min(1000 * this.attempts, 10_000);
