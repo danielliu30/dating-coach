@@ -241,6 +241,13 @@ func (h *Handler) websocket(w http.ResponseWriter, r *http.Request) {
 	drop := sync.OnceFunc(func() { close(revoked) })
 	defer h.hub.Register(principal.UserID, connID, drop)()
 
+	// Re-check after registering, never before: an announcement made while this
+	// socket was still being set up reached an index that did not list it yet.
+	if verdict := h.sessionStatus(ctx, principal.UserID); verdict != socketActive {
+		closeSocket(conn, verdict)
+		return
+	}
+
 	incoming := make(chan Event, 8)
 	go h.readLoop(ctx, cancel, conn, incoming)
 
