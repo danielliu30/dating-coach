@@ -3,15 +3,28 @@ import React, { useState } from 'react';
 import { Text, View } from 'react-native';
 
 import { ApiError } from '../api/client';
-import { Button, Field, Screen } from '../components/ui';
+import { Button, Field, Notice, Screen } from '../components/ui';
 import type { AuthStackParams } from '../navigation/types';
 import { useAuth } from '../state/auth';
+import type { SessionEndedReason } from '../state/auth';
 import { shared } from '../theme';
+
+// What to tell someone the app signed out without being asked to.
+const endedNotice: Record<SessionEndedReason, { title: string; detail: string }> = {
+  expired: {
+    title: 'You were signed out',
+    detail: 'Your session expired for security. Sign in to pick up where you left off.',
+  },
+  revoked: {
+    title: 'Your session was ended',
+    detail: 'This can happen if the account was deleted or signed out on another device.',
+  },
+};
 
 export default function SignInScreen({
   navigation,
 }: NativeStackScreenProps<AuthStackParams, 'SignIn'>): React.ReactElement {
-  const { signIn } = useAuth();
+  const { signIn, endedReason, acknowledgeSessionEnded } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -40,6 +53,13 @@ export default function SignInScreen({
         <Text style={shared.title}>Welcome back</Text>
         <Text style={shared.muted}>Coaching and conversation feedback, in one place.</Text>
       </View>
+      {endedReason ? (
+        <Notice
+          title={endedNotice[endedReason].title}
+          detail={endedNotice[endedReason].detail}
+          onDismiss={acknowledgeSessionEnded}
+        />
+      ) : null}
       <View style={shared.card}>
         <Field
           label="Email"

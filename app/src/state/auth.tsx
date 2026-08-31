@@ -7,10 +7,21 @@ import type { AuthSession, Profile, Role } from '../api/types';
 
 const STORAGE_KEY = 'dating-coach.session';
 
+/**
+ * Why the app dropped a session on its own. 'expired' means the refresh token
+ * ran out its lifetime; 'revoked' means it was refused while it should still
+ * have been valid, which is what deleting the account or ending the session
+ * elsewhere looks like from here. An explicit sign-out leaves this null.
+ */
+export type SessionEndedReason = 'expired' | 'revoked';
+
 interface AuthState {
   ready: boolean;
   token: string | null;
   user: Profile | null;
+  /** Set when the app signed the user out for them; cleared by acknowledge. */
+  endedReason: SessionEndedReason | null;
+  acknowledgeSessionEnded: () => void;
   signIn: (email: string, password: string) => Promise<Profile>;
   signUp: (input: { email: string; password: string; displayName: string; role: Role }) => Promise<Profile>;
   verify: (token: string) => Promise<Profile>;
@@ -33,6 +44,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
   const [ready, setReady] = useState(false);
   const [token, setToken] = useState<string | null>(null);
   const [user, setUser] = useState<Profile | null>(null);
+  const [endedReason, setEndedReason] = useState<SessionEndedReason | null>(null);
   const tokenRef = useRef<string | null>(null);
   const expiresRef = useRef<string>('');
   const refreshTokenRef = useRef<string | null>(null);
@@ -55,6 +67,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
     refreshExpiresRef.current = session.refresh_expires_at ?? '';
     setToken(session.token);
     setUser(session.user);
+    setEndedReason(null);
     await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(session));
     return session.user;
   }, []);
@@ -88,8 +101,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
       return renewalRef.current;
     });
     // A token can also expire while the app is open; drop it centrally so the
-    // UI leaves the authenticated tabs instead of failing every request.
+    // UI leaves the authenticated tabs instead of failing every request, and
+    // record why so the sign-in screen can explain the eviction. A refresh
+    // token refused before its own expiry was withdrawn server-side.
     api.onSessionRejected(() => {
+      setEndedReason(isFresh(refreshExpiresRef.current) ? 'revoked' : 'expired');
       tokenRef.current = null;
       expiresRef.current = '';
       refreshTokenRef.current = null;
@@ -119,6 +135,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
           setToken(stored.token);
           setUser(stored.user);
         } else if (raw) {
+          // The app was left closed past the refresh token's lifetime.
+          setEndedReason('expired');
           await AsyncStorage.removeItem(STORAGE_KEY);
         }
       } catch {
@@ -131,8 +149,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
     })();
   }, []);
 
-  // Drops the session everywhere it is held: refs, state and storage.
+  // Drops the session everywhere it is held: refs, state and storage. The
+  // eviction notice is cleared too, since this path is the user's own doing.
   const clearSession = useCallback(async () => {
+    setEndedReason(null);
     tokenRef.current = null;
     expiresRef.current = '';
     refreshTokenRef.current = null;
@@ -164,6 +184,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
       ready,
       token,
       user,
+      endedReason,
+      acknowledgeSessionEnded: () => setEndedReason(null),
       signIn: async (email, password) => persist(await api.signIn({ email, password })),
       signUp: async ({ email, password, displayName, role }) =>
         persist(await api.signUp({ email, password, display_name: displayName, role })),
@@ -189,7 +211,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
       },
       signOut: clearSession,
     }),
-    [clearSession, persist, persistUser, ready, token, user],
+    [clearSession, endedReason, persist, persistUser, ready, token, user],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

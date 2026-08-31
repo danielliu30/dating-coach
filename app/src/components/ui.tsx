@@ -107,6 +107,35 @@ export function Badge({ text, tone = colors.muted }: { text: string; tone?: stri
   );
 }
 
+/**
+ * Banner for information the user did not ask for, such as why they are back
+ * on the sign-in screen. onDismiss adds a close affordance; without it the
+ * notice stays until the caller stops rendering it.
+ */
+export function Notice({
+  title,
+  detail,
+  onDismiss,
+}: {
+  title: string;
+  detail?: string;
+  onDismiss?: () => void;
+}): React.ReactElement {
+  return (
+    <View style={styles.notice} accessibilityRole="alert">
+      <View style={styles.noticeBody}>
+        <Text style={styles.noticeTitle}>{title}</Text>
+        {detail ? <Text style={shared.muted}>{detail}</Text> : null}
+      </View>
+      {onDismiss ? (
+        <Pressable onPress={onDismiss} accessibilityRole="button" accessibilityLabel="Dismiss" hitSlop={8}>
+          <Text style={styles.noticeDismiss}>✕</Text>
+        </Pressable>
+      ) : null}
+    </View>
+  );
+}
+
 export function Loading({ label }: { label?: string }): React.ReactElement {
   return (
     <View style={styles.center}>
@@ -164,5 +193,19 @@ const styles = StyleSheet.create({
     paddingVertical: 3,
   },
   badgeText: { fontSize: 12, fontWeight: '600' },
+  notice: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.neutral,
+    borderLeftWidth: 4,
+    borderRadius: 12,
+    padding: 14,
+  },
+  noticeBody: { flex: 1, gap: 3 },
+  noticeTitle: { fontSize: 15, fontWeight: '600', color: colors.text },
+  noticeDismiss: { fontSize: 15, color: colors.muted },
   center: { paddingVertical: 32, alignItems: 'center', gap: 8 },
 });
