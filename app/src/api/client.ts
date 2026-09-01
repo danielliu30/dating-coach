@@ -38,6 +38,16 @@ export class ApiClient {
     this.onUnauthorized = handler;
   }
 
+  /**
+   * Reports a session the backend refused somewhere other than a REST call,
+   * running the same sign-out handler a 401 does. token is the one the caller
+   * was using: a rejection arriving after the user signed in again is ignored
+   * so it cannot drop the newer session.
+   */
+  rejectSession(token: string): void {
+    if (token && token === this.token()) this.onUnauthorized();
+  }
+
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
     const token = this.token();
     const response = await fetch(`${API_BASE_URL}${API_PREFIX}${path}`, {
