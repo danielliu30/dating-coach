@@ -11,8 +11,18 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/danielliu30/dating-coach/backend/internal/account"
 	"github.com/danielliu30/dating-coach/backend/internal/store/db"
 )
+
+// failingPublisher stands in for a broker that cannot be reached: every
+// deletion job handed to it is refused.
+type failingPublisher struct{}
+
+// Publish refuses the job, so DeleteAccount fails on its last step.
+func (failingPublisher) Publish(context.Context, account.Job) error {
+	return errors.New("broker unavailable")
+}
 
 // silentNotifier stands in for the SMTP notifier: sign-up sends a verification
 // email, which is irrelevant to the scope of the token it returns.
@@ -178,6 +188,77 @@ func verifiedUser(t *testing.T, svc *Service, pool *pgxpool.Pool) credentials {
 		t.Fatalf("verify test user: %v", err)
 	}
 	return user
+}
+
+// TestSignInRefusesAccountPendingDeletion covers the window between requesting
+// a deletion and the worker removing the row: the credentials still match, but
+// sign-in must not hand out a session that would outlive the revocation if the
+// removal stalls.
+func TestSignInRefusesAccountPendingDeletion(t *testing.T) {
+	svc, _, pool := newTestService(t)
+	ctx := context.Background()
+
+	const password = "correct-horse"
+	email := "deletion-test-" + uuid.NewString() + "@example.com"
+	t.Cleanup(func() {
+		if _, err := pool.Exec(context.Background(), "DELETE FROM users WHERE email = $1", email); err != nil {
+			t.Errorf("delete test user: %v", err)
+		}
+	})
+
+	if _, err := svc.SignUp(ctx, SignUpInput{Email: email, Password: password, DisplayName: "Deletion Test"}); err != nil {
+		t.Fatalf("sign up: %v", err)
+	}
+	if _, err := pool.Exec(ctx, "UPDATE users SET email_verified = true WHERE email = $1", email); err != nil {
+		t.Fatalf("mark verified: %v", err)
+	}
+	if _, err := svc.SignIn(ctx, email, password); err != nil {
+		t.Fatalf("sign in before deletion: %v", err)
+	}
+
+	if _, err := pool.Exec(ctx, "UPDATE users SET deleted_at = now() WHERE email = $1", email); err != nil {
+		t.Fatalf("mark deleted: %v", err)
+	}
+	if _, err := svc.SignIn(ctx, email, password); !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("sign in after deletion = %v, want %v", err, ErrInvalidCredentials)
+	}
+}
+
+// TestDeleteAccountMarksRowBeforeQueueing pins the ordering the lockout depends
+// on: with the broker unreachable the request fails, yet the row is already
+// marked, so no session can be minted for the account while the deletion is
+// retried.
+func TestDeleteAccountMarksRowBeforeQueueing(t *testing.T) {
+	svc, _, pool := newTestService(t)
+	ctx := context.Background()
+
+	email := "revoke-order-" + uuid.NewString() + "@example.com"
+	t.Cleanup(func() {
+		if _, err := pool.Exec(context.Background(), "DELETE FROM users WHERE email = $1", email); err != nil {
+			t.Errorf("delete test user: %v", err)
+		}
+	})
+	signUp, err := svc.SignUp(ctx, SignUpInput{Email: email, Password: "correct-horse", DisplayName: "Revoke Order"})
+	if err != nil {
+		t.Fatalf("sign up: %v", err)
+	}
+	userID, err := uuid.Parse(signUp.User.ID)
+	if err != nil {
+		t.Fatalf("parse user id: %v", err)
+	}
+
+	svc.deletions = failingPublisher{}
+
+	if err := svc.DeleteAccount(ctx, userID); err == nil {
+		t.Fatal("delete account succeeded with the broker unreachable")
+	}
+	var deletedAt *time.Time
+	if err := pool.QueryRow(ctx, "SELECT deleted_at FROM users WHERE id = $1", userID).Scan(&deletedAt); err != nil {
+		t.Fatalf("read deleted_at: %v", err)
+	}
+	if deletedAt == nil {
+		t.Fatal("account was not marked deleted before the job was queued")
+	}
 }
 
 // assertTokenScope fails the test unless raw carries the given scope claim and
