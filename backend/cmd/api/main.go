@@ -76,14 +76,21 @@ func run() error {
 	// Sessions are ended by revoking refresh tokens: access tokens are checked
 	// by signature alone, so they are kept short-lived instead.
 	refresh := auth.NewRefreshTokens(pg.Queries, cfg.RefreshTokenTTL)
+	// A socket outlives the request that opened it, so it re-checks the account
+	// row a deletion marks rather than trusting the token it was opened with.
+	revocations := auth.NewAccountStatus(pg.Queries)
+	announcer := auth.NewAnnouncer(rdb)
 
 	authHandler := auth.NewHandler(
-		auth.NewService(pg.Queries, issuer, notifier, cfg.BcryptCost, cfg.PublicAppURL, refresh, deletions, cfg.JWTTTL, cfg.VerifyTokenTTL),
+		auth.NewService(pg.Queries, issuer, notifier, cfg.BcryptCost, cfg.PublicAppURL, refresh, deletions, announcer, cfg.JWTTTL, cfg.VerifyTokenTTL),
 		limiter,
 	)
 	coachingHandler := coaching.NewHandler(coaching.NewService(pg.Pool, pg.Queries))
 	hub := chat.NewHub(rdb)
-	chatHandler := chat.NewHandler(chat.NewService(pg.Queries, hub), hub, cfg.CORSOrigins)
+	// Sockets authenticated before a deletion would otherwise keep running
+	// until their next scheduled re-check; this closes them as it happens.
+	go auth.WatchRevocations(ctx, rdb, hub.EndSessions)
+	chatHandler := chat.NewHandler(chat.NewService(pg.Queries, hub), hub, revocations, cfg.CORSOrigins)
 	analysisHandler := analysis.NewHandler(analysis.NewService(pg.Pool, pg.Queries, queue))
 
 	router := newRouter(cfg, auth.Middleware(issuer), handlers{

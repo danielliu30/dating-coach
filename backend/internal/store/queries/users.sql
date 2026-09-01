@@ -32,3 +32,6 @@ SELECT EXISTS (SELECT 1 FROM users WHERE id = $1);
 
 -- name: DeleteUser :execrows
 DELETE FROM users WHERE id = $1;
+
+-- name: ActiveUserExists :one
+SELECT EXISTS (SELECT 1 FROM users WHERE id = $1 AND deleted_at IS NULL);

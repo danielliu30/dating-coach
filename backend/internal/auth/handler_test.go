@@ -48,7 +48,7 @@ func openLimiter(t *testing.T) *RateLimiter {
 // whose access token has already expired must still reach /refresh, so it must
 // not sit behind the authentication middleware.
 func TestRefreshRouteSkipsAuthentication(t *testing.T) {
-	svc := NewService(nil, nil, nil, 0, "", NewRefreshTokens(&stubRefreshStore{}, time.Hour), &stubPublisher{}, time.Hour, time.Minute)
+	svc := NewService(nil, nil, nil, 0, "", NewRefreshTokens(&stubRefreshStore{}, time.Hour), &stubPublisher{}, nil, time.Hour, time.Minute)
 	routes := NewHandler(svc, openLimiter(t)).Routes(rejectAll)
 
 	rec := httptest.NewRecorder()
@@ -82,7 +82,7 @@ func TestDeleteMeStaysReachableAfterRevocation(t *testing.T) {
 		t.Fatalf("build pool: %v", err)
 	}
 	t.Cleanup(pool.Close)
-	svc := NewService(db.New(pool), nil, nil, 0, "", NewRefreshTokens(&stubRefreshStore{}, time.Hour), &stubPublisher{}, time.Hour, time.Minute)
+	svc := NewService(db.New(pool), nil, nil, 0, "", NewRefreshTokens(&stubRefreshStore{}, time.Hour), &stubPublisher{}, nil, time.Hour, time.Minute)
 	principal := Principal{UserID: uuid.New(), Email: "deleted@example.com", Role: "user"}
 	routes := NewHandler(svc, openLimiter(t)).Routes(authenticateAs(principal))
 

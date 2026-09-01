@@ -12,6 +12,17 @@ import (
 	"github.com/google/uuid"
 )
 
+const activeUserExists = `-- name: ActiveUserExists :one
+SELECT EXISTS (SELECT 1 FROM users WHERE id = $1 AND deleted_at IS NULL)
+`
+
+func (q *Queries) ActiveUserExists(ctx context.Context, id uuid.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, activeUserExists, id)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const createUser = `-- name: CreateUser :one
 INSERT INTO users (email, password_hash, display_name, role, verification_token, verification_expires_at)
 VALUES ($1, $2, $3, $4, $5, $6)

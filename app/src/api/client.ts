@@ -62,6 +62,16 @@ export class ApiClient {
   }
 
   /**
+   * Reports a session the backend refused somewhere other than a REST call,
+   * running the same sign-out handler a 401 does. token is the one the caller
+   * was using: a rejection arriving after the user signed in again is ignored
+   * so it cannot drop the newer session.
+   */
+  rejectSession(token: string): void {
+    if (token && token === this.token()) this.onUnauthorized();
+  }
+
+  /**
    * Registers the renewal handler used when an access token is rejected.
    * Access tokens are short-lived, so a 401 usually means "expired", not
    * "signed out": the request is retried once after a successful renewal, and

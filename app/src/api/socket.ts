@@ -1,5 +1,11 @@
 import { wsURL } from '../config';
+import { api } from './client';
 import type { ChatEvent } from './types';
+
+// Close code the API uses when it drops a socket it will not serve again with
+// the token that opened it, and the two reasons it distinguishes.
+const POLICY_VIOLATION = 1008;
+const SESSION_REVOKED = 'session revoked';
 
 interface Handlers {
   onEvent: (event: ChatEvent) => void;
@@ -42,8 +48,19 @@ export class ChatSocket {
         // ignore malformed frames
       }
     };
-    socket.onclose = () => {
+    socket.onclose = (event) => {
       this.handlers.onStatus?.('closed');
+      // Neither reason is a transient failure: reconnecting would replay the
+      // same rejected token every ten seconds forever. A revoked account ends
+      // the session, through the handler a 401 would use; an expired access
+      // token only ends this socket, because the token this instance holds was
+      // captured when it was constructed and the app renews its own.
+      if (event.code === POLICY_VIOLATION) {
+        this.closed = true;
+        this.outbox = [];
+        if (event.reason === SESSION_REVOKED) api.rejectSession(this.token);
+        return;
+      }
       this.scheduleReconnect();
     };
     socket.onerror = () => socket.close();

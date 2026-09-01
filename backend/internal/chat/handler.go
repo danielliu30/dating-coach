@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"math"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/coder/websocket"
@@ -17,9 +19,10 @@ import (
 )
 
 const (
-	presenceRefresh = 20 * time.Second
-	writeTimeout    = 10 * time.Second
-	historyOnJoin   = 50
+	presenceRefresh   = 20 * time.Second
+	revocationRefresh = 15 * time.Second
+	writeTimeout      = 10 * time.Second
+	historyOnJoin     = 50
 )
 
 // Handler is the HTTP layer for /api/v1/chat: the REST endpoints plus the
@@ -27,13 +30,16 @@ const (
 type Handler struct {
 	svc            *Service
 	hub            *Hub
+	revocations    auth.Revocations
 	originPatterns []string
 }
 
 // NewHandler builds the chat handler. originPatterns are the origins allowed to
-// open a socket, and mirror the API's CORS configuration.
-func NewHandler(svc *Service, hub *Hub, originPatterns []string) *Handler {
-	return &Handler{svc: svc, hub: hub, originPatterns: originPatterns}
+// open a socket, and mirror the API's CORS configuration. revocations is the
+// durable account status, re-checked for the lifetime of a socket because a
+// connection authenticated once outlives the token that opened it.
+func NewHandler(svc *Service, hub *Hub, revocations auth.Revocations, originPatterns []string) *Handler {
+	return &Handler{svc: svc, hub: hub, revocations: revocations, originPatterns: originPatterns}
 }
 
 // Routes mounts the chat endpoints. All of them require authentication; the
@@ -229,16 +235,49 @@ func (h *Handler) websocket(w http.ResponseWriter, r *http.Request) {
 		h.write(ctx, conn, Event{Type: EventHistory, ThreadID: threadID.String(), Messages: history})
 	}
 
+	// A revocation announced while this socket is open closes it at once; the
+	// ticker below is the backstop for announcements that never arrive.
+	revoked := make(chan struct{})
+	drop := sync.OnceFunc(func() { close(revoked) })
+	defer h.hub.Register(principal.UserID, connID, drop)()
+
+	// Re-check after registering, never before: an announcement made while this
+	// socket was still being set up reached an index that did not list it yet.
+	if verdict := h.sessionStatus(ctx, principal.UserID); verdict != socketActive {
+		closeSocket(conn, verdict, principal.UserID, connID, "connect")
+		return
+	}
+
 	incoming := make(chan Event, 8)
 	go h.readLoop(ctx, cancel, conn, incoming)
 
 	ticker := time.NewTicker(presenceRefresh)
 	defer ticker.Stop()
 
+	revocationTicker := time.NewTicker(revocationRefresh)
+	defer revocationTicker.Stop()
+
+	// Nothing announces an expiry, so the socket holds its own deadline: it was
+	// authenticated once, at the upgrade, and would otherwise keep acting on a
+	// token that has stopped being valid for every other route.
+	expiry := expiryTimer(principal.ExpiresAt)
+	defer expiry.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-revoked:
+			closeSocket(conn, socketRevoked, principal.UserID, connID, "announcement")
+			return
+		case <-expiry.C:
+			closeSocket(conn, socketExpired, principal.UserID, connID, "expiry")
+			return
+		case <-revocationTicker.C:
+			if verdict := h.sessionStatus(ctx, principal.UserID); verdict != socketActive {
+				closeSocket(conn, verdict, principal.UserID, connID, "heartbeat")
+				return
+			}
 		case <-ticker.C:
 			if err := h.hub.MarkOnline(ctx, principal.UserID, connID); err != nil {
 				slog.Error("refresh presence", "error", err)
@@ -252,15 +291,103 @@ func (h *Handler) websocket(w http.ResponseWriter, r *http.Request) {
 			if !open {
 				return
 			}
-			h.handleIncoming(ctx, conn, threadID, principal, connID, event)
+			if !h.handleIncoming(ctx, conn, threadID, principal, connID, event) {
+				return
+			}
 		}
+	}
+}
+
+// socketVerdict is the outcome of re-checking the account behind a live socket.
+type socketVerdict int
+
+const (
+	socketActive socketVerdict = iota
+	socketRevoked
+	socketExpired
+	socketUnverifiable
+)
+
+// expiryTimer fires when a token expires, and never for the zero time, which is
+// what a token without an expiry claim leaves on the Principal. A deadline that
+// has already passed fires at once, so a socket cannot be opened with a token
+// the timer would have caught a moment later.
+func expiryTimer(expiresAt time.Time) *time.Timer {
+	if expiresAt.IsZero() {
+		return time.NewTimer(math.MaxInt64)
+	}
+	return time.NewTimer(time.Until(expiresAt))
+}
+
+// sessionStatus re-checks the account behind a socket, which authentication
+// only covers once, at the upgrade: without this a connection opened before an
+// account was deleted would keep working until its token expired on its own.
+//
+// It fails closed, so a status it cannot read ends the connection rather than
+// serving an account whose standing is unknown. That case is reported as
+// socketUnverifiable rather than socketRevoked, so a database outage does not
+// tell clients their session is gone for good.
+func (h *Handler) sessionStatus(ctx context.Context, userID uuid.UUID) socketVerdict {
+	revoked, err := h.revocations.Revoked(ctx, userID)
+	switch {
+	case err != nil:
+		slog.Error("check socket revocation", "error", err, "user_id", userID)
+		return socketUnverifiable
+	case revoked:
+		return socketRevoked
+	}
+	return socketActive
+}
+
+// closeSocket drops a connection with the close code matching verdict, so a
+// client can tell a session that is gone for good, which it answers by clearing
+// its credentials, from one worth reconnecting to. Passing socketActive is a
+// no-op.
+//
+// trigger names what noticed (connect, announcement, heartbeat, client_event)
+// and is logged with the account and connection: a close is invisible to the
+// server side otherwise, and which path caught a revoked account is the
+// difference between the announcement working and the backstop covering for it.
+func closeSocket(conn *websocket.Conn, verdict socketVerdict, userID, connID uuid.UUID, trigger string) {
+	status, reason := websocket.StatusTryAgainLater, "could not verify session"
+	switch verdict {
+	case socketActive:
+		return
+	case socketRevoked:
+		status, reason = websocket.StatusPolicyViolation, "session revoked"
+	case socketExpired:
+		status, reason = websocket.StatusPolicyViolation, "session expired"
+	case socketUnverifiable:
+	}
+	slog.Info(
+		"close socket",
+		"reason", reason,
+		"status", int(status),
+		"trigger", trigger,
+		"user_id", userID,
+		"conn_id", connID,
+	)
+	if err := conn.Close(status, reason); err != nil {
+		slog.Debug("close socket", "error", err, "reason", reason)
 	}
 }
 
 // handleIncoming dispatches one client event: sending a message, relaying a
 // typing indicator or refreshing presence. Rejected sends are reported back on
-// the socket instead of closing it.
-func (h *Handler) handleIncoming(ctx context.Context, conn *websocket.Conn, threadID uuid.UUID, principal auth.Principal, connID uuid.UUID, event Event) {
+// the socket instead of closing it. It returns false once the caller's account
+// can no longer act, having closed the socket: every client event is a
+// privileged action, so none is dispatched without a fresh revocation check, or
+// on a token whose expiry the main loop's timer has yet to notice, rather than
+// waiting for the next heartbeat.
+func (h *Handler) handleIncoming(ctx context.Context, conn *websocket.Conn, threadID uuid.UUID, principal auth.Principal, connID uuid.UUID, event Event) bool {
+	if !principal.ExpiresAt.IsZero() && !time.Now().Before(principal.ExpiresAt) {
+		closeSocket(conn, socketExpired, principal.UserID, connID, "client_event")
+		return false
+	}
+	if verdict := h.sessionStatus(ctx, principal.UserID); verdict != socketActive {
+		closeSocket(conn, verdict, principal.UserID, connID, "client_event")
+		return false
+	}
 	switch event.Type {
 	case EventMessage:
 		if _, err := h.svc.Send(ctx, threadID, principal.UserID, event.Body); err != nil {
@@ -277,6 +404,7 @@ func (h *Handler) handleIncoming(ctx context.Context, conn *websocket.Conn, thre
 	default:
 		h.write(ctx, conn, Event{Type: EventError, Body: "unknown event type"})
 	}
+	return true
 }
 
 // readLoop decodes client frames onto out until the socket fails, then cancels

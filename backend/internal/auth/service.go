@@ -45,6 +45,7 @@ type Service struct {
 	appURL         string
 	refresh        *RefreshTokens
 	deletions      DeletionPublisher
+	announcer      RevocationAnnouncer
 	sessionTTL     time.Duration
 	verifyTokenTTL time.Duration
 }
@@ -55,10 +56,20 @@ type DeletionPublisher interface {
 	Publish(ctx context.Context, job account.Job) error
 }
 
+// RevocationAnnouncer tells the other replicas that an account's sessions have
+// ended, so the connections they hold for it close now rather than at their own
+// next re-check. Service depends on the interface so cmd/api owns the transport,
+// and tolerates a nil one, which simply leaves those connections to notice for
+// themselves.
+type RevocationAnnouncer interface {
+	Announce(ctx context.Context, userID uuid.UUID) error
+}
+
 // NewService wires the service dependencies; called once from cmd/api. refresh
 // and deletions are the two halves of account deletion: end the sessions now,
-// delete rows later. sessionTTL is the lifetime of the access token issued at
-// sign-in, kept short because nothing withdraws it before it expires;
+// delete rows later, with announcer telling the other replicas to drop the
+// connections they hold for the account. sessionTTL is the lifetime of the
+// access token issued at sign-in, kept short because nothing withdraws it;
 // verifyTokenTTL that of the verify-scoped token issued at sign-up.
 func NewService(
 	queries *db.Queries,
@@ -68,6 +79,7 @@ func NewService(
 	appURL string,
 	refresh *RefreshTokens,
 	deletions DeletionPublisher,
+	announcer RevocationAnnouncer,
 	sessionTTL time.Duration,
 	verifyTokenTTL time.Duration,
 ) *Service {
@@ -79,6 +91,7 @@ func NewService(
 		appURL:         appURL,
 		refresh:        refresh,
 		deletions:      deletions,
+		announcer:      announcer,
 		sessionTTL:     sessionTTL,
 		verifyTokenTTL: verifyTokenTTL,
 	}
@@ -114,6 +127,11 @@ func (s *Service) DeleteAccount(ctx context.Context, userID uuid.UUID) error {
 	}
 	if err := s.refresh.RevokeAll(ctx, userID); err != nil {
 		slog.Error("revoke sessions of a deleted account", "error", err, "user_id", userID)
+	}
+	if s.announcer != nil {
+		if err := s.announcer.Announce(ctx, userID); err != nil {
+			slog.Warn("announce a deleted account", "error", err, "user_id", userID)
+		}
 	}
 	if err := s.deletions.Publish(ctx, account.Job{UserID: userID.String()}); err != nil {
 		slog.Warn("leaving a recorded deletion to the relay", "error", err, "user_id", userID)

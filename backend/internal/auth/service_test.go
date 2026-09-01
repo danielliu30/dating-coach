@@ -35,7 +35,7 @@ func TestDeleteAccountFailsWhenNothingWasRecorded(t *testing.T) {
 	}
 	t.Cleanup(pool.Close)
 
-	svc := NewService(db.New(pool), nil, nil, 0, "", NewRefreshTokens(nil, time.Hour), failingPublisher{}, time.Hour, time.Minute)
+	svc := NewService(db.New(pool), nil, nil, 0, "", NewRefreshTokens(nil, time.Hour), failingPublisher{}, nil, time.Hour, time.Minute)
 	if err := svc.DeleteAccount(context.Background(), uuid.New()); err == nil {
 		t.Fatal("DeleteAccount succeeded although the deletion was never recorded")
 	}
@@ -75,7 +75,7 @@ func newTestService(t *testing.T) (*Service, *TokenIssuer, *pgxpool.Pool) {
 
 	issuer := NewTokenIssuer("test-secret")
 	queries := db.New(pool)
-	svc := NewService(queries, issuer, silentNotifier{}, bcrypt.MinCost, "http://app.test", NewRefreshTokens(queries, 24*time.Hour), nil, 15*time.Minute, 30*time.Minute)
+	svc := NewService(queries, issuer, silentNotifier{}, bcrypt.MinCost, "http://app.test", NewRefreshTokens(queries, 24*time.Hour), nil, nil, 15*time.Minute, 30*time.Minute)
 	return svc, issuer, pool
 }
 
