@@ -244,7 +244,7 @@ func (h *Handler) websocket(w http.ResponseWriter, r *http.Request) {
 	// Re-check after registering, never before: an announcement made while this
 	// socket was still being set up reached an index that did not list it yet.
 	if verdict := h.sessionStatus(ctx, principal.UserID); verdict != socketActive {
-		closeSocket(conn, verdict)
+		closeSocket(conn, verdict, principal.UserID, connID, "connect")
 		return
 	}
 
@@ -262,11 +262,11 @@ func (h *Handler) websocket(w http.ResponseWriter, r *http.Request) {
 		case <-ctx.Done():
 			return
 		case <-revoked:
-			closeSocket(conn, socketRevoked)
+			closeSocket(conn, socketRevoked, principal.UserID, connID, "announcement")
 			return
 		case <-revocationTicker.C:
 			if verdict := h.sessionStatus(ctx, principal.UserID); verdict != socketActive {
-				closeSocket(conn, verdict)
+				closeSocket(conn, verdict, principal.UserID, connID, "heartbeat")
 				return
 			}
 		case <-ticker.C:
@@ -323,7 +323,12 @@ func (h *Handler) sessionStatus(ctx context.Context, userID uuid.UUID) socketVer
 // client can tell a session that is gone for good, which it answers by clearing
 // its credentials, from one worth reconnecting to. Passing socketActive is a
 // no-op.
-func closeSocket(conn *websocket.Conn, verdict socketVerdict) {
+//
+// trigger names what noticed (connect, announcement, heartbeat, client_event)
+// and is logged with the account and connection: a close is invisible to the
+// server side otherwise, and which path caught a revoked account is the
+// difference between the announcement working and the backstop covering for it.
+func closeSocket(conn *websocket.Conn, verdict socketVerdict, userID, connID uuid.UUID, trigger string) {
 	status, reason := websocket.StatusTryAgainLater, "could not verify session"
 	switch verdict {
 	case socketActive:
@@ -332,6 +337,14 @@ func closeSocket(conn *websocket.Conn, verdict socketVerdict) {
 		status, reason = websocket.StatusPolicyViolation, "session revoked"
 	case socketUnverifiable:
 	}
+	slog.Info(
+		"close socket",
+		"reason", reason,
+		"status", int(status),
+		"trigger", trigger,
+		"user_id", userID,
+		"conn_id", connID,
+	)
 	if err := conn.Close(status, reason); err != nil {
 		slog.Debug("close socket", "error", err, "reason", reason)
 	}
@@ -345,7 +358,7 @@ func closeSocket(conn *websocket.Conn, verdict socketVerdict) {
 // rather than waiting for the next heartbeat.
 func (h *Handler) handleIncoming(ctx context.Context, conn *websocket.Conn, threadID uuid.UUID, principal auth.Principal, connID uuid.UUID, event Event) bool {
 	if verdict := h.sessionStatus(ctx, principal.UserID); verdict != socketActive {
-		closeSocket(conn, verdict)
+		closeSocket(conn, verdict, principal.UserID, connID, "client_event")
 		return false
 	}
 	switch event.Type {
