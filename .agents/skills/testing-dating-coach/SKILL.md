@@ -78,13 +78,30 @@ Top tab labels may be truncated ("Coac…", "Analy…") at ~1024px — cosmetic,
   then reload; the app must land on Sign In (not a stuck splash).
 - **Closed thread**: no UI closes a thread; do
   `update chat_threads set status='closed' where id='…'` and then send from the client chat.
+- **Account deletion from the UI** (Account tab → "Delete account" card): the confirm button stays
+  disabled until the phrase `delete` is typed (trimmed + lowercased, so `  DELETE  ` also arms it).
+  Deletion is `DELETE /api/v1/auth/me` → 202, and the row disappears only after the worker consumes the
+  job, so poll `select count(*) from users where email='…'` for ~15–60 s instead of asserting instantly.
+  Always keep a second verified control account so you can prove the deletion was targeted.
+- **Forcing a server-side (500) delete failure**: `docker compose stop rabbitmq` — the publish of the
+  deletion job fails and the API answers `500 {"error":"could not delete account"}` (transport-level
+  failure via `docker compose stop api` gives a fetch error instead, which is a different code path).
+  Note that only a 401 clears the client session, so a 500/fetch failure must leave the user signed in.
+  After `docker compose start rabbitmq`, wait for `docker compose ps` to report rabbitmq `healthy`, and
+  expect the worker to need up to ~30 s of consumer-retry backoff before it drains the queue.
+  `DELETE /auth/me` is deliberately denylist-exempt, so retrying with the same (already revoked) token
+  works — but any `active`-gated call such as "Refresh profile" (`GET /auth/me`) will 401 and auto sign
+  the user out after a failed attempt, so assert the sanitized error before touching other buttons.
 
 ## Known/likely rough edges to check rather than debug
 - Sending into a closed thread is correctly rejected server-side (nothing persisted) but the client
   send is fire-and-forget (`ChatScreen.tsx`: "sending is fire-and-forget"), so the message silently
   disappears with no error banner. Verify with a DB count, not the UI.
 - Top tab labels may be truncated ("Coac…", "Analy…") at ~1024px — cosmetic, worth flagging.
-- Transport-level failures surface the raw browser message "Failed to fetch" in the UI.
+- Transport-level failures surface the raw browser message "Failed to fetch" in the UI. Exception: the
+  Account-screen delete failure is deliberately sanitized to "Could not delete your account. Please try
+  again." and the underlying error only appears via `console.warn('delete account', err)` — check the
+  DevTools console (F12) for the real reason when a delete failure looks unexplained.
 - Old leftover tabs from previous rounds can spam `GET /chat/threads/<id>/ws → 404` every 10 s in the
   API log; close them before reading logs.
 - Historical (fixed as of 1499e3b, re-check if regressed): `no_show` rejected by the DB CHECK
