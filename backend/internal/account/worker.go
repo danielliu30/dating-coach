@@ -2,12 +2,10 @@ package account
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 
 	"github.com/danielliu30/dating-coach/backend/internal/store/db"
 )
@@ -70,11 +68,14 @@ func (w *Worker) Handle(ctx context.Context, job Job, lastAttempt bool) error {
 	return nil
 }
 
-// deleted reports that userID no longer has a row, which makes the rest of the
-// job a no-op. It answers false when the row cannot be read, so a database that
-// is unreachable at the same time as Redis still fails the job rather than
-// declaring an outstanding deletion done.
+// deleted reports that userID has no row left at all, which makes the rest of
+// the job a no-op. It asks whether the row is physically there rather than
+// whether it is readable, since a deletion this worker has yet to apply has
+// been marked deleted and so is hidden from every other query. It answers false
+// when the question cannot be answered, so a database that is unreachable at
+// the same time as Redis still fails the job rather than declaring an
+// outstanding deletion done.
 func (w *Worker) deleted(ctx context.Context, userID uuid.UUID) bool {
-	_, err := w.queries.GetUserByID(ctx, userID)
-	return errors.Is(err, pgx.ErrNoRows)
+	exists, err := w.queries.UserRowExists(ctx, userID)
+	return err == nil && !exists
 }
