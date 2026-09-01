@@ -19,6 +19,12 @@ type failingRevoker struct{}
 // Revoke always fails.
 func (failingRevoker) Revoke(context.Context, uuid.UUID) error { return errors.New("redis is down") }
 
+// silentRevoker stands in for a denylist that accepts the revocation.
+type silentRevoker struct{}
+
+// Revoke always succeeds.
+func (silentRevoker) Revoke(context.Context, uuid.UUID) error { return nil }
+
 // TestHandleKeepsRowsWhenRevocationFails pins the order the deletion is applied
 // in: rows outliving their revocation is recoverable, whereas a live token whose
 // user row is gone reaches handlers as an account that no longer exists. The

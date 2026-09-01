@@ -46,9 +46,9 @@ func authenticateAs(principal Principal) func(http.Handler) http.Handler {
 // denylist: deleting an already revoked account must stay possible, because a
 // deletion whose queueing failed can only be retried by its own owner.
 func TestRoutesKeepDeletionReachableWhenRevoked(t *testing.T) {
-	// Postgres and Redis clients pointed at closed ports: the queued job is
-	// accepted and everything the worker can do without them is skipped, so the
-	// answer shows the request reached the handler rather than the denylist.
+	// Postgres and Redis clients pointed at closed ports: the deletion cannot be
+	// recorded, so the answer is the handler's own failure rather than the
+	// denylist's, which is what this is about.
 	pool, err := pgxpool.New(context.Background(), "postgres://user:pass@127.0.0.1:1/db")
 	if err != nil {
 		t.Fatalf("build pool: %v", err)
@@ -64,8 +64,8 @@ func TestRoutesKeepDeletionReachableWhenRevoked(t *testing.T) {
 		method string
 		want   int
 	}{
-		{http.MethodGet, http.StatusUnauthorized}, // denylist applies
-		{http.MethodDelete, http.StatusAccepted},  // reached the handler
+		{http.MethodGet, http.StatusUnauthorized},           // denylist applies
+		{http.MethodDelete, http.StatusInternalServerError}, // reached the handler
 	} {
 		rec := httptest.NewRecorder()
 		routes.ServeHTTP(rec, httptest.NewRequest(tc.method, "/me", nil))

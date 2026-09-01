@@ -24,15 +24,21 @@ func (failingPublisher) Publish(context.Context, account.Job) error {
 	return errors.New("broker is down")
 }
 
-// TestDeleteAccountKeepsSessionsWhenQueueingFails pins the order deletion runs
-// in: marking or revoking an account whose removal never reached the queue would
-// leave its owner unable to use an account that then stays alive until an
-// operator steps in. The service holds nil queries and a denylist with a nil
-// Redis client, so either step would panic rather than quietly pass.
-func TestDeleteAccountKeepsSessionsWhenQueueingFails(t *testing.T) {
-	svc := NewService(nil, nil, nil, 0, "", NewDenylist(nil, time.Minute), failingPublisher{}, time.Hour, time.Minute)
+// TestDeleteAccountFailsWhenNothingWasRecorded pins where a deletion becomes
+// certain: the database. Nothing was written, so the caller has to be told the
+// deletion did not happen, and nothing may have been revoked either. The
+// denylist holds a nil Redis client, so revoking would panic rather than pass.
+func TestDeleteAccountFailsWhenNothingWasRecorded(t *testing.T) {
+	// A pool pointed at a closed port stands in for a database that is down.
+	pool, err := pgxpool.New(context.Background(), "postgres://user:pass@127.0.0.1:1/db")
+	if err != nil {
+		t.Fatalf("build pool: %v", err)
+	}
+	t.Cleanup(pool.Close)
+
+	svc := NewService(db.New(pool), nil, nil, 0, "", NewDenylist(nil, time.Minute), failingPublisher{}, time.Hour, time.Minute)
 	if err := svc.DeleteAccount(context.Background(), uuid.New()); err == nil {
-		t.Fatal("DeleteAccount succeeded although the deletion was never queued")
+		t.Fatal("DeleteAccount succeeded although the deletion was never recorded")
 	}
 }
 
@@ -158,11 +164,7 @@ func TestDeleteAccountMarksRowWhenRevocationFails(t *testing.T) {
 	ctx := context.Background()
 
 	email := "revoke-order-" + uuid.NewString() + "@example.com"
-	t.Cleanup(func() {
-		if _, err := pool.Exec(context.Background(), "DELETE FROM users WHERE email = $1", email); err != nil {
-			t.Errorf("delete test user: %v", err)
-		}
-	})
+	t.Cleanup(func() { deleteTestUser(t, pool, email) })
 	signUp, err := svc.SignUp(ctx, SignUpInput{Email: email, Password: "correct-horse", DisplayName: "Revoke Order"})
 	if err != nil {
 		t.Fatalf("sign up: %v", err)
@@ -186,6 +188,63 @@ func TestDeleteAccountMarksRowWhenRevocationFails(t *testing.T) {
 	}
 	if deletedAt == nil {
 		t.Fatal("account was not marked deleted before revocation was attempted")
+	}
+}
+
+// TestDeleteAccountRecordsWhatTheBrokerRefused covers a deletion requested while
+// RabbitMQ is unreachable: the request still succeeds, because the mark and the
+// outbox row are together what make the deletion certain, and the row is left
+// unpublished for the relay to queue once the broker is back.
+func TestDeleteAccountRecordsWhatTheBrokerRefused(t *testing.T) {
+	svc, _, pool := newTestService(t)
+	ctx := context.Background()
+
+	email := "outbox-order-" + uuid.NewString() + "@example.com"
+	t.Cleanup(func() { deleteTestUser(t, pool, email) })
+	signUp, err := svc.SignUp(ctx, SignUpInput{Email: email, Password: "correct-horse", DisplayName: "Outbox Order"})
+	if err != nil {
+		t.Fatalf("sign up: %v", err)
+	}
+	userID, err := uuid.Parse(signUp.User.ID)
+	if err != nil {
+		t.Fatalf("parse user id: %v", err)
+	}
+	rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", MaxRetries: -1, DialTimeout: time.Second})
+	t.Cleanup(func() { _ = rdb.Close() })
+	svc.denylist = NewDenylist(rdb, time.Hour)
+	svc.deletions = failingPublisher{}
+
+	if err := svc.DeleteAccount(ctx, userID); err != nil {
+		t.Fatalf("delete account: %v", err)
+	}
+	var publishedAt *time.Time
+	if err := pool.QueryRow(
+		ctx,
+		"SELECT published_at FROM account_deletions WHERE user_id = $1",
+		userID,
+	).Scan(&publishedAt); err != nil {
+		t.Fatalf("read outbox row: %v", err)
+	}
+	if publishedAt != nil {
+		t.Fatalf("deletion marked published at %s although the broker refused it", publishedAt)
+	}
+}
+
+// deleteTestUser removes the account a test created, along with the outbox row a
+// recorded deletion left for it, which outlives the user row by design.
+func deleteTestUser(t *testing.T, pool *pgxpool.Pool, email string) {
+	t.Helper()
+
+	ctx := context.Background()
+	if _, err := pool.Exec(
+		ctx,
+		"DELETE FROM account_deletions WHERE user_id IN (SELECT id FROM users WHERE email = $1)",
+		email,
+	); err != nil {
+		t.Errorf("delete test outbox row: %v", err)
+	}
+	if _, err := pool.Exec(ctx, "DELETE FROM users WHERE email = $1", email); err != nil {
+		t.Errorf("delete test user: %v", err)
 	}
 }
 

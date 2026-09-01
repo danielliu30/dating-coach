@@ -29,15 +29,16 @@ func NewWorker(queries *db.Queries, revoker Revoker) *Worker {
 	return &Worker{queries: queries, revoker: revoker}
 }
 
-// Handle revokes the account's sessions and then deletes its row, which
-// cascades to its coach profile, sessions, chat threads and messages,
-// conversations, analyses and notifications. It satisfies JobHandler.
+// Handle revokes the account's sessions, deletes its row — which cascades to its
+// coach profile, sessions, chat threads and messages, conversations, analyses
+// and notifications — and clears the outbox row that asked for the deletion. It
+// satisfies JobHandler.
 //
-// Revoking here is what lets the API queue a deletion before revoking anything,
-// and so retry a deletion it could not queue instead of locking the caller out
-// of an account that is still alive. A failed revocation leaves the rows in
-// place and is retried with the job: a token that outlives the row it
-// authenticates reaches handlers as a user that no longer exists.
+// Revoking here is what lets the API record a deletion before revoking anything,
+// and so answer a request whose revocation failed instead of holding it open on
+// Redis. A failed revocation leaves the rows in place and is retried with the
+// job: a token that outlives the row it authenticates reaches handlers as a user
+// that no longer exists.
 //
 // A job whose user is already gone succeeds, including when the revocation it
 // no longer needs is what failed: deliveries are at-least-once, so a redelivery
@@ -52,6 +53,7 @@ func (w *Worker) Handle(ctx context.Context, job Job, lastAttempt bool) error {
 	if err := w.revoker.Revoke(ctx, userID); err != nil {
 		if w.deleted(ctx, userID) {
 			slog.Info("account already deleted", "user_id", userID, "last_attempt", lastAttempt)
+			w.finish(ctx, userID)
 			return nil
 		}
 		return fmt.Errorf("revoke sessions of %s: %w", userID, err)
@@ -62,10 +64,20 @@ func (w *Worker) Handle(ctx context.Context, job Job, lastAttempt bool) error {
 	}
 	if rows == 0 {
 		slog.Info("account already deleted", "user_id", userID, "last_attempt", lastAttempt)
-		return nil
+	} else {
+		slog.Info("account deleted", "user_id", userID)
 	}
-	slog.Info("account deleted", "user_id", userID)
+	w.finish(ctx, userID)
 	return nil
+}
+
+// finish drops userID's outbox row now that the deletion it asked for has been
+// applied. A failure only logs: the row is already marked published, so nothing
+// queues it again, and the account it named is gone either way.
+func (w *Worker) finish(ctx context.Context, userID uuid.UUID) {
+	if err := w.queries.FinishUserDeletion(ctx, userID); err != nil {
+		slog.Error("clear an applied deletion from the outbox", "error", err, "user_id", userID)
+	}
 }
 
 // deleted reports that userID has no row left at all, which makes the rest of
