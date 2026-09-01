@@ -137,7 +137,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
       // dropped locally rather than left to fail the next request.
       deleteAccount: async () => {
         await api.deleteAccount();
-        await clearSession();
+        // The account is already gone by here, so failing to erase the stored
+        // copy of the session must not be reported as a failed deletion: a
+        // session restored from it is revoked and dropped on its first request.
+        await clearSession().catch(() => undefined);
       },
       signOut: clearSession,
     }),
