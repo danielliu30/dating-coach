@@ -21,15 +21,20 @@ func NewWorker(queries *db.Queries) *Worker {
 	return &Worker{queries: queries}
 }
 
-// Handle deletes the account's row, which cascades to its coach profile,
-// sessions, chat threads and messages, conversations, analyses and
-// notifications. It satisfies JobHandler.
+// Handle deletes the account's row — which cascades to its refresh tokens, coach
+// profile, sessions, chat threads and messages, conversations, analyses and
+// notifications — and clears the outbox row that asked for the deletion. It
+// satisfies JobHandler.
+//
+// Nothing is revoked here: the cascade takes the account's refresh tokens with
+// it, so no further access token can be minted for it, and the one its owner
+// already holds outlives the row only for the rest of its short lifetime.
 //
 // A job whose user is already gone succeeds: deliveries are at-least-once, so a
 // redelivery after a successful pass must not be treated as a failure and
-// dead-lettered. lastAttempt only annotates the log line, since every error
-// here (unparseable id, database down) is retried once and then dead-lettered
-// by the queue.
+// dead-lettered. lastAttempt only annotates the log line, since every error here
+// (unparseable id, database down) is retried by the queue before it is
+// dead-lettered.
 func (w *Worker) Handle(ctx context.Context, job Job, lastAttempt bool) error {
 	userID, err := uuid.Parse(job.UserID)
 	if err != nil {
@@ -41,54 +46,22 @@ func (w *Worker) Handle(ctx context.Context, job Job, lastAttempt bool) error {
 	}
 	if rows == 0 {
 		slog.Info("account already deleted", "user_id", userID, "last_attempt", lastAttempt)
-		return nil
+	} else {
+		slog.Info("account deleted", "user_id", userID)
 	}
-	slog.Info("account deleted", "user_id", userID)
+	return w.finish(ctx, userID)
+}
+
+// finish drops userID's outbox row now that the deletion it asked for has been
+// applied, and is the last thing every successful pass does. Its failure fails
+// the job so the queue retries it: the row is marked published, so nothing else
+// would ever come back for it, and a redelivery finds the account already gone
+// and does no more than retry this.
+func (w *Worker) finish(ctx context.Context, userID uuid.UUID) error {
+	if err := w.queries.FinishUserDeletion(ctx, userID); err != nil {
+		return fmt.Errorf("clear the applied deletion of %s from the outbox: %w", userID, err)
+	}
 	return nil
-}
-
-// Publisher queues deletion jobs. Worker depends on the interface so the
-// reconciler below can be exercised without a broker.
-type Publisher interface {
-	Publish(ctx context.Context, job Job) error
-}
-
-// RequeuePendingDeletions re-queues a deletion job for every account that is
-// marked deleted but still has rows, every interval until ctx is cancelled. It
-// blocks, and is meant to run in its own goroutine.
-//
-// This is the server-side retry for a deletion whose queueing failed. The
-// request marks the row before it revokes the account's tokens, so the intent
-// survives even though the owner can no longer sign in to ask again: the mark
-// is the durable record, and the worker keeps trying to act on it. Jobs are
-// idempotent, so re-queueing one the broker already holds is harmless, and an
-// account whose rows are gone is no longer listed.
-//
-// Failures are logged and retried on the next tick rather than returned, since
-// a broker or database outage is exactly what this exists to recover from.
-func (w *Worker) RequeuePendingDeletions(ctx context.Context, interval time.Duration, publisher Publisher) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		pending, err := w.queries.ListUsersPendingDeletion(ctx)
-		if err != nil && ctx.Err() == nil {
-			slog.Warn("list accounts pending deletion", "error", err)
-		}
-		for _, userID := range pending {
-			if err := publisher.Publish(ctx, Job{UserID: userID.String()}); err != nil {
-				if ctx.Err() == nil {
-					slog.Warn("requeue account deletion", "user_id", userID, "error", err)
-				}
-				break
-			}
-			slog.Info("requeued a deletion that was never applied", "user_id", userID)
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-	}
 }
 
 // PurgeExpiredRefreshTokens deletes refresh tokens that can no longer be

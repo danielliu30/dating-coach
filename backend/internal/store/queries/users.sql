@@ -27,14 +27,8 @@ SET verification_token = $2,
     updated_at = now()
 WHERE id = $1;
 
--- name: MarkUserDeleted :execrows
-UPDATE users
-SET deleted_at = COALESCE(deleted_at, now()),
-    updated_at = now()
-WHERE id = $1;
+-- name: UserRowExists :one
+SELECT EXISTS (SELECT 1 FROM users WHERE id = $1);
 
 -- name: DeleteUser :execrows
 DELETE FROM users WHERE id = $1;
-
--- name: ListUsersPendingDeletion :many
-SELECT id FROM users WHERE deleted_at IS NOT NULL ORDER BY deleted_at;

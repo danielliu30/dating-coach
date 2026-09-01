@@ -1,6 +1,6 @@
 // Command worker consumes the background queues: conversation-analysis jobs,
 // which it runs through the ML analyzer and stores, and account deletions,
-// whose rows it removes after the API has already revoked the sessions.
+// whose rows it removes.
 package main
 
 import (
@@ -17,6 +17,7 @@ import (
 	"github.com/danielliu30/dating-coach/backend/internal/config"
 	"github.com/danielliu30/dating-coach/backend/internal/notify"
 	"github.com/danielliu30/dating-coach/backend/internal/store"
+	"github.com/danielliu30/dating-coach/backend/internal/store/db"
 )
 
 func main() {
@@ -50,11 +51,6 @@ func run() error {
 		notify.New(cfg),
 	)
 	deleter := account.NewWorker(pg.Queries)
-	deletionPublisher, err := account.OpenPublisher(cfg.RabbitMQURL, cfg.AccountDeletionQueue)
-	if err != nil {
-		return err
-	}
-	defer deletionPublisher.Close()
 
 	slog.Info("worker started",
 		"analysis_queue", cfg.AnalysisQueue,
@@ -68,10 +64,6 @@ func run() error {
 	go func() {
 		defer wg.Done()
 		deleter.PurgeExpiredRefreshTokens(ctx, refreshTokenPurgeInterval)
-	}()
-	go func() {
-		defer wg.Done()
-		deleter.RequeuePendingDeletions(ctx, pendingDeletionSweepInterval, deletionPublisher)
 	}()
 	go func() {
 		defer wg.Done()
@@ -91,6 +83,12 @@ func run() error {
 			return watchDeadLetters(ctx, cfg.RabbitMQURL, cfg.AccountDeletionQueue, cfg.DeadLetterAlertPeriod)
 		})
 	}()
+	go func() {
+		defer wg.Done()
+		consume(ctx, "deletion outbox relay", func(ctx context.Context) error {
+			return relayDeletions(ctx, cfg.RabbitMQURL, cfg.AccountDeletionQueue, pg.Queries)
+		})
+	}()
 	wg.Wait()
 	return nil
 }
@@ -99,11 +97,6 @@ const (
 	// Expired refresh tokens are unusable, so sweeping them is housekeeping
 	// rather than a security measure and can run infrequently.
 	refreshTokenPurgeInterval = time.Hour
-
-	// An account marked deleted whose job never reached the broker can only be
-	// retried by this sweep: its owner is already locked out. Waiting an hour
-	// to notice is the compromise against re-reading the table constantly.
-	pendingDeletionSweepInterval = time.Hour
 
 	minBackoff = time.Second
 	maxBackoff = 30 * time.Second
@@ -144,7 +137,7 @@ func runAnalysisConsumer(ctx context.Context, url, name string, handle analysis.
 
 // watchDeadLetters logs the depth of the deletion dead-letter queue every
 // period until ctx ends, so a deployment can alert on deletions that failed
-// while the account's revocation entry is still live. It holds its own broker
+// while the account's rows are still in place. It holds its own broker
 // connection: a failed inspection closes the channel, which must not take the
 // consumer down with it. period must be positive; config.Load rejects anything
 // else.
@@ -174,6 +167,19 @@ func watchDeadLetters(ctx context.Context, url, name string, period time.Duratio
 			}
 		}
 	}
+}
+
+// relayDeletions queues the deletions that were recorded in the outbox but never
+// published, until ctx ends. It holds its own publisher, which redials on its
+// own, so the broker outage that stranded those deletions does not also keep the
+// relay from picking them up once it is over.
+func relayDeletions(ctx context.Context, url, name string, queries *db.Queries) error {
+	publisher, err := account.OpenPublisher(url, name)
+	if err != nil {
+		return err
+	}
+	defer publisher.Close()
+	return account.NewRelay(queries, publisher).Run(ctx)
 }
 
 // runDeletionConsumer holds one broker connection for as long as it stays

@@ -111,45 +111,6 @@ func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (User, error) {
 	return i, err
 }
 
-const listUsersPendingDeletion = `-- name: ListUsersPendingDeletion :many
-SELECT id FROM users WHERE deleted_at IS NOT NULL ORDER BY deleted_at
-`
-
-func (q *Queries) ListUsersPendingDeletion(ctx context.Context) ([]uuid.UUID, error) {
-	rows, err := q.db.Query(ctx, listUsersPendingDeletion)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []uuid.UUID{}
-	for rows.Next() {
-		var id uuid.UUID
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		items = append(items, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const markUserDeleted = `-- name: MarkUserDeleted :execrows
-UPDATE users
-SET deleted_at = COALESCE(deleted_at, now()),
-    updated_at = now()
-WHERE id = $1
-`
-
-func (q *Queries) MarkUserDeleted(ctx context.Context, id uuid.UUID) (int64, error) {
-	result, err := q.db.Exec(ctx, markUserDeleted, id)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
 const setVerificationToken = `-- name: SetVerificationToken :exec
 UPDATE users
 SET verification_token = $2,
@@ -167,6 +128,17 @@ type SetVerificationTokenParams struct {
 func (q *Queries) SetVerificationToken(ctx context.Context, arg SetVerificationTokenParams) error {
 	_, err := q.db.Exec(ctx, setVerificationToken, arg.ID, arg.VerificationToken, arg.VerificationExpiresAt)
 	return err
+}
+
+const userRowExists = `-- name: UserRowExists :one
+SELECT EXISTS (SELECT 1 FROM users WHERE id = $1)
+`
+
+func (q *Queries) UserRowExists(ctx context.Context, id uuid.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, userRowExists, id)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
 }
 
 const verifyUserEmail = `-- name: VerifyUserEmail :one
