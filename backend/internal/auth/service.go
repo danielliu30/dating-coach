@@ -85,19 +85,23 @@ func NewService(
 }
 
 // DeleteAccount ends every session for userID and queues the removal of its
-// rows. It returns once the refresh tokens are revoked and the broker has
-// confirmed the deletion job. The access token the caller already holds keeps
-// working for the rest of its short lifetime, which is the price of verifying
-// access tokens by signature alone.
+// rows. It returns once the account is marked deleted in Postgres, its refresh
+// tokens are revoked and the broker has confirmed the deletion job. The access
+// token the caller already holds keeps working for the rest of its short
+// lifetime, which is the price of verifying access tokens by signature alone.
 //
-// The revocation is committed first and is never rolled back: if queueing then
-// fails, the caller can no longer obtain new access tokens for an account whose
-// data still exists, which an operator can undo, whereas deleting the rows of a
-// caller who can still refresh cannot be undone. An error therefore means the
-// account may already be unusable, and the caller should repeat the request: it
-// is idempotent, and the unexpired access token keeps DELETE /me reachable so
-// the deletion can still be queued once the broker recovers.
+// The three steps run in that order and none is rolled back. Marking the row
+// first stops sign-in from opening a new session for the account, and revoking
+// the refresh tokens stops the existing ones from minting further access
+// tokens, so nothing outlives the mark by more than the access-token lifetime.
+// An error therefore means the account may already be unusable, and the caller
+// should repeat the request: it is idempotent, and the unexpired access token
+// keeps DELETE /me reachable so the deletion can still be queued once Postgres
+// or the broker recovers.
 func (s *Service) DeleteAccount(ctx context.Context, userID uuid.UUID) error {
+	if _, err := s.queries.MarkUserDeleted(ctx, userID); err != nil {
+		return fmt.Errorf("mark account deleted: %w", err)
+	}
 	if err := s.refresh.RevokeAll(ctx, userID); err != nil {
 		return fmt.Errorf("revoke sessions: %w", err)
 	}
@@ -216,6 +220,10 @@ func (s *Service) SignUp(ctx context.Context, in SignUpInput) (Session, error) {
 // emails and wrong passwords both return ErrInvalidCredentials; an unverified
 // account returns ErrEmailNotVerified, only after the password has been
 // checked.
+//
+// An account awaiting the deletion worker is indistinguishable from an unknown
+// one: the lookup skips rows marked deleted, so no session is ever minted for
+// an account whose data is on its way out, however long the removal takes.
 func (s *Service) SignIn(ctx context.Context, email, password string) (Session, error) {
 	user, err := s.queries.GetUserByEmail(ctx, strings.ToLower(strings.TrimSpace(email)))
 	if err != nil {

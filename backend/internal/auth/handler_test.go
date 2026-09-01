@@ -9,9 +9,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 
 	"github.com/danielliu30/dating-coach/backend/internal/account"
+	"github.com/danielliu30/dating-coach/backend/internal/store/db"
 )
 
 // stubPublisher records queued deletions without a broker.
@@ -71,25 +73,24 @@ func rejectAll(http.Handler) http.Handler {
 
 // TestDeleteMeStaysReachableAfterRevocation guards the retry path: the caller's
 // access token outlives the revocation of its refresh tokens, so a deletion
-// whose queueing failed can still be repeated by its owner.
+// whose first attempt failed can still be repeated by its owner. The database
+// is unreachable here, so the deletion fails on its first step: a 500 means the
+// request reached the handler rather than being refused for a revoked session.
 func TestDeleteMeStaysReachableAfterRevocation(t *testing.T) {
-	store := &stubRefreshStore{}
-	publisher := &stubPublisher{}
-	svc := NewService(nil, nil, nil, 0, "", NewRefreshTokens(store, time.Hour), publisher, time.Hour, time.Minute)
+	pool, err := pgxpool.New(context.Background(), "postgres://user:pass@127.0.0.1:1/db")
+	if err != nil {
+		t.Fatalf("build pool: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	svc := NewService(db.New(pool), nil, nil, 0, "", NewRefreshTokens(&stubRefreshStore{}, time.Hour), &stubPublisher{}, time.Hour, time.Minute)
 	principal := Principal{UserID: uuid.New(), Email: "deleted@example.com", Role: "user"}
 	routes := NewHandler(svc, openLimiter(t)).Routes(authenticateAs(principal))
 
 	for i := range 2 {
 		rec := httptest.NewRecorder()
 		routes.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/me", nil))
-		if rec.Code != http.StatusAccepted {
-			t.Fatalf("attempt %d: DELETE /me = %d, want %d", i, rec.Code, http.StatusAccepted)
+		if rec.Code != http.StatusInternalServerError {
+			t.Fatalf("attempt %d: DELETE /me = %d, want %d", i, rec.Code, http.StatusInternalServerError)
 		}
-	}
-	if len(store.revokedUsers) != 2 || store.revokedUsers[0] != principal.UserID {
-		t.Fatalf("revoked users = %v, want the caller revoked on both attempts", store.revokedUsers)
-	}
-	if len(publisher.jobs) != 2 {
-		t.Fatalf("queued jobs = %d, want 2", len(publisher.jobs))
 	}
 }

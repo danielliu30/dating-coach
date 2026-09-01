@@ -20,6 +20,7 @@ type stubRefreshStore struct {
 	createErr    error
 	lookupErr    error
 	familyErr    error
+	revokeAllErr error
 }
 
 // CreateRefreshToken stores the row, or returns the configured failure.
@@ -97,6 +98,9 @@ func (s *stubRefreshStore) RevokeRefreshToken(_ context.Context, tokenHash strin
 
 // RevokeUserRefreshTokens revokes every live row of userID and records the call.
 func (s *stubRefreshStore) RevokeUserRefreshTokens(_ context.Context, userID uuid.UUID) (int64, error) {
+	if s.revokeAllErr != nil {
+		return 0, s.revokeAllErr
+	}
 	s.revokedUsers = append(s.revokedUsers, userID)
 	var revoked int64
 	for hash, row := range s.rows {
