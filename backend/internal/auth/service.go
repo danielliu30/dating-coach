@@ -83,14 +83,19 @@ func NewService(
 	}
 }
 
-// DeleteAccount queues the removal of userID's rows and ends every session it
-// has. It returns once the broker has confirmed the deletion job, which is the
-// point from which the account is certain to be deleted.
+// DeleteAccount queues the removal of userID's rows, marks the account deleted
+// so no new session can be handed out for it, and ends the sessions it already
+// has. It returns once the broker has confirmed the deletion job and the row is
+// marked, which is the point from which the account is certain to be deleted and
+// certain not to hand out another token.
 //
-// The job is queued before anything is revoked, so a failure leaves the account
-// exactly as it was and the caller can retry: revoking first would, on a broker
-// that is down, lock the caller out of an account that then stays alive until
-// an operator intervenes. Revocation is best-effort afterwards, since the
+// The job is queued before anything else, so a failure there leaves the account
+// exactly as it was and the caller can retry: marking or revoking first would,
+// on a broker that is down, leave the caller unable to use an account that then
+// stays alive until an operator intervenes. Marking before revoking is what
+// bounds the denylist entry: every token the entry has to outlive was minted
+// before the mark, so it may expire once the token lifetime has passed even if
+// the worker never removes the row. Revocation is best-effort last, since the
 // worker revokes before it deletes anything and the queue retries it; a Redis
 // failure here only delays the sessions dying from milliseconds to however long
 // the job waits, which is not worth telling a caller their deletion failed when
@@ -98,6 +103,9 @@ func NewService(
 func (s *Service) DeleteAccount(ctx context.Context, userID uuid.UUID) error {
 	if err := s.deletions.Publish(ctx, account.Job{UserID: userID.String()}); err != nil {
 		return fmt.Errorf("queue account deletion: %w", err)
+	}
+	if _, err := s.queries.MarkUserDeleted(ctx, userID); err != nil {
+		return fmt.Errorf("mark account deleted: %w", err)
 	}
 	if err := s.denylist.Revoke(ctx, userID); err != nil {
 		slog.Error("revoke sessions of a deleted account", "error", err, "user_id", userID)
@@ -210,6 +218,10 @@ func (s *Service) SignUp(ctx context.Context, in SignUpInput) (Session, error) {
 // emails and wrong passwords both return ErrInvalidCredentials; an unverified
 // account returns ErrEmailNotVerified, only after the password has been
 // checked.
+//
+// An account awaiting the deletion worker is indistinguishable from an unknown
+// one: the lookup skips rows marked deleted, so no session is ever minted for
+// an account whose data is on its way out, however long the removal takes.
 func (s *Service) SignIn(ctx context.Context, email, password string) (Session, error) {
 	user, err := s.queries.GetUserByEmail(ctx, strings.ToLower(strings.TrimSpace(email)))
 	if err != nil {

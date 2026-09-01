@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/danielliu30/dating-coach/backend/internal/account"
@@ -24,10 +25,10 @@ func (failingPublisher) Publish(context.Context, account.Job) error {
 }
 
 // TestDeleteAccountKeepsSessionsWhenQueueingFails pins the order deletion runs
-// in: revoking an account whose removal never reached the queue would lock its
-// owner out of an account that then stays alive until an operator steps in. The
-// denylist here holds a nil Redis client, so revoking would panic rather than
-// quietly pass.
+// in: marking or revoking an account whose removal never reached the queue would
+// leave its owner unable to use an account that then stays alive until an
+// operator steps in. The service holds nil queries and a denylist with a nil
+// Redis client, so either step would panic rather than quietly pass.
 func TestDeleteAccountKeepsSessionsWhenQueueingFails(t *testing.T) {
 	svc := NewService(nil, nil, nil, 0, "", NewDenylist(nil, time.Minute), failingPublisher{}, time.Hour, time.Minute)
 	if err := svc.DeleteAccount(context.Background(), uuid.New()); err == nil {
@@ -112,6 +113,80 @@ func TestSignUpMintsVerifyScopedToken(t *testing.T) {
 		t.Fatalf("sign in: %v", err)
 	}
 	assertTokenScope(t, issuer, signIn.Token, ScopeSession, 24*time.Hour)
+}
+
+// TestSignInRefusesAccountPendingDeletion covers the window between requesting
+// a deletion and the worker removing the row: the credentials still match, but
+// sign-in must not hand out a session that would outlive the revocation if the
+// removal stalls.
+func TestSignInRefusesAccountPendingDeletion(t *testing.T) {
+	svc, _, pool := newTestService(t)
+	ctx := context.Background()
+
+	const password = "correct-horse"
+	email := "deletion-test-" + uuid.NewString() + "@example.com"
+	t.Cleanup(func() {
+		if _, err := pool.Exec(context.Background(), "DELETE FROM users WHERE email = $1", email); err != nil {
+			t.Errorf("delete test user: %v", err)
+		}
+	})
+
+	if _, err := svc.SignUp(ctx, SignUpInput{Email: email, Password: password, DisplayName: "Deletion Test"}); err != nil {
+		t.Fatalf("sign up: %v", err)
+	}
+	if _, err := pool.Exec(ctx, "UPDATE users SET email_verified = true WHERE email = $1", email); err != nil {
+		t.Fatalf("mark verified: %v", err)
+	}
+	if _, err := svc.SignIn(ctx, email, password); err != nil {
+		t.Fatalf("sign in before deletion: %v", err)
+	}
+
+	if _, err := pool.Exec(ctx, "UPDATE users SET deleted_at = now() WHERE email = $1", email); err != nil {
+		t.Fatalf("mark deleted: %v", err)
+	}
+	if _, err := svc.SignIn(ctx, email, password); !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("sign in after deletion = %v, want %v", err, ErrInvalidCredentials)
+	}
+}
+
+// TestDeleteAccountMarksRowWhenRevocationFails pins the ordering the bound on
+// the denylist entry depends on: the row is marked even when the revocation that
+// follows it cannot be written, so the mark can never come after a token was
+// issued.
+func TestDeleteAccountMarksRowWhenRevocationFails(t *testing.T) {
+	svc, _, pool := newTestService(t)
+	ctx := context.Background()
+
+	email := "revoke-order-" + uuid.NewString() + "@example.com"
+	t.Cleanup(func() {
+		if _, err := pool.Exec(context.Background(), "DELETE FROM users WHERE email = $1", email); err != nil {
+			t.Errorf("delete test user: %v", err)
+		}
+	})
+	signUp, err := svc.SignUp(ctx, SignUpInput{Email: email, Password: "correct-horse", DisplayName: "Revoke Order"})
+	if err != nil {
+		t.Fatalf("sign up: %v", err)
+	}
+	userID, err := uuid.Parse(signUp.User.ID)
+	if err != nil {
+		t.Fatalf("parse user id: %v", err)
+	}
+
+	rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", MaxRetries: -1, DialTimeout: time.Second})
+	t.Cleanup(func() { _ = rdb.Close() })
+	svc.denylist = NewDenylist(rdb, time.Hour)
+	svc.deletions = &stubPublisher{}
+
+	if err := svc.DeleteAccount(ctx, userID); err != nil {
+		t.Fatalf("delete account: %v", err)
+	}
+	var deletedAt *time.Time
+	if err := pool.QueryRow(ctx, "SELECT deleted_at FROM users WHERE id = $1", userID).Scan(&deletedAt); err != nil {
+		t.Fatalf("read deleted_at: %v", err)
+	}
+	if deletedAt == nil {
+		t.Fatal("account was not marked deleted before revocation was attempted")
+	}
 }
 
 // assertTokenScope fails the test unless raw carries the given scope claim and
