@@ -68,7 +68,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
     setToken(session.token);
     setUser(session.user);
     setEndedReason(null);
-    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(session));
+    try {
+      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(session));
+    } catch (error) {
+      // The stored session is now an older rotation than the live one, and its
+      // refresh token has already been spent: replaying it on the next start
+      // would look like a leak and revoke this session's whole family. Drop it
+      // so a restart begins signed out instead of ending the live session.
+      await AsyncStorage.removeItem(STORAGE_KEY).catch(() => undefined);
+      throw error;
+    }
     return session.user;
   }, []);
 
