@@ -75,12 +75,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
   // Bumped whenever the session is replaced or dropped, so a renewal that lands
   // after a sign-out cannot write the old session back over it.
   const generationRef = useRef(0);
+  // Identifies the party the app is acting for rather than the credential it
+  // holds: bumped when a session starts, ends or changes hands, but not when a
+  // renewal swaps the access token of the session already on hand. A request
+  // that outlives its principal must never be replayed under the next one.
+  const principalRef = useRef(0);
+  const userIDRef = useRef<string | null>(null);
 
   // The client reads the token through a ref so requests always use the latest
   // one without re-creating the client on every render.
   tokenRef.current = token;
   useEffect(() => {
     api.useToken(() => tokenRef.current);
+    api.usePrincipal(() => principalRef.current);
     // A token can also expire while the app is open; drop it centrally so the
     // UI leaves the authenticated tabs instead of failing every request.
     api.onSessionRejected(() => {
@@ -89,6 +96,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
       // blaming an expiry for a sign-out the user asked for is a lie.
       if (!tokenRef.current) return;
       generationRef.current += 1;
+      principalRef.current += 1;
+      userIDRef.current = null;
       tokenRef.current = null;
       refreshRef.current = '';
       expiresRef.current = '';
@@ -101,6 +110,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
 
   const persist = useCallback(async (session: AuthSession) => {
     generationRef.current += 1;
+    if (userIDRef.current !== session.user.id) principalRef.current += 1;
+    userIDRef.current = session.user.id;
     tokenRef.current = session.token;
     refreshRef.current = session.refresh_token ?? '';
     expiresRef.current = session.expires_at ?? '';
@@ -200,6 +211,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
   // Drops the session everywhere it is held: refs, state and storage.
   const clearSession = useCallback(async () => {
     generationRef.current += 1;
+    principalRef.current += 1;
+    userIDRef.current = null;
     tokenRef.current = null;
     refreshRef.current = '';
     expiresRef.current = '';

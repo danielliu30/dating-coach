@@ -40,9 +40,21 @@ export class ApiClient {
   private onUnauthorized: () => void = () => undefined;
   private renew: SessionRenewer = async () => 'rejected';
   private renewal: Promise<RenewalResult> | null = null;
+  private principal: () => number = () => 0;
 
   useToken(provider: TokenProvider): void {
     this.token = provider;
+  }
+
+  /**
+   * Registers a counter identifying who the app is acting for. It must change
+   * when a session starts, ends or changes hands and stay put when a renewal
+   * swaps the access token, which is what lets a rejected request tell "my
+   * token was renewed" from "someone else is signed in now". Without it every
+   * token change looks like a renewal.
+   */
+  usePrincipal(provider: () => number): void {
+    this.principal = provider;
   }
 
   /**
@@ -77,6 +89,7 @@ export class ApiClient {
 
   private async request<T>(method: string, path: string, body?: unknown, renewed = false): Promise<T> {
     const token = this.token();
+    const principal = this.principal();
     const response = await fetch(`${API_BASE_URL}${API_PREFIX}${path}`, {
       method,
       headers: {
@@ -91,14 +104,18 @@ export class ApiClient {
     const payload = text ? (JSON.parse(text) as unknown) : null;
 
     if (!response.ok) {
-      if (response.status === 401 && token && !renewed) {
+      if (response.status === 401 && token && !renewed && principal === this.principal()) {
         // Access tokens expire within minutes, so a 401 on a request that
         // carried one usually means "renew", not "signed out". A request that
         // was already in flight when someone else renewed is retried with the
-        // token it missed instead of rotating the fresh one away.
+        // token it missed instead of rotating the fresh one away. A request
+        // whose principal is gone is never retried: its operation belongs to
+        // the account that issued it, not to whoever is signed in now.
         const current = this.token();
         if (current && current !== token) return this.request<T>(method, path, body, true);
-        if ((await this.renewSession()) === 'renewed') return this.request<T>(method, path, body, true);
+        if ((await this.renewSession()) === 'renewed' && principal === this.principal()) {
+          return this.request<T>(method, path, body, true);
+        }
       }
       const message =
         payload && typeof payload === 'object' && 'error' in payload
