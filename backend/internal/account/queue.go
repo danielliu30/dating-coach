@@ -294,9 +294,10 @@ func (q *Queue) Consume(ctx context.Context, handle JobHandler) error {
 
 // DeadLetterDepth reports how many deletions are sitting in the dead-letter
 // queue. Those accounts still hold rows, and the revocation that outlives them
-// expires with the JWT TTL, so a non-zero depth needs an operator before then. The passive declare closes the channel if the queue is missing, which
-// makes the owning Queue unusable; callers should hold a connection of their
-// own rather than share the consumer's.
+// expires with the JWT TTL, so a non-zero depth needs an operator before then.
+// The passive declare closes the channel if the queue is missing, which makes
+// the owning Queue unusable; callers should hold a connection of their own
+// rather than share the consumer's.
 func (q *Queue) DeadLetterDepth() (int, error) {
 	dlq := DeadLetterQueue(q.name)
 	state, err := q.channel.QueueDeclarePassive(dlq, true, false, false, false, nil)
