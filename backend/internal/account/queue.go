@@ -18,9 +18,9 @@ import (
 const prefetchCount = 1
 
 // maxAttempts is how many times a deletion is handed to the handler before it
-// is dead-lettered. With retryDelay between attempts it bounds how long a
-// dependency outage can hold up an accepted deletion: the account keeps its rows
-// for at most maxAttempts*retryDelay before an operator is alerted.
+// is dead-lettered. With retryDelay between attempts, a dependency outage has
+// to last upwards of maxAttempts*retryDelay before an accepted deletion is given
+// up on; the operator alert follows within a DEAD_LETTER_ALERT_PERIOD of that.
 const maxAttempts = 20
 
 // attemptsHeader carries how many times a deletion has already been handled.
