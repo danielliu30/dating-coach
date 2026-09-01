@@ -26,6 +26,7 @@ interface AuthState {
   verify: (token: string) => Promise<Profile>;
   resendVerification: (email: string) => Promise<void>;
   refresh: () => Promise<void>;
+  deleteAccount: () => Promise<void>;
   signOut: () => Promise<void>;
 }
 
@@ -267,6 +268,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
       refresh: async () => {
         if (!tokenRef.current) return;
         await persistUser(await api.me());
+      },
+      // The deletion is certain once this resolves, and the token on hand can no
+      // longer be renewed, so the session is dropped locally rather than left to
+      // outlive the account for the minutes its access token has left.
+      deleteAccount: async () => {
+        await api.deleteAccount();
+        // The account is already gone by here, so failing to erase the stored
+        // copy of the session must not be reported as a failed deletion: a
+        // session restored from it cannot be renewed and is dropped.
+        await clearSession().catch(() => undefined);
       },
       signOut: clearSession,
     }),

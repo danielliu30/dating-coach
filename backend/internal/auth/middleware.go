@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -21,6 +22,11 @@ type Principal struct {
 	Email  string
 	Role   string
 	Scope  string
+	// ExpiresAt is when the token this caller presented stops being valid. It
+	// is zero for a token that carries no expiry, which HTTP handlers can
+	// ignore, since every request is authenticated again; long-lived
+	// connections cannot, and read it to stop outliving their own token.
+	ExpiresAt time.Time
 }
 
 // IsCoach reports whether the caller may use the coach-only endpoints.
@@ -57,6 +63,9 @@ func Middleware(issuer *TokenIssuer) func(http.Handler) http.Handler {
 				return
 			}
 			principal := Principal{UserID: userID, Email: claims.Email, Role: claims.Role, Scope: claims.Scope}
+			if claims.ExpiresAt != nil {
+				principal.ExpiresAt = claims.ExpiresAt.Time
+			}
 			next.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), principal)))
 		})
 	}

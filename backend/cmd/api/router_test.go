@@ -26,9 +26,9 @@ func testRouter(t *testing.T, issuer *auth.TokenIssuer) http.Handler {
 		&config.Config{Env: "test", CORSOrigins: []string{"*"}},
 		auth.Middleware(issuer),
 		handlers{
-			auth:     auth.NewHandler(auth.NewService(nil, nil, issuer, nil, 4, "", nil, 15*time.Minute, 30*time.Minute, time.Hour), auth.NewRateLimiter(nil, 100, time.Minute)),
+			auth:     auth.NewHandler(auth.NewService(nil, nil, issuer, nil, 4, "", nil, nil, 15*time.Minute, 30*time.Minute, time.Hour), auth.NewRateLimiter(nil, 100, time.Minute)),
 			coaching: coaching.NewHandler(coaching.NewService(nil, nil)),
-			chat:     chat.NewHandler(chat.NewService(nil, hub), hub, []string{"*"}),
+			chat:     chat.NewHandler(chat.NewService(nil, hub), hub, nil, []string{"*"}),
 			analysis: analysis.NewHandler(analysis.NewService(nil, nil, nil)),
 		},
 	)

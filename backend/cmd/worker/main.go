@@ -1,6 +1,6 @@
 // Command worker consumes the background queues: conversation-analysis jobs,
 // which it runs through the ML analyzer and stores, and account deletions,
-// whose rows it removes after the API has already revoked the sessions.
+// whose sessions it revokes before removing their rows.
 package main
 
 import (
@@ -14,9 +14,11 @@ import (
 
 	"github.com/danielliu30/dating-coach/backend/internal/account"
 	"github.com/danielliu30/dating-coach/backend/internal/analysis"
+	"github.com/danielliu30/dating-coach/backend/internal/auth"
 	"github.com/danielliu30/dating-coach/backend/internal/config"
 	"github.com/danielliu30/dating-coach/backend/internal/notify"
 	"github.com/danielliu30/dating-coach/backend/internal/store"
+	"github.com/danielliu30/dating-coach/backend/internal/store/db"
 )
 
 func main() {
@@ -49,7 +51,15 @@ func run() error {
 		analysis.NewMLClient(cfg.MLServiceURL, cfg.MLServiceTimeout),
 		notify.New(cfg),
 	)
-	deleter := account.NewWorker(pg.Queries)
+	// The worker revokes the sessions of the accounts it deletes, so it needs
+	// the same denylist the API writes.
+	rdb, err := store.OpenRedis(ctx, cfg.RedisURL)
+	if err != nil {
+		return err
+	}
+	defer rdb.Close()
+
+	deleter := account.NewWorker(pg.Queries, auth.NewDenylist(rdb, cfg.JWTTTL))
 
 	slog.Info("worker started",
 		"analysis_queue", cfg.AnalysisQueue,
@@ -59,7 +69,7 @@ func run() error {
 	)
 
 	var wg sync.WaitGroup
-	wg.Add(4)
+	wg.Add(5)
 	go func() {
 		defer wg.Done()
 		deleter.PurgeExpiredRefreshTokens(ctx, refreshTokenPurgeInterval)
@@ -80,6 +90,12 @@ func run() error {
 		defer wg.Done()
 		consume(ctx, "dead letter monitor", func(ctx context.Context) error {
 			return watchDeadLetters(ctx, cfg.RabbitMQURL, cfg.AccountDeletionQueue, cfg.DeadLetterAlertPeriod)
+		})
+	}()
+	go func() {
+		defer wg.Done()
+		consume(ctx, "deletion outbox relay", func(ctx context.Context) error {
+			return relayDeletions(ctx, cfg.RabbitMQURL, cfg.AccountDeletionQueue, pg.Queries)
 		})
 	}()
 	wg.Wait()
@@ -159,6 +175,19 @@ func watchDeadLetters(ctx context.Context, url, name string, period time.Duratio
 			}
 		}
 	}
+}
+
+// relayDeletions queues the deletions that were recorded in the outbox but never
+// published, until ctx ends. It holds its own publisher, which redials on its
+// own, so the broker outage that stranded those deletions does not also keep the
+// relay from picking them up once it is over.
+func relayDeletions(ctx context.Context, url, name string, queries *db.Queries) error {
+	publisher, err := account.OpenPublisher(url, name)
+	if err != nil {
+		return err
+	}
+	defer publisher.Close()
+	return account.NewRelay(queries, publisher).Run(ctx)
 }
 
 // runDeletionConsumer holds one broker connection for as long as it stays

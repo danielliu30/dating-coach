@@ -12,6 +12,10 @@ import type { ChatEvent } from './types';
  */
 const attemptsPerRenewal = 6;
 
+// Close code the API uses when it drops a socket whose session it will not serve
+// any more, whether the account was revoked or the token behind it expired.
+const POLICY_VIOLATION = 1008;
+
 interface Handlers {
   onEvent: (event: ChatEvent) => void;
   onStatus?: (status: 'connecting' | 'open' | 'closed') => void;
@@ -66,11 +70,11 @@ export class ChatSocket {
         // ignore malformed frames
       }
     };
-    socket.onclose = () => {
+    socket.onclose = (event) => {
       const unopened = !this.opened;
       this.opened = false;
       this.handlers.onStatus?.('closed');
-      void this.scheduleReconnect(unopened);
+      void this.scheduleReconnect(unopened, event.code === POLICY_VIOLATION);
     };
     socket.onerror = () => socket.close();
   }
@@ -84,13 +88,16 @@ export class ChatSocket {
    *
    * Renewals are spaced every attemptsPerRenewal failures, so a handshake the
    * server refuses for its own reasons cannot turn the retry loop into a
-   * refresh-token mill.
+   * refresh-token mill. refused lifts that spacing: the API closed the socket
+   * itself because it will not serve the session again, which is either an
+   * expired token, renewable straight away, or a revoked account, whose renewal
+   * is refused and signs the user out rather than reconnecting forever.
    */
-  private async scheduleReconnect(unopened: boolean): Promise<void> {
+  private async scheduleReconnect(unopened: boolean, refused: boolean): Promise<void> {
     if (this.closed) return;
-    if (unopened) {
-      const due = this.failures % attemptsPerRenewal === 0;
-      this.failures += 1;
+    if (unopened || refused) {
+      const due = refused || this.failures % attemptsPerRenewal === 0;
+      if (!refused) this.failures += 1;
       if (due && (await api.renewSession()) === 'rejected') {
         this.close();
         return;

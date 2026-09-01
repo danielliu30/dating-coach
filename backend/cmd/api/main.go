@@ -73,14 +73,21 @@ func run() error {
 	notifier := notify.New(cfg)
 	issuer := auth.NewTokenIssuer(cfg.JWTSecret)
 	limiter := auth.NewRateLimiter(rdb, cfg.AuthRateLimit, cfg.AuthRateWindow)
+	// Authenticated requests are answered from the token's signature alone, so
+	// the denylist is only read by open chat sockets, which outlive the token
+	// that opened them.
+	denylist := auth.NewDenylist(rdb, cfg.JWTTTL)
 
 	authHandler := auth.NewHandler(
-		auth.NewService(pg.Pool, pg.Queries, issuer, notifier, cfg.BcryptCost, cfg.PublicAppURL, deletions, cfg.JWTTTL, cfg.VerifyTokenTTL, cfg.RefreshTokenTTL),
+		auth.NewService(pg.Pool, pg.Queries, issuer, notifier, cfg.BcryptCost, cfg.PublicAppURL, denylist, deletions, cfg.JWTTTL, cfg.VerifyTokenTTL, cfg.RefreshTokenTTL),
 		limiter,
 	)
 	coachingHandler := coaching.NewHandler(coaching.NewService(pg.Pool, pg.Queries))
 	hub := chat.NewHub(rdb)
-	chatHandler := chat.NewHandler(chat.NewService(pg.Queries, hub), hub, cfg.CORSOrigins)
+	// Sockets authenticated before a deletion would otherwise keep running
+	// until their next scheduled re-check; this closes them as it happens.
+	go auth.WatchRevocations(ctx, rdb, hub.EndSessions)
+	chatHandler := chat.NewHandler(chat.NewService(pg.Queries, hub), hub, denylist, cfg.CORSOrigins)
 	analysisHandler := analysis.NewHandler(analysis.NewService(pg.Pool, pg.Queries, queue))
 
 	router := newRouter(cfg, auth.Middleware(issuer), handlers{

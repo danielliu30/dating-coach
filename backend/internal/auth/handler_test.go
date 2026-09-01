@@ -38,7 +38,7 @@ func TestRoutesLeaveRefreshUnauthenticated(t *testing.T) {
 	// the public routes stay reachable without a live Redis.
 	rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", MaxRetries: -1, DialTimeout: time.Second})
 	t.Cleanup(func() { _ = rdb.Close() })
-	svc := NewService(nil, nil, nil, nil, 0, "", &stubPublisher{}, 15*time.Minute, time.Minute, time.Hour)
+	svc := NewService(nil, nil, nil, nil, 0, "", nil, &stubPublisher{}, 15*time.Minute, time.Minute, time.Hour)
 	routes := NewHandler(svc, NewRateLimiter(rdb, 100, time.Minute)).Routes(rejectAll)
 
 	for _, tc := range []struct {

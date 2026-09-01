@@ -60,6 +60,7 @@ type Hub struct {
 	mu      sync.Mutex
 	threads map[uuid.UUID]map[*subscriber]struct{}
 	cancels map[uuid.UUID]context.CancelFunc
+	sockets map[uuid.UUID]map[uuid.UUID]func()
 }
 
 // NewHub returns a hub bridging local sockets to Redis; one is shared by the
@@ -69,6 +70,60 @@ func NewHub(rdb *redis.Client) *Hub {
 		rdb:     rdb,
 		threads: map[uuid.UUID]map[*subscriber]struct{}{},
 		cancels: map[uuid.UUID]context.CancelFunc{},
+		sockets: map[uuid.UUID]map[uuid.UUID]func(){},
+	}
+}
+
+// Register indexes one of this replica's sockets by the account holding it and
+// returns the function that removes it again, which the socket must call as it
+// closes. drop is invoked at most once, from EndSessions, and runs on the
+// caller's goroutine: it must not block, so it should signal the socket's own
+// loop rather than write to or close the connection itself.
+func (h *Hub) Register(userID, connID uuid.UUID, drop func()) func() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	conns, ok := h.sockets[userID]
+	if !ok {
+		conns = map[uuid.UUID]func(){}
+		h.sockets[userID] = conns
+	}
+	conns[connID] = drop
+
+	return func() { h.deregister(userID, connID) }
+}
+
+// deregister forgets one socket, so a later revocation cannot call a drop
+// belonging to a connection that has already gone away.
+func (h *Hub) deregister(userID, connID uuid.UUID) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	conns, ok := h.sockets[userID]
+	if !ok {
+		return
+	}
+	delete(conns, connID)
+	if len(conns) == 0 {
+		delete(h.sockets, userID)
+	}
+}
+
+// EndSessions drops every socket this replica holds for userID, and is what a
+// revocation announcement is wired to. Each socket is forgotten before its drop
+// runs, so the callback fires once even if two revocations race.
+//
+// It only reaches sockets on this replica: fan-out to the others is the
+// publisher's job, and neither is guaranteed, which is why sockets also
+// re-check the durable denylist themselves.
+func (h *Hub) EndSessions(userID uuid.UUID) {
+	h.mu.Lock()
+	conns := h.sockets[userID]
+	delete(h.sockets, userID)
+	h.mu.Unlock()
+
+	for _, drop := range conns {
+		drop()
 	}
 }
 

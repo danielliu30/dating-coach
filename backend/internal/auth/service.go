@@ -45,6 +45,7 @@ type Service struct {
 	notifier       notify.Notifier
 	bcryptCost     int
 	appURL         string
+	denylist       *Denylist
 	deletions      DeletionPublisher
 	sessionTTL     time.Duration
 	verifyTokenTTL time.Duration
@@ -62,6 +63,8 @@ type DeletionPublisher interface {
 // sessionTTL is the lifetime of the access token issued at sign-in and is kept
 // short, verifyTokenTTL that of the verify-scoped token issued at sign-up, and
 // refreshTTL that of the refresh token clients trade in for new access tokens.
+// denylist is the record open chat sockets re-check, which deletion writes to so
+// a live socket is closed at once rather than at its access token's expiry.
 func NewService(
 	pool *pgxpool.Pool,
 	queries *db.Queries,
@@ -69,6 +72,7 @@ func NewService(
 	notifier notify.Notifier,
 	bcryptCost int,
 	appURL string,
+	denylist *Denylist,
 	deletions DeletionPublisher,
 	sessionTTL time.Duration,
 	verifyTokenTTL time.Duration,
@@ -81,6 +85,7 @@ func NewService(
 		notifier:       notifier,
 		bcryptCost:     bcryptCost,
 		appURL:         appURL,
+		denylist:       denylist,
 		deletions:      deletions,
 		sessionTTL:     sessionTTL,
 		verifyTokenTTL: verifyTokenTTL,
@@ -88,31 +93,47 @@ func NewService(
 	}
 }
 
-// DeleteAccount ends every session for userID and queues the removal of its
-// rows. It returns once the account is marked deleted in Postgres, its refresh
-// tokens are gone and the broker has confirmed the deletion job. The access
-// token in the caller's hand keeps working until it expires, which is minutes
-// away, and cannot be renewed.
+// DeleteAccount marks userID's account deleted, so no new session can be handed
+// out for it, and records the removal of its rows in the deletion outbox. Both
+// happen in one statement, and it is the only failure a caller is told about:
+// once it has committed, the deletion is certain, because the relay queues every
+// recorded deletion whether or not this request manages to.
 //
-// The two steps run in that order and neither is rolled back. Marking the row
-// is what makes the lockout durable: no session can be minted for the account
-// afterwards, however long the removal takes, and deleting the refresh tokens
-// stops the ones already out there from renewing. If queueing then fails, the
-// caller is locked out of an account whose data still exists, which an
-// operator can undo, whereas deleting the rows of a caller who can still mint
-// sessions cannot be undone. An error therefore means the account may already
-// be unusable, and the caller should repeat the request: it is idempotent, and
-// DELETE /me needs only the access token, so the deletion can still be queued
-// once Postgres or the broker recovers.
+// The mark and the outbox row are what have to be atomic. A mark without the
+// record is an account its owner can no longer use and nothing is going to
+// delete; a record without the mark is an account that can mint one more token
+// while it waits. Neither is reachable through a single statement: a broker or
+// Redis that is down cannot separate them, and a database that is down leaves
+// the account exactly as it was for the caller to retry.
+//
+// The steps that follow are optimisations, so they only log. Deleting the
+// refresh tokens and revoking the sessions end the account's access in
+// milliseconds rather than whenever the worker gets to the job; the mark alone
+// already stops both, since a rotation reads the account row and a socket
+// re-checks it, and the worker revokes before it deletes anything. The access
+// token in the caller's hand keeps working until it expires, which is minutes
+// away.
 func (s *Service) DeleteAccount(ctx context.Context, userID uuid.UUID) error {
-	if _, err := s.queries.MarkUserDeleted(ctx, userID); err != nil {
-		return fmt.Errorf("mark account deleted: %w", err)
+	rows, err := s.queries.RequestUserDeletion(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("record account deletion: %w", err)
+	}
+	if rows == 0 {
+		// The row is already gone, so there is nothing left to delete or revoke.
+		return nil
 	}
 	if _, err := s.queries.RevokeUserRefreshTokens(ctx, userID); err != nil {
-		return fmt.Errorf("revoke refresh tokens: %w", err)
+		slog.Error("revoke refresh tokens of a deleted account", "error", err, "user_id", userID)
+	}
+	if err := s.denylist.Revoke(ctx, userID); err != nil {
+		slog.Error("revoke sessions of a deleted account", "error", err, "user_id", userID)
 	}
 	if err := s.deletions.Publish(ctx, account.Job{UserID: userID.String()}); err != nil {
-		return fmt.Errorf("queue account deletion: %w", err)
+		slog.Warn("leaving a recorded deletion to the relay", "error", err, "user_id", userID)
+		return nil
+	}
+	if _, err := s.queries.MarkDeletionPublished(ctx, userID); err != nil {
+		slog.Error("mark a queued deletion published", "error", err, "user_id", userID)
 	}
 	return nil
 }
