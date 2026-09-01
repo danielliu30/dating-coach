@@ -83,15 +83,42 @@ Top tab labels may be truncated ("Coac…", "Analy…") at ~1024px — cosmetic,
   Deletion is `DELETE /api/v1/auth/me` → 202, and the row disappears only after the worker consumes the
   job, so poll `select count(*) from users where email='…'` for ~15–60 s instead of asserting instantly.
   Always keep a second verified control account so you can prove the deletion was targeted.
-- **Forcing a server-side (500) delete failure**: `docker compose stop rabbitmq` — the publish of the
-  deletion job fails and the API answers `500 {"error":"could not delete account"}` (transport-level
-  failure via `docker compose stop api` gives a fetch error instead, which is a different code path).
-  Note that only a 401 clears the client session, so a 500/fetch failure must leave the user signed in.
-  After `docker compose start rabbitmq`, wait for `docker compose ps` to report rabbitmq `healthy`, and
-  expect the worker to need up to ~30 s of consumer-retry backoff before it drains the queue.
-  `DELETE /auth/me` is deliberately denylist-exempt, so retrying with the same (already revoked) token
-  works — but any `active`-gated call such as "Refresh profile" (`GET /auth/me`) will 401 and auto sign
-  the user out after a failed attempt, so assert the sanitized error before touching other buttons.
+- **Deletion with the broker down (outbox + relay)**: since the deletion-outbox change, stopping
+  RabbitMQ no longer fails the request. `DELETE /auth/me` marks `users.deleted_at` and inserts
+  `account_deletions` in one statement, then best-effort revokes refresh tokens and publishes; a
+  publish failure only logs `"leaving a recorded deletion to the relay"` and the API still answers
+  **202**. To test: `docker compose stop rabbitmq`, delete from the UI, then assert in psql that
+  `deleted_at IS NOT NULL`, the `account_deletions` row exists with `published_at IS NULL`, the `users`
+  row still exists, and sign-in is already `401` (all user queries filter `deleted_at IS NULL`).
+  `docker compose start rabbitmq` and wait ≤60 s: the worker relay (5 s ticker) logs
+  `"queued a recorded account deletion"` then `"account deleted"`, and users/refresh_tokens/
+  account_deletions rows all disappear (refresh tokens go by FK cascade). Expect ~30 s of consumer
+  retry-backoff noise (`consumer stopped … retry_in 30s`) in the worker log before the job is drained —
+  that is normal, not a failure.
+
+## Auth: short-lived access tokens + refresh tokens
+- Access tokens are signature-verified JWTs (`JWT_TTL`, default 15m); refresh tokens live in
+  `refresh_tokens` as sha256 hashes (`REFRESH_TOKEN_TTL`, default 720h). Migration order is
+  `000003_deletion_outbox` then `000004_refresh_tokens`; a fresh DB must reach `schema_migrations`
+  version 4 (`docker compose down -v && docker compose up -d --build`).
+- Make expiry observable: `JWT_TTL=30s docker compose up -d --build api` (rebuild/restart api only),
+  then sign in, idle >35 s and press "Refresh profile". Expect `GET /auth/me 401` →
+  `POST /auth/refresh 200` → `GET /auth/me 200`, no UI bounce, and in psql one revoked + one active
+  refresh row (rotation). Restore with `docker compose up -d api` (back to the compose defaults).
+- Replay/reuse: a rotated refresh token must 401 `invalid refresh token` on every reuse.
+- **Session-ended notice levers** (`app/src/screens/SignInScreen.tsx` holds the copy):
+  - "revoked" copy — *Your session was ended / This can happen if the account was deleted or signed out
+    on another device.* Trigger with
+    `update refresh_tokens set revoked_at=now() where user_id=… and revoked_at is null` (or a real
+    `DELETE /auth/me` from another client), then wait out the access token and trigger a request.
+  - "expired" copy — *You were signed out / Your session expired for security…* Trigger at runtime with
+    `JWT_TTL=30s REFRESH_TOKEN_TTL=40s docker compose up -d api`, sign in, idle ~60 s; or patch
+    `dating-coach.session` in localStorage to a past `refresh_expires_at` and reload (startup path).
+  - Explicit "Sign out" must show **no** banner, and a successful self-delete from the Account screen
+    must also land on a clean Sign In screen (auth.tsx clears `endedReason` in `clearSession`).
+  - Regression watch: `client.ts` must call `onUnauthorized()` only once per renewal — `refresh()`
+    passes the `'defer'` policy. If it fires twice, `refreshExpiresRef` is cleared before the reason is
+    computed and every revoked session wrongly shows the "expired" copy.
 
 ## Known/likely rough edges to check rather than debug
 - Sending into a closed thread is correctly rejected server-side (nothing persisted) but the client
