@@ -111,6 +111,30 @@ func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (User, error) {
 	return i, err
 }
 
+const listUsersPendingDeletion = `-- name: ListUsersPendingDeletion :many
+SELECT id FROM users WHERE deleted_at IS NOT NULL ORDER BY deleted_at
+`
+
+func (q *Queries) ListUsersPendingDeletion(ctx context.Context) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, listUsersPendingDeletion)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []uuid.UUID{}
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const markUserDeleted = `-- name: MarkUserDeleted :execrows
 UPDATE users
 SET deleted_at = COALESCE(deleted_at, now()),

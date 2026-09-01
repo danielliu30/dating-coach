@@ -50,6 +50,11 @@ func run() error {
 		notify.New(cfg),
 	)
 	deleter := account.NewWorker(pg.Queries)
+	deletionPublisher, err := account.OpenPublisher(cfg.RabbitMQURL, cfg.AccountDeletionQueue)
+	if err != nil {
+		return err
+	}
+	defer deletionPublisher.Close()
 
 	slog.Info("worker started",
 		"analysis_queue", cfg.AnalysisQueue,
@@ -59,10 +64,14 @@ func run() error {
 	)
 
 	var wg sync.WaitGroup
-	wg.Add(4)
+	wg.Add(5)
 	go func() {
 		defer wg.Done()
 		deleter.PurgeExpiredRefreshTokens(ctx, refreshTokenPurgeInterval)
+	}()
+	go func() {
+		defer wg.Done()
+		deleter.RequeuePendingDeletions(ctx, pendingDeletionSweepInterval, deletionPublisher)
 	}()
 	go func() {
 		defer wg.Done()
@@ -90,6 +99,11 @@ const (
 	// Expired refresh tokens are unusable, so sweeping them is housekeeping
 	// rather than a security measure and can run infrequently.
 	refreshTokenPurgeInterval = time.Hour
+
+	// An account marked deleted whose job never reached the broker can only be
+	// retried by this sweep: its owner is already locked out. Waiting an hour
+	// to notice is the compromise against re-reading the table constantly.
+	pendingDeletionSweepInterval = time.Hour
 
 	minBackoff = time.Second
 	maxBackoff = 30 * time.Second

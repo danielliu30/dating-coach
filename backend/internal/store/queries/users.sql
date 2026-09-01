@@ -35,3 +35,6 @@ WHERE id = $1;
 
 -- name: DeleteUser :execrows
 DELETE FROM users WHERE id = $1;
+
+-- name: ListUsersPendingDeletion :many
+SELECT id FROM users WHERE deleted_at IS NOT NULL ORDER BY deleted_at;
