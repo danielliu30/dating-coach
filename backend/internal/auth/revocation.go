@@ -22,6 +22,11 @@ const (
 	revokedChannel = "auth:revoked"
 )
 
+// revocationGrace pads an entry beyond the token lifetime it is given, covering
+// a sign-in that read the account row just before deletion marked it and minted
+// its token just after the revocation was written.
+const revocationGrace = 5 * time.Minute
+
 // Revocations reports whether an account's outstanding tokens must be refused.
 // Middleware depends on the interface rather than Denylist so it can be
 // exercised without a live Redis.
@@ -37,17 +42,19 @@ type Denylist struct {
 	ttl time.Duration
 }
 
-// NewDenylist returns a denylist whose entries live for ttl. Pass the session
-// token lifetime: once every token minted before the revocation has expired the
-// entry can no longer make a difference, so keeping it wastes memory.
+// NewDenylist returns a denylist whose entries live for ttl plus a short grace
+// period. Pass the session token lifetime: deletion marks the account row
+// before it revokes, so no later token exists and the entry can no longer make
+// a difference once the tokens that predate it have expired.
 func NewDenylist(rdb *redis.Client, ttl time.Duration) *Denylist {
-	return &Denylist{rdb: rdb, ttl: ttl}
+	return &Denylist{rdb: rdb, ttl: ttl + revocationGrace}
 }
 
-// Revoke marks every outstanding token for userID as unusable. It is
-// synchronous on purpose: the caller (account deletion) must not report success
-// until the sessions are actually dead, even though the rows are removed later.
-// It returns an error when Redis is unreachable.
+// Revoke marks every outstanding token for userID as unusable. It returns an
+// error when Redis is unreachable. Account deletion calls it on a best-effort
+// basis and only logs a failure: once the deletion is recorded, the worker
+// revokes before it removes any rows, so this call only shortens the window in
+// which a still-valid token works from the job's latency to milliseconds.
 //
 // It also announces the revocation on revokedChannel. That publish is best
 // effort and its failure is logged, not returned: the durable key above is what

@@ -103,6 +103,16 @@ export class ApiClient {
     return this.request<Profile>('GET', '/auth/me');
   }
 
+  /**
+   * Deletes the authenticated account. Resolves on 202: the sessions are dead
+   * once it returns, but the rows are removed by a worker afterwards, so the
+   * caller must drop its token rather than read anything back. Repeating the
+   * call with the now-revoked token is safe.
+   */
+  deleteAccount() {
+    return this.request<{ status: string }>('DELETE', '/auth/me');
+  }
+
   // --- coaching -------------------------------------------------------------
 
   async listCoaches(acceptingOnly = true): Promise<Coach[]> {

@@ -1,6 +1,6 @@
 // Command worker consumes the background queues: conversation-analysis jobs,
 // which it runs through the ML analyzer and stores, and account deletions,
-// whose rows it removes after the API has already revoked the sessions.
+// whose sessions it revokes before removing their rows.
 package main
 
 import (
@@ -14,9 +14,11 @@ import (
 
 	"github.com/danielliu30/dating-coach/backend/internal/account"
 	"github.com/danielliu30/dating-coach/backend/internal/analysis"
+	"github.com/danielliu30/dating-coach/backend/internal/auth"
 	"github.com/danielliu30/dating-coach/backend/internal/config"
 	"github.com/danielliu30/dating-coach/backend/internal/notify"
 	"github.com/danielliu30/dating-coach/backend/internal/store"
+	"github.com/danielliu30/dating-coach/backend/internal/store/db"
 )
 
 func main() {
@@ -49,16 +51,25 @@ func run() error {
 		analysis.NewMLClient(cfg.MLServiceURL, cfg.MLServiceTimeout),
 		notify.New(cfg),
 	)
-	deleter := account.NewWorker(pg.Queries)
+	// The worker revokes the sessions of the accounts it deletes, so it needs
+	// the same denylist the API writes.
+	rdb, err := store.OpenRedis(ctx, cfg.RedisURL)
+	if err != nil {
+		return err
+	}
+	defer rdb.Close()
+
+	deleter := account.NewWorker(pg.Queries, auth.NewDenylist(rdb, cfg.JWTTTL))
 
 	slog.Info("worker started",
 		"analysis_queue", cfg.AnalysisQueue,
 		"deletion_queue", cfg.AccountDeletionQueue,
+		"dead_letter_alert_period", cfg.DeadLetterAlertPeriod,
 		"ml_service", cfg.MLServiceURL,
 	)
 
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(4)
 	go func() {
 		defer wg.Done()
 		consume(ctx, "analysis", func(ctx context.Context) error {
@@ -69,6 +80,18 @@ func run() error {
 		defer wg.Done()
 		consume(ctx, "account deletion", func(ctx context.Context) error {
 			return runDeletionConsumer(ctx, cfg.RabbitMQURL, cfg.AccountDeletionQueue, deleter.Handle)
+		})
+	}()
+	go func() {
+		defer wg.Done()
+		consume(ctx, "dead letter monitor", func(ctx context.Context) error {
+			return watchDeadLetters(ctx, cfg.RabbitMQURL, cfg.AccountDeletionQueue, cfg.DeadLetterAlertPeriod)
+		})
+	}()
+	go func() {
+		defer wg.Done()
+		consume(ctx, "deletion outbox relay", func(ctx context.Context) error {
+			return relayDeletions(ctx, cfg.RabbitMQURL, cfg.AccountDeletionQueue, pg.Queries)
 		})
 	}()
 	wg.Wait()
@@ -111,6 +134,53 @@ func runAnalysisConsumer(ctx context.Context, url, name string, handle analysis.
 	}
 	defer queue.Close()
 	return queue.Consume(ctx, handle)
+}
+
+// watchDeadLetters logs the depth of the deletion dead-letter queue every
+// period until ctx ends, so a deployment can alert on deletions that failed
+// while the account's revocation entry is still live. It holds its own broker
+// connection: a failed inspection closes the channel, which must not take the
+// consumer down with it. period must be positive; config.Load rejects anything
+// else.
+func watchDeadLetters(ctx context.Context, url, name string, period time.Duration) error {
+	queue, err := account.OpenQueue(url, name)
+	if err != nil {
+		return err
+	}
+	defer queue.Close()
+
+	ticker := time.NewTicker(period)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			depth, err := queue.DeadLetterDepth()
+			if err != nil {
+				return err
+			}
+			if depth > 0 {
+				slog.Warn("account deletions need an operator",
+					"queue", account.DeadLetterQueue(name),
+					"depth", depth,
+				)
+			}
+		}
+	}
+}
+
+// relayDeletions queues the deletions that were recorded in the outbox but never
+// published, until ctx ends. It holds its own publisher, which redials on its
+// own, so the broker outage that stranded those deletions does not also keep the
+// relay from picking them up once it is over.
+func relayDeletions(ctx context.Context, url, name string, queries *db.Queries) error {
+	publisher, err := account.OpenPublisher(url, name)
+	if err != nil {
+		return err
+	}
+	defer publisher.Close()
+	return account.NewRelay(queries, publisher).Run(ctx)
 }
 
 // runDeletionConsumer holds one broker connection for as long as it stays
