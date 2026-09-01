@@ -31,7 +31,11 @@ export default function AccountScreen(): React.ReactElement {
       // to the signed-out stack, so nothing after this runs.
       await deleteAccount();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'could not delete account');
+      // Only reached when the deletion was never accepted, and the reason is
+      // always something the account's owner can do nothing about, so it stays
+      // in the log rather than on screen.
+      console.warn('delete account', err);
+      setError('Could not delete your account. Please try again.');
       setDeleting(false);
     }
   };
