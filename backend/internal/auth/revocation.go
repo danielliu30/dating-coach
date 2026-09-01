@@ -94,6 +94,7 @@ func WatchRevocations(ctx context.Context, rdb *redis.Client, onRevoked func(uui
 			slog.Error("decode revocation", "error", err, "payload", msg.Payload)
 			continue
 		}
+		slog.Info("revocation announced", "user_id", userID)
 		onRevoked(userID)
 	}
 }
