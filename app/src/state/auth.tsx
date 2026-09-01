@@ -15,6 +15,7 @@ interface AuthState {
   verify: (token: string) => Promise<Profile>;
   resendVerification: (email: string) => Promise<void>;
   refresh: () => Promise<void>;
+  deleteAccount: () => Promise<void>;
   signOut: () => Promise<void>;
 }
 
@@ -130,6 +131,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
       refresh: async () => {
         if (!tokenRef.current) return;
         await persistUser(await api.me());
+      },
+      // The backend revokes the session before it queues the row deletion, so
+      // the token on hand is already dead once this resolves: the session is
+      // dropped locally rather than left to fail the next request.
+      deleteAccount: async () => {
+        await api.deleteAccount();
+        await clearSession();
       },
       signOut: clearSession,
     }),
