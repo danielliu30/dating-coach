@@ -311,6 +311,12 @@ func (s *Service) openSession(ctx context.Context, user db.User) (Session, error
 // instead of one every private route rejects. A bearer belonging to another
 // account, an expired one, or none at all yields the profile only: verifying
 // never hands a session to whoever merely holds the emailed token.
+//
+// The same profile-only answer is given when the address was confirmed but the
+// session could not be opened. Confirming consumes the emailed token, so
+// reporting the whole request as failed would leave the caller retrying a token
+// that no longer exists; the account is verified either way and signing in
+// opens the session instead.
 func (s *Service) VerifyEmail(ctx context.Context, token, bearer string) (Session, error) {
 	user, err := s.queries.VerifyUserEmail(ctx, &token)
 	if err != nil {
@@ -322,7 +328,13 @@ func (s *Service) VerifyEmail(ctx context.Context, token, bearer string) (Sessio
 	if !s.ownsBearer(user.ID, bearer) {
 		return Session{User: profileOf(user)}, nil
 	}
-	return s.openSession(ctx, user)
+	session, err := s.openSession(ctx, user)
+	if err != nil {
+		slog.WarnContext(ctx, "verified an address but could not open its session",
+			"user_id", user.ID, "error", err)
+		return Session{User: profileOf(user)}, nil
+	}
+	return session, nil
 }
 
 // ownsBearer reports whether bearer is a currently valid token for userID.

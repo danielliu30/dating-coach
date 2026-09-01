@@ -120,6 +120,53 @@ func TestSignUpMintsVerifyScopedToken(t *testing.T) {
 	}
 }
 
+// TestVerifyEmailKeepsTheAddressVerifiedWhenTheSessionFails covers the
+// asymmetry between the two writes: confirming the address consumes the emailed
+// token, so a later failure must not be reported as a failed verification the
+// caller would retry with a token that no longer exists.
+func TestVerifyEmailKeepsTheAddressVerifiedWhenTheSessionFails(t *testing.T) {
+	svc, _, pool := newTestService(t)
+	ctx := context.Background()
+
+	email := "verify-session-" + uuid.NewString() + "@example.com"
+	t.Cleanup(func() {
+		if _, err := pool.Exec(context.Background(), "DELETE FROM users WHERE email = $1", email); err != nil {
+			t.Errorf("delete test user: %v", err)
+		}
+	})
+	signUp, err := svc.SignUp(ctx, SignUpInput{Email: email, Password: "correct-horse", DisplayName: "Verify Session"})
+	if err != nil {
+		t.Fatalf("sign up: %v", err)
+	}
+	var verificationToken string
+	if err := pool.QueryRow(ctx, "SELECT verification_token FROM users WHERE email = $1", email).Scan(&verificationToken); err != nil {
+		t.Fatalf("read verification token: %v", err)
+	}
+
+	svc.refresh = NewRefreshTokens(
+		&stubRefreshStore{createErr: errors.New("connection refused")},
+		time.Hour,
+	)
+
+	verified, err := svc.VerifyEmail(ctx, verificationToken, signUp.Token)
+	if err != nil {
+		t.Fatalf("verify email with the refresh store down: %v", err)
+	}
+	if !verified.User.EmailVerified {
+		t.Fatal("the response denies a verification that already happened")
+	}
+	if verified.Token != "" || verified.RefreshToken != "" {
+		t.Fatal("a session was reported despite the refresh token never being stored")
+	}
+	var stored bool
+	if err := pool.QueryRow(ctx, "SELECT email_verified FROM users WHERE email = $1", email).Scan(&stored); err != nil {
+		t.Fatalf("read email_verified: %v", err)
+	}
+	if !stored {
+		t.Fatal("the address was left unverified, so the consumed token is unrecoverable")
+	}
+}
+
 // TestSignInRefusesAccountPendingDeletion covers the window between requesting
 // a deletion and the worker removing the row: the credentials still match, but
 // sign-in must not hand out a session that would outlive the revocation if the
