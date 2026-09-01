@@ -83,27 +83,42 @@ func NewService(
 	}
 }
 
-// DeleteAccount ends every session for userID and queues the removal of its
-// rows. It returns once the account is marked deleted in Postgres, the
-// revocation is durable in Redis and the broker has confirmed the deletion job.
+// DeleteAccount marks userID's account deleted, so no new session can be handed
+// out for it, and records the removal of its rows in the deletion outbox. Both
+// happen in one statement, and it is the only failure a caller is told about:
+// once it has committed, the deletion is certain, because the relay queues every
+// recorded deletion whether or not this request manages to.
 //
-// The three steps run in that order and none is rolled back. Marking the row
-// first is what bounds the revocation: no token can be issued for the account
-// after the mark, so every token the denylist has to outlive was minted before
-// it, and the entry may expire once the token lifetime has passed even if the
-// worker never removes the row. An error therefore means the account may
-// already be unusable, and the caller should repeat the request: it is
-// idempotent, and DELETE /me stays reachable with a revoked token so the
-// deletion can still be queued once Redis or the broker recovers.
+// The mark and the outbox row are what have to be atomic. A mark without the
+// record is an account its owner can no longer use and nothing is going to
+// delete; a record without the mark is an account that can mint one more token
+// while it waits. Neither is reachable through a single statement: a broker or
+// Redis that is down cannot separate them, and a database that is down leaves
+// the account exactly as it was for the caller to retry.
+//
+// The two steps that follow are optimisations, so they only log: revoking ends
+// the live sessions in milliseconds rather than whenever the worker gets to the
+// job, and publishing hands the job straight to the broker instead of waiting
+// for the relay's next pass. The worker revokes before it deletes anything, so
+// a session that outlives this call still dies before its rows do.
 func (s *Service) DeleteAccount(ctx context.Context, userID uuid.UUID) error {
-	if _, err := s.queries.MarkUserDeleted(ctx, userID); err != nil {
-		return fmt.Errorf("mark account deleted: %w", err)
+	rows, err := s.queries.RequestUserDeletion(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("record account deletion: %w", err)
+	}
+	if rows == 0 {
+		// The row is already gone, so there is nothing left to delete or revoke.
+		return nil
 	}
 	if err := s.denylist.Revoke(ctx, userID); err != nil {
-		return fmt.Errorf("revoke sessions: %w", err)
+		slog.Error("revoke sessions of a deleted account", "error", err, "user_id", userID)
 	}
 	if err := s.deletions.Publish(ctx, account.Job{UserID: userID.String()}); err != nil {
-		return fmt.Errorf("queue account deletion: %w", err)
+		slog.Warn("leaving a recorded deletion to the relay", "error", err, "user_id", userID)
+		return nil
+	}
+	if _, err := s.queries.MarkDeletionPublished(ctx, userID); err != nil {
+		slog.Error("mark a queued deletion published", "error", err, "user_id", userID)
 	}
 	return nil
 }

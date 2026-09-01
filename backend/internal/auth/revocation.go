@@ -37,16 +37,17 @@ type Denylist struct {
 
 // NewDenylist returns a denylist whose entries live for ttl plus a short grace
 // period. Pass the session token lifetime: deletion marks the account row
-// before revoking, so no later token exists and the entry can no longer make a
-// difference once the tokens that predate it have expired.
+// before it revokes, so no later token exists and the entry can no longer make
+// a difference once the tokens that predate it have expired.
 func NewDenylist(rdb *redis.Client, ttl time.Duration) *Denylist {
 	return &Denylist{rdb: rdb, ttl: ttl + revocationGrace}
 }
 
-// Revoke marks every outstanding token for userID as unusable. It is
-// synchronous on purpose: the caller (account deletion) must not report success
-// until the sessions are actually dead, even though the rows are removed later.
-// It returns an error when Redis is unreachable.
+// Revoke marks every outstanding token for userID as unusable. It returns an
+// error when Redis is unreachable. Account deletion calls it on a best-effort
+// basis and only logs a failure: once the deletion is recorded, the worker
+// revokes before it removes any rows, so this call only shortens the window in
+// which a still-valid token works from the job's latency to milliseconds.
 func (d *Denylist) Revoke(ctx context.Context, userID uuid.UUID) error {
 	if err := d.rdb.Set(ctx, revokedKeyPrefix+userID.String(), "1", d.ttl).Err(); err != nil {
 		return fmt.Errorf("revoke sessions for %s: %w", userID, err)

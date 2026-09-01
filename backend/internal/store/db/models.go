@@ -11,6 +11,12 @@ import (
 	"github.com/google/uuid"
 )
 
+type AccountDeletion struct {
+	UserID      uuid.UUID  `json:"user_id"`
+	RequestedAt time.Time  `json:"requested_at"`
+	PublishedAt *time.Time `json:"published_at"`
+}
+
 type AnalysisResult struct {
 	ID             uuid.UUID       `json:"id"`
 	ConversationID uuid.UUID       `json:"conversation_id"`

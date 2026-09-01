@@ -145,6 +145,17 @@ func (q *Queries) SetVerificationToken(ctx context.Context, arg SetVerificationT
 	return err
 }
 
+const userRowExists = `-- name: UserRowExists :one
+SELECT EXISTS (SELECT 1 FROM users WHERE id = $1)
+`
+
+func (q *Queries) UserRowExists(ctx context.Context, id uuid.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, userRowExists, id)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const verifyUserEmail = `-- name: VerifyUserEmail :one
 UPDATE users
 SET email_verified = true,
