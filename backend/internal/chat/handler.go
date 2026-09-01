@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"math"
 	"net/http"
 	"sync"
 	"time"
@@ -257,12 +258,21 @@ func (h *Handler) websocket(w http.ResponseWriter, r *http.Request) {
 	revocationTicker := time.NewTicker(revocationRefresh)
 	defer revocationTicker.Stop()
 
+	// Nothing announces an expiry, so the socket holds its own deadline: it was
+	// authenticated once, at the upgrade, and would otherwise keep acting on a
+	// token that has stopped being valid for every other route.
+	expiry := expiryTimer(principal.ExpiresAt)
+	defer expiry.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-revoked:
 			closeSocket(conn, socketRevoked, principal.UserID, connID, "announcement")
+			return
+		case <-expiry.C:
+			closeSocket(conn, socketExpired, principal.UserID, connID, "expiry")
 			return
 		case <-revocationTicker.C:
 			if verdict := h.sessionStatus(ctx, principal.UserID); verdict != socketActive {
@@ -295,8 +305,20 @@ type socketVerdict int
 const (
 	socketActive socketVerdict = iota
 	socketRevoked
+	socketExpired
 	socketUnverifiable
 )
+
+// expiryTimer fires when a token expires, and never for the zero time, which is
+// what a token without an expiry claim leaves on the Principal. A deadline that
+// has already passed fires at once, so a socket cannot be opened with a token
+// the timer would have caught a moment later.
+func expiryTimer(expiresAt time.Time) *time.Timer {
+	if expiresAt.IsZero() {
+		return time.NewTimer(math.MaxInt64)
+	}
+	return time.NewTimer(time.Until(expiresAt))
+}
 
 // sessionStatus re-checks the account behind a socket. It is the
 // socket-lifetime counterpart of auth.RequireActive, which only runs once, at
@@ -335,6 +357,8 @@ func closeSocket(conn *websocket.Conn, verdict socketVerdict, userID, connID uui
 		return
 	case socketRevoked:
 		status, reason = websocket.StatusPolicyViolation, "session revoked"
+	case socketExpired:
+		status, reason = websocket.StatusPolicyViolation, "session expired"
 	case socketUnverifiable:
 	}
 	slog.Info(
@@ -354,9 +378,14 @@ func closeSocket(conn *websocket.Conn, verdict socketVerdict, userID, connID uui
 // typing indicator or refreshing presence. Rejected sends are reported back on
 // the socket instead of closing it. It returns false once the caller's account
 // can no longer act, having closed the socket: every client event is a
-// privileged action, so none is dispatched without a fresh revocation check
-// rather than waiting for the next heartbeat.
+// privileged action, so none is dispatched without a fresh revocation check, or
+// on a token whose expiry the main loop's timer has yet to notice, rather than
+// waiting for the next heartbeat.
 func (h *Handler) handleIncoming(ctx context.Context, conn *websocket.Conn, threadID uuid.UUID, principal auth.Principal, connID uuid.UUID, event Event) bool {
+	if !principal.ExpiresAt.IsZero() && !time.Now().Before(principal.ExpiresAt) {
+		closeSocket(conn, socketExpired, principal.UserID, connID, "client_event")
+		return false
+	}
 	if verdict := h.sessionStatus(ctx, principal.UserID); verdict != socketActive {
 		closeSocket(conn, verdict, principal.UserID, connID, "client_event")
 		return false
