@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
 import { ApiError, api } from '../api/client';
+import type { RenewalResult } from '../api/client';
 import type { AuthSession, Profile, Role } from '../api/types';
 
 const STORAGE_KEY = 'dating-coach.session';
@@ -29,6 +30,13 @@ interface AuthState {
 }
 
 const AuthContext = createContext<AuthState | null>(null);
+
+/**
+ * Outcome of one refresh-token exchange. `stale` is the extra case the client
+ * needs internally: the exchange was refused, but the session it asked about
+ * had already been replaced, so the verdict is about a session no longer held.
+ */
+type RotationResult = RenewalResult | 'stale';
 
 // Whether the stored access token is still worth sending. Restoring an expired
 // one lands the user in authenticated tabs where every request 401s — and the
@@ -103,28 +111,49 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
     return session.user;
   }, []);
 
-  // Access tokens last minutes, so the client renews them behind the app rather
-  // than dropping the user onto the sign-in screen every quarter of an hour. A
-  // refused refresh token is unrecoverable: the client signs the user out.
-  useEffect(() => {
-    api.useRenewal(async () => {
-      if (!refreshRef.current) return 'rejected';
+  /**
+   * Exchanges refreshToken for a new session and installs it. Returns
+   * `rejected` only when the backend refused a token the app still holds;
+   * `stale` when it refused one that had already been replaced, and
+   * `unavailable` when the answer never arrived or arrived too late to use.
+   * An empty refreshToken counts as refused: there is nothing left to renew.
+   */
+  const rotate = useCallback(
+    async (refreshToken: string): Promise<RotationResult> => {
+      if (!refreshToken) return 'rejected';
       const generation = generationRef.current;
       try {
-        const session = await api.refreshSession(refreshRef.current);
+        const session = await api.refreshSession(refreshToken);
         // Signed out, or signed in as someone else, while this was in flight:
         // the session on hand now is newer than the one just minted.
         if (generation !== generationRef.current) return 'unavailable';
         await persist(session);
         return 'renewed';
       } catch (error) {
-        // A refusal only condemns the session it was asked about. Once that
-        // session has been replaced, it says nothing about the one on hand.
-        if (generation !== generationRef.current) return 'unavailable';
-        return isRefused(error) ? 'rejected' : 'unavailable';
+        if (!isRefused(error)) return 'unavailable';
+        return generation === generationRef.current ? 'rejected' : 'stale';
       }
+    },
+    [persist],
+  );
+
+  // Access tokens last minutes, so the client renews them behind the app rather
+  // than dropping the user onto the sign-in screen every quarter of an hour. A
+  // refused refresh token is unrecoverable: the client signs the user out.
+  useEffect(() => {
+    api.useRenewal(async () => {
+      const result = await rotate(refreshRef.current);
+      if (result !== 'stale') return result;
+      // The refusal was aimed at a session the app has already replaced, so it
+      // says nothing about the replacement directly — except that a refusal
+      // can be a replay, which revokes every refresh token the account has,
+      // and the replacement may be one of them. Ask about it rather than
+      // leaving the user on a session that is already dead.
+      if (!refreshRef.current) return 'unavailable';
+      const held = await rotate(refreshRef.current);
+      return held === 'stale' ? 'unavailable' : held;
     });
-  }, [persist]);
+  }, [rotate]);
 
   // Restores the stored session, renewing it up front when the app was closed
   // for longer than an access token lives, so nothing is handed a token that is
