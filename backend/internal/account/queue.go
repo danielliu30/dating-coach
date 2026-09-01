@@ -18,8 +18,10 @@ import (
 const prefetchCount = 1
 
 // maxAttempts is how many times a deletion is handed to the handler before it
-// is dead-lettered.
-const maxAttempts = 2
+// is dead-lettered. With retryDelay between attempts it bounds how long a
+// dependency outage can hold up an accepted deletion: the account keeps its rows
+// for at most maxAttempts*retryDelay before an operator is alerted.
+const maxAttempts = 20
 
 // attemptsHeader carries how many times a deletion has already been handled.
 // RabbitMQ's Redelivered flag cannot serve as the counter: it is also set when
