@@ -2,10 +2,12 @@ package account
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/danielliu30/dating-coach/backend/internal/store/db"
 )
@@ -39,17 +41,21 @@ func NewWorker(queries *db.Queries, revoker Revoker) *Worker {
 // place and is retried with the job: a token that outlives the row it
 // authenticates reaches handlers as a user that no longer exists.
 //
-// A job whose user is already gone succeeds: deliveries are at-least-once, so a
-// redelivery after a successful pass must not be treated as a failure and
-// dead-lettered. lastAttempt only annotates the log line, since every error
-// here (unparseable id, database down) is retried once and then dead-lettered
-// by the queue.
+// A job whose user is already gone succeeds, including when the revocation it
+// no longer needs is what failed: deliveries are at-least-once, so a redelivery
+// after a successful pass must not be treated as a failure and dead-lettered.
+// lastAttempt only annotates the log line, since every error here (unparseable
+// id, database down) is retried by the queue before it is dead-lettered.
 func (w *Worker) Handle(ctx context.Context, job Job, lastAttempt bool) error {
 	userID, err := uuid.Parse(job.UserID)
 	if err != nil {
 		return fmt.Errorf("parse user id %q: %w", job.UserID, err)
 	}
 	if err := w.revoker.Revoke(ctx, userID); err != nil {
+		if w.deleted(ctx, userID) {
+			slog.Info("account already deleted", "user_id", userID, "last_attempt", lastAttempt)
+			return nil
+		}
 		return fmt.Errorf("revoke sessions of %s: %w", userID, err)
 	}
 	rows, err := w.queries.DeleteUser(ctx, userID)
@@ -62,4 +68,13 @@ func (w *Worker) Handle(ctx context.Context, job Job, lastAttempt bool) error {
 	}
 	slog.Info("account deleted", "user_id", userID)
 	return nil
+}
+
+// deleted reports that userID no longer has a row, which makes the rest of the
+// job a no-op. It answers false when the row cannot be read, so a database that
+// is unreachable at the same time as Redis still fails the job rather than
+// declaring an outstanding deletion done.
+func (w *Worker) deleted(ctx context.Context, userID uuid.UUID) bool {
+	_, err := w.queries.GetUserByID(ctx, userID)
+	return errors.Is(err, pgx.ErrNoRows)
 }
