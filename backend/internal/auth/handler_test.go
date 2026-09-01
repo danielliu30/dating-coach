@@ -44,8 +44,8 @@ func authenticateAs(principal Principal) func(http.Handler) http.Handler {
 // denylist: deleting an already revoked account must stay possible, because a
 // deletion whose queueing failed can only be retried by its own owner.
 func TestRoutesKeepDeletionReachableWhenRevoked(t *testing.T) {
-	// A Redis client pointed at a closed port: Revoke fails fast, which is
-	// enough to show the request reached the handler rather than the denylist.
+	// A Redis client pointed at a closed port: the queued job is what makes the
+	// deletion certain, so an unreachable denylist must not fail the request.
 	rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", MaxRetries: -1, DialTimeout: time.Second})
 	t.Cleanup(func() { _ = rdb.Close() })
 	svc := NewService(nil, nil, nil, 0, "", NewDenylist(rdb, time.Minute), &stubPublisher{}, time.Hour, time.Minute)
@@ -56,8 +56,8 @@ func TestRoutesKeepDeletionReachableWhenRevoked(t *testing.T) {
 		method string
 		want   int
 	}{
-		{http.MethodGet, http.StatusUnauthorized},           // denylist applies
-		{http.MethodDelete, http.StatusInternalServerError}, // reached the handler
+		{http.MethodGet, http.StatusUnauthorized}, // denylist applies
+		{http.MethodDelete, http.StatusAccepted},  // reached the handler
 	} {
 		rec := httptest.NewRecorder()
 		routes.ServeHTTP(rec, httptest.NewRequest(tc.method, "/me", nil))

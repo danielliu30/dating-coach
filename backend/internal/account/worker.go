@@ -10,19 +10,34 @@ import (
 	"github.com/danielliu30/dating-coach/backend/internal/store/db"
 )
 
+// Revoker ends every outstanding session of an account. Worker depends on the
+// interface because the Redis-backed implementation lives in internal/auth,
+// which already imports this package to publish the jobs.
+type Revoker interface {
+	Revoke(ctx context.Context, userID uuid.UUID) error
+}
+
 // Worker applies queued deletions to the database.
 type Worker struct {
 	queries *db.Queries
+	revoker Revoker
 }
 
-// NewWorker builds the deletion worker; called once from cmd/worker.
-func NewWorker(queries *db.Queries) *Worker {
-	return &Worker{queries: queries}
+// NewWorker builds the deletion worker; called once from cmd/worker. revoker is
+// the session denylist, which Handle writes to before it removes any rows.
+func NewWorker(queries *db.Queries, revoker Revoker) *Worker {
+	return &Worker{queries: queries, revoker: revoker}
 }
 
-// Handle deletes the account's row, which cascades to its coach profile,
-// sessions, chat threads and messages, conversations, analyses and
-// notifications. It satisfies JobHandler.
+// Handle revokes the account's sessions and then deletes its row, which
+// cascades to its coach profile, sessions, chat threads and messages,
+// conversations, analyses and notifications. It satisfies JobHandler.
+//
+// Revoking here is what lets the API queue a deletion before revoking anything,
+// and so retry a deletion it could not queue instead of locking the caller out
+// of an account that is still alive. A failed revocation leaves the rows in
+// place and is retried with the job: a token that outlives the row it
+// authenticates reaches handlers as a user that no longer exists.
 //
 // A job whose user is already gone succeeds: deliveries are at-least-once, so a
 // redelivery after a successful pass must not be treated as a failure and
@@ -33,6 +48,9 @@ func (w *Worker) Handle(ctx context.Context, job Job, lastAttempt bool) error {
 	userID, err := uuid.Parse(job.UserID)
 	if err != nil {
 		return fmt.Errorf("parse user id %q: %w", job.UserID, err)
+	}
+	if err := w.revoker.Revoke(ctx, userID); err != nil {
+		return fmt.Errorf("revoke sessions of %s: %w", userID, err)
 	}
 	rows, err := w.queries.DeleteUser(ctx, userID)
 	if err != nil {

@@ -83,23 +83,24 @@ func NewService(
 	}
 }
 
-// DeleteAccount ends every session for userID and queues the removal of its
-// rows. It returns once the revocation is durable in Redis and the broker has
-// confirmed the deletion job.
+// DeleteAccount queues the removal of userID's rows and ends every session it
+// has. It returns once the broker has confirmed the deletion job, which is the
+// point from which the account is certain to be deleted.
 //
-// The revocation is written first and is never rolled back: if queueing then
-// fails, the caller is locked out of an account whose data still exists, which
-// an operator can undo, whereas deleting the rows of a caller whose tokens
-// still work cannot be undone. An error therefore means the account may
-// already be unusable, and the caller should repeat the request: it is
-// idempotent, and DELETE /me stays reachable with a revoked token so the
-// deletion can still be queued once the broker recovers.
+// The job is queued before anything is revoked, so a failure leaves the account
+// exactly as it was and the caller can retry: revoking first would, on a broker
+// that is down, lock the caller out of an account that then stays alive until
+// an operator intervenes. Revocation is best-effort afterwards, since the
+// worker revokes before it deletes anything and the queue retries it; a Redis
+// failure here only delays the sessions dying from milliseconds to however long
+// the job waits, which is not worth telling a caller their deletion failed when
+// it will go through.
 func (s *Service) DeleteAccount(ctx context.Context, userID uuid.UUID) error {
-	if err := s.denylist.Revoke(ctx, userID); err != nil {
-		return fmt.Errorf("revoke sessions: %w", err)
-	}
 	if err := s.deletions.Publish(ctx, account.Job{UserID: userID.String()}); err != nil {
 		return fmt.Errorf("queue account deletion: %w", err)
+	}
+	if err := s.denylist.Revoke(ctx, userID); err != nil {
+		slog.Error("revoke sessions of a deleted account", "error", err, "user_id", userID)
 	}
 	return nil
 }

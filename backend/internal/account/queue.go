@@ -1,5 +1,5 @@
 // Package account owns account lifecycle work that outlives a request:
-// deleting an account's rows after its sessions have already been revoked.
+// revoking a deleted account's sessions and removing its rows.
 package account
 
 import (
@@ -48,8 +48,8 @@ func RetryQueue(name string) string { return name + ".retry" }
 
 // Queue is a thin RabbitMQ wrapper used by the API (publish) and the worker
 // (consume). Its work queue dead-letters into DeadLetterQueue(name): a deletion
-// that keeps failing must be kept for an operator, because the account is
-// already revoked and the user cannot retry it themselves.
+// that keeps failing must be kept for an operator, because its owner has been
+// told the account is gone and cannot retry it themselves.
 type Queue struct {
 	conn    *amqp.Connection
 	channel *amqp.Channel
@@ -293,9 +293,8 @@ func (q *Queue) Consume(ctx context.Context, handle JobHandler) error {
 }
 
 // DeadLetterDepth reports how many deletions are sitting in the dead-letter
-// queue. Those accounts are revoked but still hold rows, and their revocation
-// entries expire with the JWT TTL, so a non-zero depth needs an operator before
-// then. The passive declare closes the channel if the queue is missing, which
+// queue. Those accounts still hold rows, and the revocation that outlives them
+// expires with the JWT TTL, so a non-zero depth needs an operator before then. The passive declare closes the channel if the queue is missing, which
 // makes the owning Queue unusable; callers should hold a connection of their
 // own rather than share the consumer's.
 func (q *Queue) DeadLetterDepth() (int, error) {

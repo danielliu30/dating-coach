@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -10,8 +11,29 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/danielliu30/dating-coach/backend/internal/account"
 	"github.com/danielliu30/dating-coach/backend/internal/store/db"
 )
+
+// failingPublisher stands in for a broker that cannot take the deletion.
+type failingPublisher struct{}
+
+// Publish always fails.
+func (failingPublisher) Publish(context.Context, account.Job) error {
+	return errors.New("broker is down")
+}
+
+// TestDeleteAccountKeepsSessionsWhenQueueingFails pins the order deletion runs
+// in: revoking an account whose removal never reached the queue would lock its
+// owner out of an account that then stays alive until an operator steps in. The
+// denylist here holds a nil Redis client, so revoking would panic rather than
+// quietly pass.
+func TestDeleteAccountKeepsSessionsWhenQueueingFails(t *testing.T) {
+	svc := NewService(nil, nil, nil, 0, "", NewDenylist(nil, time.Minute), failingPublisher{}, time.Hour, time.Minute)
+	if err := svc.DeleteAccount(context.Background(), uuid.New()); err == nil {
+		t.Fatal("DeleteAccount succeeded although the deletion was never queued")
+	}
+}
 
 // silentNotifier stands in for the SMTP notifier: sign-up sends a verification
 // email, which is irrelevant to the scope of the token it returns.

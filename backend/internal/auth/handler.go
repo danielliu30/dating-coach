@@ -134,10 +134,10 @@ func (h *Handler) resendVerification(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusAccepted, map[string]string{"status": "sent"})
 }
 
-// deleteMe handles DELETE /me. It answers 202 rather than 204: the caller's
-// sessions are already dead when it returns, but the rows are removed by the
-// worker afterwards. It is idempotent, so a caller whose deletion could not be
-// queued can repeat the request with the same (revoked) token.
+// deleteMe handles DELETE /me. It answers 202 rather than 204: the deletion is
+// certain once it returns, but the sessions and rows are ended by the worker
+// afterwards. It is idempotent, so a caller whose deletion could not be queued
+// can repeat the request with the same token.
 func (h *Handler) deleteMe(w http.ResponseWriter, r *http.Request) {
 	principal, ok := PrincipalFrom(r.Context())
 	if !ok {

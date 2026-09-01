@@ -1,6 +1,6 @@
 // Command worker consumes the background queues: conversation-analysis jobs,
 // which it runs through the ML analyzer and stores, and account deletions,
-// whose rows it removes after the API has already revoked the sessions.
+// whose sessions it revokes before removing their rows.
 package main
 
 import (
@@ -14,6 +14,7 @@ import (
 
 	"github.com/danielliu30/dating-coach/backend/internal/account"
 	"github.com/danielliu30/dating-coach/backend/internal/analysis"
+	"github.com/danielliu30/dating-coach/backend/internal/auth"
 	"github.com/danielliu30/dating-coach/backend/internal/config"
 	"github.com/danielliu30/dating-coach/backend/internal/notify"
 	"github.com/danielliu30/dating-coach/backend/internal/store"
@@ -49,7 +50,15 @@ func run() error {
 		analysis.NewMLClient(cfg.MLServiceURL, cfg.MLServiceTimeout),
 		notify.New(cfg),
 	)
-	deleter := account.NewWorker(pg.Queries)
+	// The worker revokes the sessions of the accounts it deletes, so it needs
+	// the same denylist the API writes.
+	rdb, err := store.OpenRedis(ctx, cfg.RedisURL)
+	if err != nil {
+		return err
+	}
+	defer rdb.Close()
+
+	deleter := account.NewWorker(pg.Queries, auth.NewDenylist(rdb, cfg.JWTTTL))
 
 	slog.Info("worker started",
 		"analysis_queue", cfg.AnalysisQueue,
