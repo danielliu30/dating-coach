@@ -8,9 +8,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 
 	"github.com/danielliu30/dating-coach/backend/internal/account"
+	"github.com/danielliu30/dating-coach/backend/internal/store/db"
 )
 
 // stubPublisher records queued deletions without a broker.
@@ -44,11 +46,17 @@ func authenticateAs(principal Principal) func(http.Handler) http.Handler {
 // denylist: deleting an already revoked account must stay possible, because a
 // deletion whose queueing failed can only be retried by its own owner.
 func TestRoutesKeepDeletionReachableWhenRevoked(t *testing.T) {
-	// A Redis client pointed at a closed port: Revoke fails fast, which is
-	// enough to show the request reached the handler rather than the denylist.
+	// Postgres and Redis clients pointed at closed ports: deletion fails fast on
+	// its first step, which is enough to show the request reached the handler
+	// rather than the denylist.
+	pool, err := pgxpool.New(context.Background(), "postgres://user:pass@127.0.0.1:1/db")
+	if err != nil {
+		t.Fatalf("build pool: %v", err)
+	}
+	t.Cleanup(pool.Close)
 	rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", MaxRetries: -1, DialTimeout: time.Second})
 	t.Cleanup(func() { _ = rdb.Close() })
-	svc := NewService(nil, nil, nil, 0, "", NewDenylist(rdb, time.Minute), &stubPublisher{}, time.Hour, time.Minute)
+	svc := NewService(db.New(pool), nil, nil, 0, "", NewDenylist(rdb, time.Minute), &stubPublisher{}, time.Hour, time.Minute)
 	principal := Principal{UserID: uuid.New(), Email: "deleted@example.com", Role: "user"}
 	routes := NewHandler(svc, nil).Routes(authenticateAs(principal), blockAll)
 

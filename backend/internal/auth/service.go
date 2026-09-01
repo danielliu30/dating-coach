@@ -84,17 +84,21 @@ func NewService(
 }
 
 // DeleteAccount ends every session for userID and queues the removal of its
-// rows. It returns once the revocation is durable in Redis and the broker has
-// confirmed the deletion job.
+// rows. It returns once the account is marked deleted in Postgres, the
+// revocation is durable in Redis and the broker has confirmed the deletion job.
 //
-// The revocation is written first and is never rolled back: if queueing then
-// fails, the caller is locked out of an account whose data still exists, which
-// an operator can undo, whereas deleting the rows of a caller whose tokens
-// still work cannot be undone. An error therefore means the account may
+// The three steps run in that order and none is rolled back. Marking the row
+// first is what bounds the revocation: no token can be issued for the account
+// after the mark, so every token the denylist has to outlive was minted before
+// it, and the entry may expire once the token lifetime has passed even if the
+// worker never removes the row. An error therefore means the account may
 // already be unusable, and the caller should repeat the request: it is
 // idempotent, and DELETE /me stays reachable with a revoked token so the
-// deletion can still be queued once the broker recovers.
+// deletion can still be queued once Redis or the broker recovers.
 func (s *Service) DeleteAccount(ctx context.Context, userID uuid.UUID) error {
+	if _, err := s.queries.MarkUserDeleted(ctx, userID); err != nil {
+		return fmt.Errorf("mark account deleted: %w", err)
+	}
 	if err := s.denylist.Revoke(ctx, userID); err != nil {
 		return fmt.Errorf("revoke sessions: %w", err)
 	}
@@ -209,6 +213,10 @@ func (s *Service) SignUp(ctx context.Context, in SignUpInput) (Session, error) {
 // emails and wrong passwords both return ErrInvalidCredentials; an unverified
 // account returns ErrEmailNotVerified, only after the password has been
 // checked.
+//
+// An account awaiting the deletion worker is indistinguishable from an unknown
+// one: the lookup skips rows marked deleted, so no session is ever minted for
+// an account whose data is on its way out, however long the removal takes.
 func (s *Service) SignIn(ctx context.Context, email, password string) (Session, error) {
 	user, err := s.queries.GetUserByEmail(ctx, strings.ToLower(strings.TrimSpace(email)))
 	if err != nil {
