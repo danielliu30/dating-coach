@@ -13,18 +13,24 @@ import (
 )
 
 const createRefreshToken = `-- name: CreateRefreshToken :exec
-INSERT INTO refresh_tokens (token_hash, user_id, expires_at)
-VALUES ($1, $2, $3)
+INSERT INTO refresh_tokens (token_hash, user_id, family_id, expires_at)
+VALUES ($1, $2, $3, $4)
 `
 
 type CreateRefreshTokenParams struct {
 	TokenHash string    `json:"token_hash"`
 	UserID    uuid.UUID `json:"user_id"`
+	FamilyID  uuid.UUID `json:"family_id"`
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
 func (q *Queries) CreateRefreshToken(ctx context.Context, arg CreateRefreshTokenParams) error {
-	_, err := q.db.Exec(ctx, createRefreshToken, arg.TokenHash, arg.UserID, arg.ExpiresAt)
+	_, err := q.db.Exec(ctx, createRefreshToken,
+		arg.TokenHash,
+		arg.UserID,
+		arg.FamilyID,
+		arg.ExpiresAt,
+	)
 	return err
 }
 
@@ -41,7 +47,7 @@ func (q *Queries) DeleteExpiredRefreshTokens(ctx context.Context) (int64, error)
 }
 
 const getActiveRefreshToken = `-- name: GetActiveRefreshToken :one
-SELECT token_hash, user_id, issued_at, expires_at, revoked_at FROM refresh_tokens
+SELECT token_hash, user_id, family_id, issued_at, expires_at, revoked_at FROM refresh_tokens
 WHERE token_hash = $1
   AND revoked_at IS NULL
   AND expires_at > now()
@@ -53,6 +59,25 @@ func (q *Queries) GetActiveRefreshToken(ctx context.Context, tokenHash string) (
 	err := row.Scan(
 		&i.TokenHash,
 		&i.UserID,
+		&i.FamilyID,
+		&i.IssuedAt,
+		&i.ExpiresAt,
+		&i.RevokedAt,
+	)
+	return i, err
+}
+
+const getRefreshToken = `-- name: GetRefreshToken :one
+SELECT token_hash, user_id, family_id, issued_at, expires_at, revoked_at FROM refresh_tokens WHERE token_hash = $1
+`
+
+func (q *Queries) GetRefreshToken(ctx context.Context, tokenHash string) (RefreshToken, error) {
+	row := q.db.QueryRow(ctx, getRefreshToken, tokenHash)
+	var i RefreshToken
+	err := row.Scan(
+		&i.TokenHash,
+		&i.UserID,
+		&i.FamilyID,
 		&i.IssuedAt,
 		&i.ExpiresAt,
 		&i.RevokedAt,
@@ -69,6 +94,21 @@ WHERE token_hash = $1
 
 func (q *Queries) RevokeRefreshToken(ctx context.Context, tokenHash string) (int64, error) {
 	result, err := q.db.Exec(ctx, revokeRefreshToken, tokenHash)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const revokeRefreshTokenFamily = `-- name: RevokeRefreshTokenFamily :execrows
+UPDATE refresh_tokens
+SET revoked_at = now()
+WHERE family_id = $1
+  AND revoked_at IS NULL
+`
+
+func (q *Queries) RevokeRefreshTokenFamily(ctx context.Context, familyID uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, revokeRefreshTokenFamily, familyID)
 	if err != nil {
 		return 0, err
 	}

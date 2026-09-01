@@ -19,6 +19,7 @@ type stubRefreshStore struct {
 	revokedUsers []uuid.UUID
 	createErr    error
 	lookupErr    error
+	familyErr    error
 }
 
 // CreateRefreshToken stores the row, or returns the configured failure.
@@ -32,9 +33,41 @@ func (s *stubRefreshStore) CreateRefreshToken(_ context.Context, arg db.CreateRe
 	s.rows[arg.TokenHash] = db.RefreshToken{
 		TokenHash: arg.TokenHash,
 		UserID:    arg.UserID,
+		FamilyID:  arg.FamilyID,
 		ExpiresAt: arg.ExpiresAt,
 	}
 	return nil
+}
+
+// GetRefreshToken returns the row for tokenHash whatever its state, which is
+// how the real query lets the flow recognise a token that was already spent.
+func (s *stubRefreshStore) GetRefreshToken(_ context.Context, tokenHash string) (db.RefreshToken, error) {
+	if s.lookupErr != nil {
+		return db.RefreshToken{}, s.lookupErr
+	}
+	row, ok := s.rows[tokenHash]
+	if !ok {
+		return db.RefreshToken{}, pgx.ErrNoRows
+	}
+	return row, nil
+}
+
+// RevokeRefreshTokenFamily revokes every live row sharing familyID.
+func (s *stubRefreshStore) RevokeRefreshTokenFamily(_ context.Context, familyID uuid.UUID) (int64, error) {
+	if s.familyErr != nil {
+		return 0, s.familyErr
+	}
+	var revoked int64
+	for hash, row := range s.rows {
+		if row.FamilyID != familyID || row.RevokedAt != nil {
+			continue
+		}
+		now := time.Now()
+		row.RevokedAt = &now
+		s.rows[hash] = row
+		revoked++
+	}
+	return revoked, nil
 }
 
 // GetActiveRefreshToken returns the unrevoked, unexpired row for tokenHash, or
@@ -127,11 +160,66 @@ func TestRotateInvalidatesTheSpentToken(t *testing.T) {
 	if replacement == token {
 		t.Fatal("rotate returned the same token")
 	}
+	if _, _, _, err := refresh.Rotate(context.Background(), replacement); err != nil {
+		t.Fatalf("rotating the replacement: %v", err)
+	}
 	if _, _, _, err := refresh.Rotate(context.Background(), token); !errors.Is(err, ErrInvalidToken) {
 		t.Fatalf("reusing the spent token: err = %v, want ErrInvalidToken", err)
 	}
-	if _, _, _, err := refresh.Rotate(context.Background(), replacement); err != nil {
-		t.Fatalf("rotating the replacement: %v", err)
+}
+
+// TestRotateRevokesTheFamilyOfAReplayedToken covers the response to a leak: a
+// spent token coming back means the chain it belongs to is compromised, so the
+// live replacement must stop working too, while the same user's other session
+// carries on.
+func TestRotateRevokesTheFamilyOfAReplayedToken(t *testing.T) {
+	store := &stubRefreshStore{}
+	refresh := NewRefreshTokens(store, time.Hour)
+	ctx := context.Background()
+	userID := uuid.New()
+
+	stolen, _, err := refresh.Issue(ctx, userID)
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	otherDevice, _, err := refresh.Issue(ctx, userID)
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	_, live, _, err := refresh.Rotate(ctx, stolen)
+	if err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+
+	if _, _, _, err := refresh.Rotate(ctx, stolen); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("replaying the spent token: err = %v, want ErrInvalidToken", err)
+	}
+	if _, _, _, err := refresh.Rotate(ctx, live); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("replacement after the replay: err = %v, want ErrInvalidToken", err)
+	}
+	if _, _, _, err := refresh.Rotate(ctx, otherDevice); err != nil {
+		t.Fatalf("the other session was revoked too: %v", err)
+	}
+}
+
+// TestRotateFailsWhenTheFamilyCannotBeRevoked keeps a replay from looking like
+// an ordinary bad token when the revocation did not happen: the caller must see
+// a failure rather than a compromised chain quietly staying live.
+func TestRotateFailsWhenTheFamilyCannotBeRevoked(t *testing.T) {
+	store := &stubRefreshStore{}
+	refresh := NewRefreshTokens(store, time.Hour)
+	ctx := context.Background()
+	token, _, err := refresh.Issue(ctx, uuid.New())
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	if _, _, _, err := refresh.Rotate(ctx, token); err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+
+	store.familyErr = errors.New("connection refused")
+	if _, _, _, err := refresh.Rotate(ctx, token); err == nil || errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("err = %v, want a store failure", err)
 	}
 }
 
@@ -168,6 +256,12 @@ func TestRotateRejectsUnusableTokens(t *testing.T) {
 			token := seed(refresh, store)
 			if _, _, _, err := refresh.Rotate(context.Background(), token); !errors.Is(err, ErrInvalidToken) {
 				t.Fatalf("err = %v, want ErrInvalidToken", err)
+			}
+			if name == "expired" {
+				// Expiry is not a leak, so it must not take the family with it.
+				if row := store.rows[hashToken(token)]; row.RevokedAt != nil {
+					t.Fatal("an expired token revoked its family")
+				}
 			}
 		})
 	}

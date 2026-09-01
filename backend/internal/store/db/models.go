@@ -105,6 +105,7 @@ type Notification struct {
 type RefreshToken struct {
 	TokenHash string     `json:"token_hash"`
 	UserID    uuid.UUID  `json:"user_id"`
+	FamilyID  uuid.UUID  `json:"family_id"`
 	IssuedAt  time.Time  `json:"issued_at"`
 	ExpiresAt time.Time  `json:"expires_at"`
 	RevokedAt *time.Time `json:"revoked_at"`

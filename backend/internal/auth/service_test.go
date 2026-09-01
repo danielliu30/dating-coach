@@ -111,6 +111,13 @@ func TestSignUpMintsVerifyScopedToken(t *testing.T) {
 	if _, err := svc.Refresh(ctx, signIn.RefreshToken); !errors.Is(err, ErrInvalidToken) {
 		t.Fatalf("reusing the spent refresh token: err = %v, want ErrInvalidToken", err)
 	}
+	// The replay above means that chain leaked, so its live token goes with it.
+	if _, err := svc.Refresh(ctx, refreshed.RefreshToken); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("live token of the replayed chain: err = %v, want ErrInvalidToken", err)
+	}
+	if _, err := svc.Refresh(ctx, verified.RefreshToken); err != nil {
+		t.Fatalf("the session opened at verification was revoked too: %v", err)
+	}
 }
 
 // assertTokenScope fails the test unless raw carries the given scope claim and
