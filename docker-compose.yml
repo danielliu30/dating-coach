@@ -70,6 +70,7 @@ services:
       - up
 
   api:
+    image: ${DOCKERHUB_NAMESPACE:-danielliu30}/dating-coach-backend:${IMAGE_TAG:-latest}
     build: ./backend
     command: ['api']
     environment:
@@ -86,6 +87,7 @@ services:
         condition: service_healthy
 
   worker:
+    image: ${DOCKERHUB_NAMESPACE:-danielliu30}/dating-coach-backend:${IMAGE_TAG:-latest}
     build: ./backend
     command: ['worker']
     environment: *backend-env
@@ -101,6 +103,7 @@ services:
         condition: service_started
 
   ml-analyzer:
+    image: ${DOCKERHUB_NAMESPACE:-danielliu30}/dating-coach-ml-analyzer:${IMAGE_TAG:-latest}
     build: ./ml-analyzer
     environment:
       ML_BACKEND: ${ML_BACKEND:-llm}

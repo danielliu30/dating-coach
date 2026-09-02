@@ -44,6 +44,14 @@ docker compose up --build # postgres, redis, rabbitmq, migrations, api, worker, 
 
 Migrations run in a one-shot `migrate` service before `api` and `worker` start.
 
+Prebuilt images are published to Docker Hub as `danielliu30/dating-coach-backend` (both `api` and `worker` entrypoints) and `danielliu30/dating-coach-ml-analyzer`. To run from them instead of building:
+
+```bash
+docker compose pull api ml-analyzer && docker compose up -d --no-build
+```
+
+To publish a new version: `docker compose build && docker compose push api ml-analyzer` (override the target with `DOCKERHUB_NAMESPACE` / `IMAGE_TAG`).
+
 The Expo app is not containerised — run it on the host:
 
 ```bash
