@@ -76,6 +76,7 @@ For the end-to-end flow (sign-up, verification token, chat) follow `.agents/skil
 
 ## Gotchas
 - `api` and `worker` restart until `migrate` exits 0 and redis/rabbitmq are healthy; give the stack ~20 s.
+- nginx writes the access-log line for a WebSocket (`… /ws … 101`) only when the socket closes; reload the chat page to see it in `docker compose logs nginx`.
 - There is no `/api/v1/healthz`; the API health check is `/healthz` at the root.
 - `docker compose push` needs `docker login` first; the PAT is not available during snapshot builds.
 - The Hub repos are public on the personal account; images contain no secrets (all config via env at runtime).
