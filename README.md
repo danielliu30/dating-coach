@@ -44,6 +44,23 @@ docker compose up --build # postgres, redis, rabbitmq, migrations, api, worker, 
 
 Migrations run in a one-shot `migrate` service before `api` and `worker` start.
 
+Prebuilt images are published to Docker Hub as `danielliu30/dating-coach-backend` (both `api` and `worker` entrypoints) and `danielliu30/dating-coach-ml-analyzer`. To run from them instead of building:
+
+```bash
+docker compose pull api ml-analyzer && docker compose up -d --no-build
+```
+
+To publish a new version: `docker compose build && docker compose push api ml-analyzer` (override the target with `DOCKERHUB_NAMESPACE` / `IMAGE_TAG`).
+
+### Exposing the stack through nginx
+
+`nginx/` holds one route table in two flavours — `/api/*` and `/healthz` go to the API (WebSocket upgrades included), `/ml/*` goes to the ML service:
+
+- Containerised: `docker compose --profile gateway up -d` adds an `nginx` service on `:${NGINX_PORT:-80}`.
+- Host-installed nginx: install `nginx/host-site.conf` as a site (instructions in the file); it proxies to the ports compose publishes on `localhost`.
+
+Point the app at the gateway with `EXPO_PUBLIC_API_URL=http://<host>`. The full workflow is written up in `.agents/skills/running-dating-coach-in-docker/SKILL.md`.
+
 The Expo app is not containerised — run it on the host:
 
 ```bash
