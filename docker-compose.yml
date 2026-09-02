@@ -116,5 +116,20 @@ services:
       ML_MODEL_DIR: ${ML_MODEL_DIR:-/models/segment-scorer}
     ports: ['8000:8000']
 
+  # Optional public entrypoint (`--profile gateway`): proxies /api and /healthz
+  # to api, /ml/ to ml-analyzer. Skip it when a host nginx fronts the stack
+  # (see nginx/host-site.conf).
+  nginx:
+    image: nginx:1.27-alpine
+    profiles: ['gateway']
+    ports: ['${NGINX_PORT:-80}:80']
+    volumes: ['./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro']
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_started
+      ml-analyzer:
+        condition: service_started
+
 volumes:
   postgres-data:
