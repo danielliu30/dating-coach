@@ -9,12 +9,13 @@ import (
 	"context"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const enqueueEmail = `-- name: EnqueueEmail :one
 INSERT INTO email_outbox (to_email, subject, body, ics)
 VALUES ($1, $2, $3, $4)
-RETURNING id, to_email, subject, body, ics, attempts, last_error, created_at, sent_at
+RETURNING id, to_email, subject, body, ics, attempts, last_error, next_attempt_at, created_at, sent_at
 `
 
 type EnqueueEmailParams struct {
@@ -40,6 +41,7 @@ func (q *Queries) EnqueueEmail(ctx context.Context, arg EnqueueEmailParams) (Ema
 		&i.Ics,
 		&i.Attempts,
 		&i.LastError,
+		&i.NextAttemptAt,
 		&i.CreatedAt,
 		&i.SentAt,
 	)
@@ -48,17 +50,20 @@ func (q *Queries) EnqueueEmail(ctx context.Context, arg EnqueueEmailParams) (Ema
 
 const markEmailFailed = `-- name: MarkEmailFailed :execrows
 UPDATE email_outbox
-SET attempts = attempts + 1, last_error = $2
+SET attempts = attempts + 1,
+    last_error = $2,
+    next_attempt_at = now() + $3::interval
 WHERE id = $1 AND sent_at IS NULL
 `
 
 type MarkEmailFailedParams struct {
-	ID        uuid.UUID `json:"id"`
-	LastError string    `json:"last_error"`
+	ID         uuid.UUID       `json:"id"`
+	LastError  string          `json:"last_error"`
+	RetryAfter pgtype.Interval `json:"retry_after"`
 }
 
 func (q *Queries) MarkEmailFailed(ctx context.Context, arg MarkEmailFailedParams) (int64, error) {
-	result, err := q.db.Exec(ctx, markEmailFailed, arg.ID, arg.LastError)
+	result, err := q.db.Exec(ctx, markEmailFailed, arg.ID, arg.LastError, arg.RetryAfter)
 	if err != nil {
 		return 0, err
 	}
@@ -80,9 +85,9 @@ func (q *Queries) MarkEmailSent(ctx context.Context, id uuid.UUID) (int64, error
 }
 
 const pendingEmails = `-- name: PendingEmails :many
-SELECT id, to_email, subject, body, ics, attempts, last_error, created_at, sent_at FROM email_outbox
-WHERE sent_at IS NULL AND attempts < $2
-ORDER BY created_at
+SELECT id, to_email, subject, body, ics, attempts, last_error, next_attempt_at, created_at, sent_at FROM email_outbox
+WHERE sent_at IS NULL AND attempts < $2 AND next_attempt_at <= now()
+ORDER BY next_attempt_at
 LIMIT $1
 `
 
@@ -108,6 +113,7 @@ func (q *Queries) PendingEmails(ctx context.Context, arg PendingEmailsParams) ([
 			&i.Ics,
 			&i.Attempts,
 			&i.LastError,
+			&i.NextAttemptAt,
 			&i.CreatedAt,
 			&i.SentAt,
 		); err != nil {

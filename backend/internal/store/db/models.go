@@ -82,6 +82,7 @@ type CoachingSession struct {
 	ConfirmationToken *string    `json:"confirmation_token"`
 	RespondBy         *time.Time `json:"respond_by"`
 	ConfirmedAt       *time.Time `json:"confirmed_at"`
+	CalendarSequence  int32      `json:"calendar_sequence"`
 }
 
 type Conversation struct {
@@ -94,15 +95,16 @@ type Conversation struct {
 }
 
 type EmailOutbox struct {
-	ID        uuid.UUID  `json:"id"`
-	ToEmail   string     `json:"to_email"`
-	Subject   string     `json:"subject"`
-	Body      string     `json:"body"`
-	Ics       *string    `json:"ics"`
-	Attempts  int32      `json:"attempts"`
-	LastError string     `json:"last_error"`
-	CreatedAt time.Time  `json:"created_at"`
-	SentAt    *time.Time `json:"sent_at"`
+	ID            uuid.UUID  `json:"id"`
+	ToEmail       string     `json:"to_email"`
+	Subject       string     `json:"subject"`
+	Body          string     `json:"body"`
+	Ics           *string    `json:"ics"`
+	Attempts      int32      `json:"attempts"`
+	LastError     string     `json:"last_error"`
+	NextAttemptAt time.Time  `json:"next_attempt_at"`
+	CreatedAt     time.Time  `json:"created_at"`
+	SentAt        *time.Time `json:"sent_at"`
 }
 
 type Message struct {

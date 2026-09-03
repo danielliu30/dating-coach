@@ -104,6 +104,31 @@ func (m mailer) clientExpired(ctx context.Context, q *db.Queries, s db.GetSessio
 	return m.enqueue(ctx, q, s.UserEmail, fmt.Sprintf("Your session request to %s expired", s.CoachName), body, invite(s, m.mailFrom))
 }
 
+// coachCalendarUpdate sends the coach the invite matching the session's new
+// state once a request leaves pending: a CONFIRMED invite on confirmation, a
+// CANCEL on decline or expiry, so the tentative event from the request email
+// is updated or removed in their calendar.
+func (m mailer) coachCalendarUpdate(ctx context.Context, q *db.Queries, s db.GetSessionPartiesRow) error {
+	var subject, body string
+	switch s.Status {
+	case StatusScheduled:
+		subject = fmt.Sprintf("Confirmed: session with %s", s.UserName)
+		body = fmt.Sprintf("Hi %s,\n\nYour session with %s is confirmed.\n\nWhen: %s\nTopic: %s\n\nThe attached invite updates the tentative event in your calendar.",
+			s.CoachName, s.UserName, when(s, true), orNone(s.Topic))
+	case StatusDeclined:
+		subject = fmt.Sprintf("Declined: session request from %s", s.UserName)
+		body = fmt.Sprintf("Hi %s,\n\nYou declined %s's request for %s. The slot is open again and the attached update removes the tentative event from your calendar.",
+			s.CoachName, s.UserName, when(s, true))
+	case StatusExpired:
+		subject = fmt.Sprintf("Expired: session request from %s", s.UserName)
+		body = fmt.Sprintf("Hi %s,\n\n%s's request for %s was not answered in time and has expired. The slot is open again and the attached update removes the tentative event from your calendar.",
+			s.CoachName, s.UserName, when(s, true))
+	default:
+		return nil
+	}
+	return m.enqueue(ctx, q, s.CoachEmail, subject, body, invite(s, m.mailFrom))
+}
+
 // cancelled tells the party who did not cancel that the session is off.
 func (m mailer) cancelled(ctx context.Context, q *db.Queries, s db.GetSessionPartiesRow, byCoach bool) error {
 	if byCoach {

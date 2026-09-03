@@ -12,12 +12,12 @@ import (
 const icsTimeLayout = "20060102T150405Z"
 
 // invite renders the session as an iCalendar invite that mail clients can add to
-// the recipient's calendar. The UID is stable per session and SEQUENCE grows
-// with every update, so a later invite for the same session replaces the
-// earlier one instead of duplicating it. A pending request is TENTATIVE, a
-// confirmed session CONFIRMED, and anything else is sent as a CANCEL so the
-// event disappears from calendars it was added to. organizer is the sender
-// address the invite is issued from.
+// the recipient's calendar. The UID is stable per session and SEQUENCE is the
+// row's calendar_sequence, which every state change increments, so a later
+// invite for the same session replaces the earlier one instead of duplicating
+// it. A pending request is TENTATIVE, a confirmed session CONFIRMED, and
+// anything else is sent as a CANCEL so the event disappears from calendars it
+// was added to. organizer is the sender address the invite is issued from.
 func invite(s db.GetSessionPartiesRow, organizer string) string {
 	method, status := "REQUEST", "TENTATIVE"
 	switch s.Status {
@@ -45,7 +45,7 @@ func invite(s db.GetSessionPartiesRow, organizer string) string {
 	line("METHOD:%s", method)
 	line("BEGIN:VEVENT")
 	line("UID:%s@datingcoach", s.ID)
-	line("SEQUENCE:%d", s.UpdatedAt.Unix())
+	line("SEQUENCE:%d", s.CalendarSequence)
 	line("DTSTAMP:%s", time.Now().UTC().Format(icsTimeLayout))
 	line("DTSTART:%s", s.ScheduledTime.UTC().Format(icsTimeLayout))
 	line("DTEND:%s", end.UTC().Format(icsTimeLayout))

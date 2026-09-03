@@ -527,8 +527,10 @@ func (s *Service) RespondAsCoach(ctx context.Context, sessionID, coachID uuid.UU
 }
 
 // respond applies a confirm or decline to a pending session and queues the
-// client's notification in the same transaction. The UPDATE is conditional on
-// the session still being pending, so two concurrent answers cannot both win.
+// client's notification and the coach's calendar update in the same
+// transaction. The UPDATE is conditional on the session still being pending and
+// inside its deadline (by database time), so two concurrent answers cannot both
+// win and an answer racing the expiry sweep cannot land after it.
 func (s *Service) respond(ctx context.Context, session db.CoachingSession, action string) (Session, error) {
 	if action != "confirm" && action != "decline" {
 		return Session{}, fmt.Errorf("%w: action must be confirm or decline", ErrInvalidInput)
@@ -555,7 +557,7 @@ func (s *Service) respond(ctx context.Context, session db.CoachingSession, actio
 	}
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return Session{}, fmt.Errorf("%w: request is no longer pending", ErrInvalidInput)
+			return Session{}, s.whyNotPending(ctx, session.ID)
 		}
 		return Session{}, fmt.Errorf("%s session: %w", action, err)
 	}
@@ -571,15 +573,33 @@ func (s *Service) respond(ctx context.Context, session db.CoachingSession, actio
 	if err != nil {
 		return Session{}, err
 	}
+	if err := s.mail.coachCalendarUpdate(ctx, q, parties); err != nil {
+		return Session{}, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return Session{}, fmt.Errorf("commit response: %w", err)
 	}
 	return sessionOf(updated, ""), nil
 }
 
+// whyNotPending explains a conditional confirm/decline UPDATE that matched no
+// row: ErrExpired when the request is still pending but past its deadline,
+// otherwise ErrInvalidInput naming the status it has reached.
+func (s *Service) whyNotPending(ctx context.Context, sessionID uuid.UUID) error {
+	current, err := s.queries.GetCoachingSession(ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("%w: request is no longer pending", ErrInvalidInput)
+	}
+	if current.Status == StatusPending {
+		return ErrExpired
+	}
+	return fmt.Errorf("%w: request is already %s", ErrInvalidInput, current.Status)
+}
+
 // ExpirePending moves every pending request whose deadline has passed to
-// expired, releasing its slot, and queues an email to each client. It returns
-// how many expired; cmd/worker calls it periodically.
+// expired, releasing its slot, and queues an email to each client and a
+// calendar cancellation to each coach. It returns how many expired; cmd/worker
+// calls it periodically.
 func (s *Service) ExpirePending(ctx context.Context) (int, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -598,6 +618,9 @@ func (s *Service) ExpirePending(ctx context.Context) (int, error) {
 			return 0, fmt.Errorf("load session parties: %w", err)
 		}
 		if err := s.mail.clientExpired(ctx, q, parties); err != nil {
+			return 0, err
+		}
+		if err := s.mail.coachCalendarUpdate(ctx, q, parties); err != nil {
 			return 0, err
 		}
 	}
@@ -752,8 +775,11 @@ func (s *Service) SetStatus(ctx context.Context, sessionID, actorID uuid.UUID, s
 	defer func() { _ = tx.Rollback(ctx) }()
 	q := s.queries.WithTx(tx)
 
-	updated, err := q.UpdateSessionStatus(ctx, db.UpdateSessionStatusParams{ID: sessionID, Status: status})
+	updated, err := q.UpdateSessionStatus(ctx, db.UpdateSessionStatusParams{ID: sessionID, Status: status, ExpectedStatus: session.Status})
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Session{}, fmt.Errorf("%w: session is no longer %s", ErrInvalidInput, session.Status)
+		}
 		return Session{}, fmt.Errorf("update session status: %w", err)
 	}
 	if status == StatusCancelled {
@@ -800,6 +826,7 @@ func (s *Service) Reschedule(ctx context.Context, sessionID, actorID uuid.UUID, 
 	params := db.RescheduleSessionParams{
 		ID:                sessionID,
 		ScheduledTime:     scheduled,
+		ExpectedStatus:    session.Status,
 		Status:            session.Status,
 		ConfirmationToken: session.ConfirmationToken,
 		RespondBy:         session.RespondBy,
@@ -830,7 +857,7 @@ func (s *Service) Reschedule(ctx context.Context, sessionID, actorID uuid.UUID, 
 			return Session{}, ErrSlotTaken
 		}
 		if errors.Is(err, pgx.ErrNoRows) {
-			return Session{}, ErrNotFound
+			return Session{}, fmt.Errorf("%w: session is no longer %s", ErrInvalidInput, session.Status)
 		}
 		return Session{}, fmt.Errorf("reschedule session: %w", err)
 	}

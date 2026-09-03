@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
+
 	"github.com/danielliu30/dating-coach/backend/internal/store/db"
 )
 
@@ -15,8 +17,16 @@ const RelayInterval = 5 * time.Second
 
 // MaxAttempts is how many times one email is tried before the relay leaves it
 // in the outbox for an operator: an address the SMTP server keeps rejecting must
-// not block the emails queued behind it forever.
-const MaxAttempts = 10
+// not be retried forever. With retryDelay's backoff the attempts span more than
+// a day, so an SMTP outage of hours loses nothing.
+const MaxAttempts = 32
+
+// Retry backoff bounds: the first retry comes after minRetryDelay, each further
+// one doubles, capped at maxRetryDelay.
+const (
+	minRetryDelay = 10 * time.Second
+	maxRetryDelay = time.Hour
+)
 
 // relayBatch bounds one pass so a backlog after an SMTP outage is drained in
 // chunks instead of one long-running transaction-free loop.
@@ -69,7 +79,11 @@ func (r *Relay) Drain(ctx context.Context) (int, error) {
 		}
 		if err := r.notifier.Send(ctx, msg); err != nil {
 			slog.Error("send queued email", "id", row.ID, "to", row.ToEmail, "attempt", row.Attempts+1, "error", err)
-			if _, err := r.queries.MarkEmailFailed(ctx, db.MarkEmailFailedParams{ID: row.ID, LastError: err.Error()}); err != nil {
+			if _, err := r.queries.MarkEmailFailed(ctx, db.MarkEmailFailedParams{
+				ID:         row.ID,
+				LastError:  err.Error(),
+				RetryAfter: interval(retryDelay(row.Attempts)),
+			}); err != nil {
 				return sent, fmt.Errorf("record failed email %s: %w", row.ID, err)
 			}
 			continue
@@ -80,4 +94,19 @@ func (r *Relay) Drain(ctx context.Context) (int, error) {
 		sent++
 	}
 	return sent, nil
+}
+
+// retryDelay is how long to wait before the next attempt after the given number
+// of failed ones: minRetryDelay doubled per failure, capped at maxRetryDelay.
+func retryDelay(failed int32) time.Duration {
+	d := minRetryDelay
+	for i := int32(0); i < failed && d < maxRetryDelay; i++ {
+		d *= 2
+	}
+	return min(d, maxRetryDelay)
+}
+
+// interval converts d to the Postgres interval type sqlc expects.
+func interval(d time.Duration) pgtype.Interval {
+	return pgtype.Interval{Microseconds: d.Microseconds(), Valid: true}
 }

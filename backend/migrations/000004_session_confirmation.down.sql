@@ -12,6 +12,7 @@ ALTER TABLE coaching_sessions
         coach_id WITH =,
         session_range(scheduled_time, duration_minutes) WITH &&
     ) WHERE (status = 'scheduled'),
+    DROP COLUMN calendar_sequence,
     DROP COLUMN confirmed_at,
     DROP COLUMN respond_by,
     DROP COLUMN confirmation_token,

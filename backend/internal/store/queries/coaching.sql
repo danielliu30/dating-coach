@@ -70,8 +70,9 @@ SET status = 'scheduled',
     confirmed_at = now(),
     confirmation_token = NULL,
     respond_by = NULL,
+    calendar_sequence = calendar_sequence + 1,
     updated_at = now()
-WHERE id = $1 AND status = 'pending'
+WHERE id = $1 AND status = 'pending' AND (respond_by IS NULL OR respond_by >= now())
 RETURNING *;
 
 -- name: DeclineSession :one
@@ -79,14 +80,16 @@ UPDATE coaching_sessions
 SET status = 'declined',
     confirmation_token = NULL,
     respond_by = NULL,
+    calendar_sequence = calendar_sequence + 1,
     updated_at = now()
-WHERE id = $1 AND status = 'pending'
+WHERE id = $1 AND status = 'pending' AND (respond_by IS NULL OR respond_by >= now())
 RETURNING *;
 
 -- name: ExpirePendingSessions :many
 UPDATE coaching_sessions
 SET status = 'expired',
     confirmation_token = NULL,
+    calendar_sequence = calendar_sequence + 1,
     updated_at = now()
 WHERE status = 'pending' AND respond_by < now()
 RETURNING *;
@@ -119,8 +122,8 @@ ORDER BY scheduled_time;
 
 -- name: UpdateSessionStatus :one
 UPDATE coaching_sessions
-SET status = $2, updated_at = now()
-WHERE id = $1
+SET status = $2, calendar_sequence = calendar_sequence + 1, updated_at = now()
+WHERE id = $1 AND status = sqlc.arg('expected_status')
 RETURNING *;
 
 -- name: RescheduleSession :one
@@ -130,8 +133,9 @@ SET scheduled_time = $2,
     confirmation_token = $4,
     respond_by = $5,
     confirmed_at = CASE WHEN $3 = 'scheduled' THEN confirmed_at ELSE NULL END,
+    calendar_sequence = calendar_sequence + 1,
     updated_at = now()
-WHERE id = $1 AND status IN ('pending', 'scheduled')
+WHERE id = $1 AND status = sqlc.arg('expected_status')
 RETURNING *;
 
 -- name: UpdateSessionNotes :one

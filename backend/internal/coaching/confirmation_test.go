@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/danielliu30/dating-coach/backend/internal/store/db"
@@ -247,7 +248,29 @@ func TestDeclineReleasesSlotAndTokenIsSingleUse(t *testing.T) {
 	if got := outboxFor(t, pool, emailOf(t, pool, client)); len(got) != 2 || !strings.Contains(got[1], "declined") {
 		t.Fatalf("client emails = %v, want receipt then decline", got)
 	}
+	// Coach: original request, decline cancellation, then the other client's request.
+	if got := outboxFor(t, pool, emailOf(t, pool, coach)); len(got) != 3 || !strings.Contains(got[1], "Declined") {
+		t.Fatalf("coach emails = %v, want request, calendar cancellation, new request", got)
+	}
+	if ics := icsFor(t, pool, emailOf(t, pool, coach), "Declined"); !strings.Contains(ics, "METHOD:CANCEL") || !strings.Contains(ics, "SEQUENCE:1") {
+		t.Fatalf("coach cancel invite = %q, want CANCEL with SEQUENCE:1", ics)
+	}
 	outboxFor(t, pool, emailOf(t, pool, other))
+}
+
+// icsFor returns the invite attached to the email queued for to whose subject
+// contains subject.
+func icsFor(t *testing.T, pool *pgxpool.Pool, to, subject string) string {
+	t.Helper()
+	var ics *string
+	if err := pool.QueryRow(context.Background(),
+		"SELECT ics FROM email_outbox WHERE to_email = $1 AND subject LIKE '%' || $2 || '%'", to, subject).Scan(&ics); err != nil {
+		t.Fatal(err)
+	}
+	if ics == nil {
+		return ""
+	}
+	return *ics
 }
 
 func TestCoachConfirmsFromDashboardThenExpiryLeavesItAlone(t *testing.T) {
@@ -293,7 +316,12 @@ func TestCoachConfirmsFromDashboardThenExpiryLeavesItAlone(t *testing.T) {
 	if got := outboxFor(t, pool, emailOf(t, pool, client)); len(got) != 2 || !strings.Contains(got[1], "confirmed") {
 		t.Fatalf("client emails = %v, want receipt then confirmation", got)
 	}
-	outboxFor(t, pool, emailOf(t, pool, coach))
+	if got := outboxFor(t, pool, emailOf(t, pool, coach)); len(got) != 2 || !strings.Contains(got[1], "Confirmed") {
+		t.Fatalf("coach emails = %v, want request then confirmed invite", got)
+	}
+	if ics := icsFor(t, pool, emailOf(t, pool, coach), "Confirmed"); !strings.Contains(ics, "STATUS:CONFIRMED") || !strings.Contains(ics, "SEQUENCE:1") {
+		t.Fatalf("coach confirmed invite = %q, want CONFIRMED with SEQUENCE:1", ics)
+	}
 }
 
 func TestExpiredRequestReleasesSlotAndRejectsLateAnswer(t *testing.T) {
@@ -323,8 +351,79 @@ func TestExpiredRequestReleasesSlotAndRejectsLateAnswer(t *testing.T) {
 	if got := outboxFor(t, pool, emailOf(t, pool, client)); len(got) != 2 || !strings.Contains(got[1], "expired") {
 		t.Fatalf("client emails = %v, want receipt then expiry", got)
 	}
-	outboxFor(t, pool, emailOf(t, pool, coach))
+	// Coach: original request, expiry cancellation, then the other client's request.
+	if got := outboxFor(t, pool, emailOf(t, pool, coach)); len(got) != 3 || !strings.Contains(got[1], "Expired") {
+		t.Fatalf("coach emails = %v, want request, calendar cancellation, new request", got)
+	}
 	outboxFor(t, pool, emailOf(t, pool, other))
+}
+
+func TestDeadlineIsEnforcedByDatabaseTime(t *testing.T) {
+	svc, pool := testService(t)
+	ctx := context.Background()
+	coach, client := insertCoach(t, pool), insertUser(t, pool, "user")
+
+	s, err := svc.BookSession(ctx, client, BookInput{CoachID: coach.String(), ScheduledTime: nextSlot()})
+	if err != nil {
+		t.Fatalf("book: %v", err)
+	}
+	sid := uuid.MustParse(s.ID)
+	// The pre-read saw a live deadline; it lapses before the UPDATE runs.
+	session, err := svc.queries.GetCoachingSession(ctx, sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, "UPDATE coaching_sessions SET respond_by = now() - interval '1 second' WHERE id = $1", sid); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.respond(ctx, session, "confirm"); !errors.Is(err, ErrExpired) {
+		t.Fatalf("confirm after deadline lapsed mid-flight: err = %v, want ErrExpired", err)
+	}
+	var status string
+	if err := pool.QueryRow(ctx, "SELECT status FROM coaching_sessions WHERE id = $1", sid).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != StatusPending {
+		t.Fatalf("status = %s, want still pending for the sweep", status)
+	}
+	outboxFor(t, pool, emailOf(t, pool, client))
+	outboxFor(t, pool, emailOf(t, pool, coach))
+}
+
+func TestStaleStatusAndRescheduleDoNotOverwrite(t *testing.T) {
+	svc, pool := testService(t)
+	ctx := context.Background()
+	coach, client := insertCoach(t, pool), insertUser(t, pool, "user")
+
+	s, err := svc.BookSession(ctx, client, BookInput{CoachID: coach.String(), ScheduledTime: nextSlot()})
+	if err != nil {
+		t.Fatalf("book: %v", err)
+	}
+	sid := uuid.MustParse(s.ID)
+	if _, err := svc.RespondAsCoach(ctx, sid, coach, "confirm"); err != nil {
+		t.Fatalf("confirm: %v", err)
+	}
+	if _, err := svc.SetStatus(ctx, sid, coach, StatusCompleted); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	// A caller that validated against 'scheduled' must not win once the row
+	// has moved on; UpdateSessionStatus is keyed on the expected status.
+	if _, err := svc.queries.UpdateSessionStatus(ctx, db.UpdateSessionStatusParams{ID: sid, Status: StatusCancelled, ExpectedStatus: StatusScheduled}); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("stale cancel: err = %v, want no rows", err)
+	}
+	if _, err := svc.Reschedule(ctx, sid, client, nextSlot()); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("reschedule completed session: err = %v, want ErrInvalidInput", err)
+	}
+	var status string
+	var seq int32
+	if err := pool.QueryRow(ctx, "SELECT status, calendar_sequence FROM coaching_sessions WHERE id = $1", sid).Scan(&status, &seq); err != nil {
+		t.Fatal(err)
+	}
+	if status != StatusCompleted || seq != 2 {
+		t.Fatalf("status=%s sequence=%d, want completed with sequence 2 (confirm, complete)", status, seq)
+	}
+	outboxFor(t, pool, emailOf(t, pool, client))
+	outboxFor(t, pool, emailOf(t, pool, coach))
 }
 
 func TestClientRescheduleNeedsReconfirmation(t *testing.T) {
@@ -362,8 +461,8 @@ func TestClientRescheduleNeedsReconfirmation(t *testing.T) {
 	if h := tokenHashOf(t, pool, s.ID); h == firstHash {
 		t.Fatal("client reschedule must issue a fresh token")
 	}
-	if got := outboxFor(t, pool, emailOf(t, pool, coach)); len(got) != 2 {
-		t.Fatalf("coach emails = %v, want original request and re-request", got)
+	if got := outboxFor(t, pool, emailOf(t, pool, coach)); len(got) != 3 || !strings.Contains(got[2], "reconfirm") {
+		t.Fatalf("coach emails = %v, want request, confirmed invite, re-request", got)
 	}
 	outboxFor(t, pool, emailOf(t, pool, client))
 }

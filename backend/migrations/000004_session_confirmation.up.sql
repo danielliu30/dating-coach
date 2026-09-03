@@ -11,6 +11,9 @@ ALTER TABLE coaching_sessions
     ADD COLUMN confirmation_token text,
     ADD COLUMN respond_by         timestamptz,
     ADD COLUMN confirmed_at       timestamptz,
+    -- iCalendar SEQUENCE: bumped on every change that is sent as an invite, so
+    -- mail clients replace the earlier event instead of ignoring the update.
+    ADD COLUMN calendar_sequence  integer NOT NULL DEFAULT 0,
     DROP CONSTRAINT coaching_sessions_no_overlap,
     ADD CONSTRAINT coaching_sessions_no_overlap EXCLUDE USING gist (
         coach_id WITH =,
@@ -31,19 +34,21 @@ CREATE INDEX coaching_sessions_pending_idx
 -- changes a session records the email in the same transaction, and the worker
 -- delivers it afterwards, so an SMTP outage cannot leave a coach unaware of a
 -- request that is holding one of their slots. ics, when set, is attached as a
--- text/calendar invite.
+-- text/calendar invite. A failed attempt pushes next_attempt_at out with
+-- exponential backoff; rows that exhaust their attempts stay for an operator.
 CREATE TABLE email_outbox (
-    id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    to_email    text NOT NULL,
-    subject     text NOT NULL,
-    body        text NOT NULL,
-    ics         text,
-    attempts    integer NOT NULL DEFAULT 0,
-    last_error  text NOT NULL DEFAULT '',
-    created_at  timestamptz NOT NULL DEFAULT now(),
-    sent_at     timestamptz
+    id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    to_email        text NOT NULL,
+    subject         text NOT NULL,
+    body            text NOT NULL,
+    ics             text,
+    attempts        integer NOT NULL DEFAULT 0,
+    last_error      text NOT NULL DEFAULT '',
+    next_attempt_at timestamptz NOT NULL DEFAULT now(),
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    sent_at         timestamptz
 );
 
 CREATE INDEX email_outbox_pending_idx
-    ON email_outbox (created_at)
+    ON email_outbox (next_attempt_at)
     WHERE sent_at IS NULL;

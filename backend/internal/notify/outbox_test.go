@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -45,6 +46,25 @@ func TestEncodeAttachesInviteWithMethod(t *testing.T) {
 	}
 	if len(types) != 2 || !strings.HasPrefix(types[0], "text/plain") || types[1] != "text/calendar; charset=utf-8; method=CANCEL" {
 		t.Fatalf("parts = %v", types)
+	}
+}
+
+func TestRetryDelayBacksOffAndCaps(t *testing.T) {
+	if d := retryDelay(0); d != minRetryDelay {
+		t.Fatalf("first retry = %v, want %v", d, minRetryDelay)
+	}
+	if d := retryDelay(3); d != 8*minRetryDelay {
+		t.Fatalf("fourth retry = %v, want %v", d, 8*minRetryDelay)
+	}
+	if d := retryDelay(MaxAttempts); d != maxRetryDelay {
+		t.Fatalf("late retry = %v, want cap %v", d, maxRetryDelay)
+	}
+	var total time.Duration
+	for i := int32(0); i < MaxAttempts; i++ {
+		total += retryDelay(i)
+	}
+	if total < 24*time.Hour {
+		t.Fatalf("attempts span %v, want at least a day of retries", total)
 	}
 }
 
@@ -113,14 +133,26 @@ func TestDrainSendsOnceAndRetriesFailures(t *testing.T) {
 	}
 	var attempts int32
 	var lastErr string
-	if err := pool.QueryRow(ctx, "SELECT attempts, last_error FROM email_outbox WHERE id = $1", row.ID).Scan(&attempts, &lastErr); err != nil {
+	var deferred bool
+	if err := pool.QueryRow(ctx, "SELECT attempts, last_error, next_attempt_at > now() FROM email_outbox WHERE id = $1", row.ID).Scan(&attempts, &lastErr, &deferred); err != nil {
 		t.Fatal(err)
 	}
-	if attempts != 1 || lastErr == "" {
-		t.Fatalf("after failure attempts=%d last_error=%q", attempts, lastErr)
+	if attempts != 1 || lastErr == "" || !deferred {
+		t.Fatalf("after failure attempts=%d last_error=%q deferred=%v", attempts, lastErr, deferred)
 	}
 
 	n.fail = false
+	if _, err := relay.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range n.sent {
+		if m.To == to {
+			t.Fatal("a failed email was retried before its backoff elapsed")
+		}
+	}
+	if _, err := pool.Exec(ctx, "UPDATE email_outbox SET next_attempt_at = now() WHERE id = $1", row.ID); err != nil {
+		t.Fatal(err)
+	}
 	if sent, err := relay.Drain(ctx); err != nil || sent < 1 {
 		t.Fatalf("drain = %d, %v; want the queued email sent", sent, err)
 	}

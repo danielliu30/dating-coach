@@ -5,8 +5,8 @@ RETURNING *;
 
 -- name: PendingEmails :many
 SELECT * FROM email_outbox
-WHERE sent_at IS NULL AND attempts < $2
-ORDER BY created_at
+WHERE sent_at IS NULL AND attempts < $2 AND next_attempt_at <= now()
+ORDER BY next_attempt_at
 LIMIT $1;
 
 -- name: MarkEmailSent :execrows
@@ -16,5 +16,7 @@ WHERE id = $1 AND sent_at IS NULL;
 
 -- name: MarkEmailFailed :execrows
 UPDATE email_outbox
-SET attempts = attempts + 1, last_error = $2
+SET attempts = attempts + 1,
+    last_error = $2,
+    next_attempt_at = now() + sqlc.arg('retry_after')::interval
 WHERE id = $1 AND sent_at IS NULL;
