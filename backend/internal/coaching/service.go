@@ -131,10 +131,16 @@ func sessionOf(s db.CoachingSession, counterpart string) Session {
 		AmountCents:     s.AmountCents,
 		Currency:        s.Currency,
 	}
-	if s.HoldExpiresAt != nil {
-		out.HoldExpiresAt = s.HoldExpiresAt.UTC().Format(time.RFC3339)
-	}
+	out.HoldExpiresAt = formatHold(s.HoldExpiresAt)
 	return out
+}
+
+// formatHold renders a nullable hold deadline as RFC3339, or "" when unset.
+func formatHold(t *time.Time) string {
+	if t == nil {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
 }
 
 // priceCents is what a session of duration minutes costs at the coach's hourly
@@ -435,7 +441,10 @@ func (s *Service) BookSession(ctx context.Context, userID uuid.UUID, in BookInpu
 
 // bookPaid inserts the pending_payment hold and starts the provider checkout
 // for it. The hold is written first so the slot is taken before the client is
-// sent to pay; if the checkout cannot be started the hold is cancelled again.
+// sent to pay. If the checkout cannot be started, or its reference cannot be
+// stored, the hold is cancelled and the checkout expired again so nothing
+// payable is left behind; the checkout's own ExpiresAt bounds the damage if
+// that clean-up fails too.
 func (s *Service) bookPaid(ctx context.Context, userID, coachID uuid.UUID, scheduled time.Time, duration int32, topic string) (Session, error) {
 	coach, err := s.queries.GetCoach(ctx, coachID)
 	if err != nil {
@@ -476,14 +485,21 @@ func (s *Service) bookPaid(ctx context.Context, userID, coachID uuid.UUID, sched
 		CancelURL:     s.appURL + "/?payment=cancelled&session=" + session.ID.String(),
 	})
 	if err != nil {
-		if _, cancelErr := s.queries.UpdateSessionStatus(ctx, db.UpdateSessionStatusParams{ID: session.ID, Status: "cancelled"}); cancelErr != nil {
+		if _, cancelErr := s.queries.CancelPendingPaymentSession(ctx, session.ID); cancelErr != nil {
 			return Session{}, fmt.Errorf("release hold after checkout failure (%v): %w", err, cancelErr)
 		}
 		return Session{}, fmt.Errorf("%w: %v", ErrPayment, err)
 	}
 	session, err = s.queries.SetSessionPaymentRef(ctx, db.SetSessionPaymentRefParams{ID: session.ID, PaymentRef: &checkout.Ref})
 	if err != nil {
-		return Session{}, fmt.Errorf("store payment ref: %w", err)
+		err = fmt.Errorf("store payment ref: %w", err)
+		if expireErr := s.payments.ExpireCheckout(ctx, checkout.Ref); expireErr != nil {
+			err = fmt.Errorf("%w; expire orphaned checkout %s: %v", err, checkout.Ref, expireErr)
+		}
+		if _, cancelErr := s.queries.CancelPendingPaymentSession(ctx, session.ID); cancelErr != nil {
+			err = fmt.Errorf("%w; release hold: %v", err, cancelErr)
+		}
+		return Session{}, err
 	}
 	out := sessionOf(session, "")
 	out.CheckoutURL = checkout.URL
@@ -491,19 +507,16 @@ func (s *Service) bookPaid(ctx context.Context, userID, coachID uuid.UUID, sched
 }
 
 // ApplyPaymentEvent records a provider webhook event and moves the matching
-// session accordingly: EventPaid confirms a pending_payment hold, EventExpired
-// cancels it. A redelivered event (same ID) is a no-op, as is one whose session
-// has already left pending_payment, so the provider may retry freely.
+// session accordingly, all in one transaction with the session row locked so
+// it cannot race the hold sweeper. EventPaid confirms a pending_payment hold;
+// if the hold was already released it reinstates the session when the slot is
+// still free and otherwise marks the payment refund_due for SweepPayments to
+// refund, so a charged customer is never silently dropped. EventExpired
+// cancels a pending hold. A redelivered event (same ID) is a no-op, so the
+// provider may retry freely.
 func (s *Service) ApplyPaymentEvent(ctx context.Context, ev payments.Event) error {
 	if ev.Kind == payments.EventIgnored || ev.CheckoutRef == "" {
 		return nil
-	}
-	session, err := s.queries.GetSessionByPaymentRef(ctx, &ev.CheckoutRef)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrNotFound
-		}
-		return fmt.Errorf("lookup session by payment ref: %w", err)
 	}
 
 	tx, err := s.pool.Begin(ctx)
@@ -513,6 +526,13 @@ func (s *Service) ApplyPaymentEvent(ctx context.Context, ev payments.Event) erro
 	defer func() { _ = tx.Rollback(ctx) }()
 	q := s.queries.WithTx(tx)
 
+	session, err := q.GetSessionByPaymentRefForUpdate(ctx, &ev.CheckoutRef)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("lookup session by payment ref: %w", err)
+	}
 	inserted, err := q.RecordPaymentEvent(ctx, db.RecordPaymentEventParams{
 		ProviderEventID: ev.ID,
 		SessionID:       &session.ID,
@@ -524,16 +544,19 @@ func (s *Service) ApplyPaymentEvent(ctx context.Context, ev payments.Event) erro
 	if inserted == 0 {
 		return nil
 	}
-	if session.Status == "pending_payment" {
-		switch ev.Kind {
-		case payments.EventPaid:
+
+	switch ev.Kind {
+	case payments.EventPaid:
+		if session.Status == "pending_payment" {
 			_, err = q.MarkSessionPaid(ctx, session.ID)
-		case payments.EventExpired:
-			_, err = q.UpdateSessionStatus(ctx, db.UpdateSessionStatusParams{ID: session.ID, Status: "cancelled"})
+		} else {
+			err = reinstateOrRefund(ctx, tx, q, session.ID)
 		}
-		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			return fmt.Errorf("apply %s: %w", ev.Kind, err)
-		}
+	case payments.EventExpired:
+		_, err = q.CancelPendingPaymentSession(ctx, session.ID)
+	}
+	if err != nil {
+		return fmt.Errorf("apply %s: %w", ev.Kind, err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit payment event: %w", err)
@@ -541,23 +564,79 @@ func (s *Service) ApplyPaymentEvent(ctx context.Context, ev payments.Event) erro
 	return nil
 }
 
-// ExpireHolds cancels pending_payment sessions whose hold lapsed before now,
-// freeing their slots, and asks the provider to expire each checkout so a late
-// payment is refused rather than charged. It returns how many were released.
-func (s *Service) ExpireHolds(ctx context.Context, now time.Time) (int, error) {
-	expired, err := s.queries.ExpirePaymentHolds(ctx, &now)
+// reinstateOrRefund handles a payment that arrived after the session's hold was
+// released. It tries to schedule the session again; if the slot has since been
+// taken (exclusion constraint) it marks the payment refund_due instead. The
+// reinstate runs in a savepoint so the conflict does not abort tx. A session
+// that is not cancelled-unpaid (already paid, refunded, ...) is left alone.
+func reinstateOrRefund(ctx context.Context, tx pgx.Tx, q *db.Queries, sessionID uuid.UUID) error {
+	sp, err := tx.Begin(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("expire holds: %w", err)
+		return fmt.Errorf("savepoint: %w", err)
 	}
-	for _, session := range expired {
-		if session.PaymentRef == nil {
-			continue
+	if _, err := q.WithTx(sp).ReinstatePaidSession(ctx, sessionID); err != nil {
+		_ = sp.Rollback(ctx)
+		if !isSlotConflict(err) {
+			return fmt.Errorf("reinstate session: %w", err)
 		}
+		if _, err := q.MarkPaymentRefundDue(ctx, sessionID); err != nil {
+			return fmt.Errorf("mark refund due: %w", err)
+		}
+		return nil
+	}
+	return sp.Commit(ctx)
+}
+
+// SweepResult counts what one SweepPayments pass did.
+type SweepResult struct {
+	HoldsReleased    int
+	CheckoutsExpired int
+	RefundsIssued    int
+}
+
+// SweepPayments is the periodic reconciliation pass for paid bookings. It
+// releases pending_payment holds that lapsed before now (freeing their slots),
+// then works through all provider clean-up still owed: expiring the checkout
+// of every released hold so a late payment is refused, and refunding every
+// payment marked refund_due. Provider calls are retried on the next pass if
+// they fail, because a row only leaves 'expiring'/'refund_due' once the
+// provider call succeeded. It returns the counts and the first provider error.
+func (s *Service) SweepPayments(ctx context.Context, now time.Time) (SweepResult, error) {
+	var res SweepResult
+	released, err := s.queries.ExpirePaymentHolds(ctx, &now)
+	if err != nil {
+		return res, fmt.Errorf("expire holds: %w", err)
+	}
+	res.HoldsReleased = int(released)
+
+	toExpire, err := s.queries.ListCheckoutsToExpire(ctx)
+	if err != nil {
+		return res, fmt.Errorf("list checkouts to expire: %w", err)
+	}
+	for _, session := range toExpire {
 		if err := s.payments.ExpireCheckout(ctx, *session.PaymentRef); err != nil {
-			return len(expired), fmt.Errorf("expire checkout %s: %w", *session.PaymentRef, err)
+			return res, fmt.Errorf("expire checkout %s: %w", *session.PaymentRef, err)
 		}
+		if _, err := s.queries.MarkCheckoutExpired(ctx, session.ID); err != nil {
+			return res, fmt.Errorf("mark checkout expired: %w", err)
+		}
+		res.CheckoutsExpired++
 	}
-	return len(expired), nil
+
+	refunds, err := s.queries.ListRefundsDue(ctx)
+	if err != nil {
+		return res, fmt.Errorf("list refunds due: %w", err)
+	}
+	for _, session := range refunds {
+		if err := s.payments.Refund(ctx, *session.PaymentRef); err != nil {
+			return res, fmt.Errorf("refund %s: %w", *session.PaymentRef, err)
+		}
+		if _, err := s.queries.MarkSessionRefunded(ctx, session.ID); err != nil {
+			return res, fmt.Errorf("mark refunded: %w", err)
+		}
+		res.RefundsIssued++
+	}
+	return res, nil
 }
 
 // assertBookable rejects a requested interval that the coach has not published
@@ -634,6 +713,7 @@ func (s *Service) ListForUser(ctx context.Context, userID uuid.UUID, status *str
 			PaymentStatus:   row.PaymentStatus,
 			AmountCents:     row.AmountCents,
 			Currency:        row.Currency,
+			HoldExpiresAt:   formatHold(row.HoldExpiresAt),
 		})
 	}
 	return out, nil
@@ -665,6 +745,7 @@ func (s *Service) ListForCoach(ctx context.Context, coachID uuid.UUID, status *s
 			PaymentStatus:   row.PaymentStatus,
 			AmountCents:     row.AmountCents,
 			Currency:        row.Currency,
+			HoldExpiresAt:   formatHold(row.HoldExpiresAt),
 		})
 	}
 	return out, nil

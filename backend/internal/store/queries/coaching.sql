@@ -56,26 +56,55 @@ SET payment_ref = $2, updated_at = now()
 WHERE id = $1
 RETURNING *;
 
--- name: GetSessionByPaymentRef :one
-SELECT * FROM coaching_sessions WHERE payment_ref = $1;
+-- name: GetSessionByPaymentRefForUpdate :one
+SELECT * FROM coaching_sessions WHERE payment_ref = $1 FOR UPDATE;
 
--- name: MarkSessionPaid :one
+-- name: MarkSessionPaid :execrows
 UPDATE coaching_sessions
 SET status = 'scheduled', payment_status = 'paid', hold_expires_at = NULL, updated_at = now()
-WHERE id = $1 AND status = 'pending_payment'
-RETURNING *;
+WHERE id = $1 AND status = 'pending_payment';
 
--- name: MarkSessionRefunded :one
+-- name: ReinstatePaidSession :execrows
+UPDATE coaching_sessions
+SET status = 'scheduled', payment_status = 'paid', hold_expires_at = NULL, updated_at = now()
+WHERE id = $1 AND status = 'cancelled' AND payment_status IN ('pending', 'expiring', 'failed');
+
+-- name: MarkPaymentRefundDue :execrows
+UPDATE coaching_sessions
+SET payment_status = 'refund_due', updated_at = now()
+WHERE id = $1 AND status = 'cancelled' AND payment_status IN ('pending', 'expiring', 'failed');
+
+-- name: MarkSessionRefunded :execrows
 UPDATE coaching_sessions
 SET payment_status = 'refunded', updated_at = now()
-WHERE id = $1 AND payment_status = 'paid'
-RETURNING *;
+WHERE id = $1 AND payment_status IN ('paid', 'refund_due');
 
--- name: ExpirePaymentHolds :many
+-- name: CancelPendingPaymentSession :execrows
 UPDATE coaching_sessions
 SET status = 'cancelled', payment_status = 'failed', updated_at = now()
-WHERE status = 'pending_payment' AND hold_expires_at < $1
-RETURNING *;
+WHERE id = $1 AND status = 'pending_payment';
+
+-- name: ExpirePaymentHolds :execrows
+UPDATE coaching_sessions
+SET status = 'cancelled',
+    payment_status = CASE WHEN payment_ref IS NULL THEN 'failed' ELSE 'expiring' END,
+    updated_at = now()
+WHERE status = 'pending_payment' AND hold_expires_at < $1;
+
+-- name: ListCheckoutsToExpire :many
+SELECT * FROM coaching_sessions
+WHERE payment_status = 'expiring' AND payment_ref IS NOT NULL
+ORDER BY updated_at;
+
+-- name: MarkCheckoutExpired :execrows
+UPDATE coaching_sessions
+SET payment_status = 'failed', updated_at = now()
+WHERE id = $1 AND payment_status = 'expiring';
+
+-- name: ListRefundsDue :many
+SELECT * FROM coaching_sessions
+WHERE payment_status = 'refund_due' AND payment_ref IS NOT NULL
+ORDER BY updated_at;
 
 -- name: RecordPaymentEvent :execrows
 INSERT INTO payment_events (provider_event_id, session_id, event_type)

@@ -1,5 +1,6 @@
 DROP TABLE payment_events;
 
+DROP INDEX coaching_sessions_payment_cleanup_idx;
 DROP INDEX coaching_sessions_hold_idx;
 DROP INDEX coaching_sessions_payment_ref_idx;
 

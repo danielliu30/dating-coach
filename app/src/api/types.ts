@@ -41,7 +41,14 @@ export interface Slot {
 
 export type SessionStatus = 'pending_payment' | 'scheduled' | 'completed' | 'cancelled' | 'no_show';
 
-export type PaymentStatus = 'not_required' | 'pending' | 'paid' | 'refunded' | 'failed';
+export type PaymentStatus =
+  | 'not_required'
+  | 'pending'
+  | 'expiring'
+  | 'paid'
+  | 'refund_due'
+  | 'refunded'
+  | 'failed';
 
 /** Server-side feature switches the app must follow rather than decide itself. */
 export interface CoachingConfig {

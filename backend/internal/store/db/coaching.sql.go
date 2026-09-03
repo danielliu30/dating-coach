@@ -43,6 +43,20 @@ func (q *Queries) AddCoachAvailability(ctx context.Context, arg AddCoachAvailabi
 	return i, err
 }
 
+const cancelPendingPaymentSession = `-- name: CancelPendingPaymentSession :execrows
+UPDATE coaching_sessions
+SET status = 'cancelled', payment_status = 'failed', updated_at = now()
+WHERE id = $1 AND status = 'pending_payment'
+`
+
+func (q *Queries) CancelPendingPaymentSession(ctx context.Context, id uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, cancelPendingPaymentSession, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const createCoachingSession = `-- name: CreateCoachingSession :one
 INSERT INTO coaching_sessions (user_id, coach_id, scheduled_time, duration_minutes, topic)
 VALUES ($1, $2, $3, $4, $5)
@@ -136,47 +150,20 @@ func (q *Queries) CreatePendingPaymentSession(ctx context.Context, arg CreatePen
 	return i, err
 }
 
-const expirePaymentHolds = `-- name: ExpirePaymentHolds :many
+const expirePaymentHolds = `-- name: ExpirePaymentHolds :execrows
 UPDATE coaching_sessions
-SET status = 'cancelled', payment_status = 'failed', updated_at = now()
+SET status = 'cancelled',
+    payment_status = CASE WHEN payment_ref IS NULL THEN 'failed' ELSE 'expiring' END,
+    updated_at = now()
 WHERE status = 'pending_payment' AND hold_expires_at < $1
-RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, payment_status, amount_cents, currency, payment_ref, hold_expires_at
 `
 
-func (q *Queries) ExpirePaymentHolds(ctx context.Context, holdExpiresAt *time.Time) ([]CoachingSession, error) {
-	rows, err := q.db.Query(ctx, expirePaymentHolds, holdExpiresAt)
+func (q *Queries) ExpirePaymentHolds(ctx context.Context, holdExpiresAt *time.Time) (int64, error) {
+	result, err := q.db.Exec(ctx, expirePaymentHolds, holdExpiresAt)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
-	defer rows.Close()
-	items := []CoachingSession{}
-	for rows.Next() {
-		var i CoachingSession
-		if err := rows.Scan(
-			&i.ID,
-			&i.UserID,
-			&i.CoachID,
-			&i.ScheduledTime,
-			&i.DurationMinutes,
-			&i.Status,
-			&i.Topic,
-			&i.CoachNotes,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.PaymentStatus,
-			&i.AmountCents,
-			&i.Currency,
-			&i.PaymentRef,
-			&i.HoldExpiresAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
+	return result.RowsAffected(), nil
 }
 
 const getCoach = `-- name: GetCoach :one
@@ -248,12 +235,12 @@ func (q *Queries) GetCoachingSession(ctx context.Context, id uuid.UUID) (Coachin
 	return i, err
 }
 
-const getSessionByPaymentRef = `-- name: GetSessionByPaymentRef :one
-SELECT id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, payment_status, amount_cents, currency, payment_ref, hold_expires_at FROM coaching_sessions WHERE payment_ref = $1
+const getSessionByPaymentRefForUpdate = `-- name: GetSessionByPaymentRefForUpdate :one
+SELECT id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, payment_status, amount_cents, currency, payment_ref, hold_expires_at FROM coaching_sessions WHERE payment_ref = $1 FOR UPDATE
 `
 
-func (q *Queries) GetSessionByPaymentRef(ctx context.Context, paymentRef *string) (CoachingSession, error) {
-	row := q.db.QueryRow(ctx, getSessionByPaymentRef, paymentRef)
+func (q *Queries) GetSessionByPaymentRefForUpdate(ctx context.Context, paymentRef *string) (CoachingSession, error) {
+	row := q.db.QueryRow(ctx, getSessionByPaymentRefForUpdate, paymentRef)
 	var i CoachingSession
 	err := row.Scan(
 		&i.ID,
@@ -307,6 +294,48 @@ func (q *Queries) ListBookedSlots(ctx context.Context, arg ListBookedSlotsParams
 	for rows.Next() {
 		var i ListBookedSlotsRow
 		if err := rows.Scan(&i.ID, &i.ScheduledTime, &i.DurationMinutes); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCheckoutsToExpire = `-- name: ListCheckoutsToExpire :many
+SELECT id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, payment_status, amount_cents, currency, payment_ref, hold_expires_at FROM coaching_sessions
+WHERE payment_status = 'expiring' AND payment_ref IS NOT NULL
+ORDER BY updated_at
+`
+
+func (q *Queries) ListCheckoutsToExpire(ctx context.Context) ([]CoachingSession, error) {
+	rows, err := q.db.Query(ctx, listCheckoutsToExpire)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CoachingSession{}
+	for rows.Next() {
+		var i CoachingSession
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.CoachID,
+			&i.ScheduledTime,
+			&i.DurationMinutes,
+			&i.Status,
+			&i.Topic,
+			&i.CoachNotes,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.PaymentStatus,
+			&i.AmountCents,
+			&i.Currency,
+			&i.PaymentRef,
+			&i.HoldExpiresAt,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -401,6 +430,48 @@ func (q *Queries) ListCoaches(ctx context.Context, arg ListCoachesParams) ([]Lis
 			&i.UpdatedAt,
 			&i.DisplayName,
 			&i.Email,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRefundsDue = `-- name: ListRefundsDue :many
+SELECT id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, payment_status, amount_cents, currency, payment_ref, hold_expires_at FROM coaching_sessions
+WHERE payment_status = 'refund_due' AND payment_ref IS NOT NULL
+ORDER BY updated_at
+`
+
+func (q *Queries) ListRefundsDue(ctx context.Context) ([]CoachingSession, error) {
+	rows, err := q.db.Query(ctx, listRefundsDue)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CoachingSession{}
+	for rows.Next() {
+		var i CoachingSession
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.CoachID,
+			&i.ScheduledTime,
+			&i.DurationMinutes,
+			&i.Status,
+			&i.Topic,
+			&i.CoachNotes,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.PaymentStatus,
+			&i.AmountCents,
+			&i.Currency,
+			&i.PaymentRef,
+			&i.HoldExpiresAt,
 		); err != nil {
 			return nil, err
 		}
@@ -554,64 +625,60 @@ func (q *Queries) ListSessionsForUser(ctx context.Context, arg ListSessionsForUs
 	return items, nil
 }
 
-const markSessionPaid = `-- name: MarkSessionPaid :one
+const markCheckoutExpired = `-- name: MarkCheckoutExpired :execrows
+UPDATE coaching_sessions
+SET payment_status = 'failed', updated_at = now()
+WHERE id = $1 AND payment_status = 'expiring'
+`
+
+func (q *Queries) MarkCheckoutExpired(ctx context.Context, id uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, markCheckoutExpired, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const markPaymentRefundDue = `-- name: MarkPaymentRefundDue :execrows
+UPDATE coaching_sessions
+SET payment_status = 'refund_due', updated_at = now()
+WHERE id = $1 AND status = 'cancelled' AND payment_status IN ('pending', 'expiring', 'failed')
+`
+
+func (q *Queries) MarkPaymentRefundDue(ctx context.Context, id uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, markPaymentRefundDue, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const markSessionPaid = `-- name: MarkSessionPaid :execrows
 UPDATE coaching_sessions
 SET status = 'scheduled', payment_status = 'paid', hold_expires_at = NULL, updated_at = now()
 WHERE id = $1 AND status = 'pending_payment'
-RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, payment_status, amount_cents, currency, payment_ref, hold_expires_at
 `
 
-func (q *Queries) MarkSessionPaid(ctx context.Context, id uuid.UUID) (CoachingSession, error) {
-	row := q.db.QueryRow(ctx, markSessionPaid, id)
-	var i CoachingSession
-	err := row.Scan(
-		&i.ID,
-		&i.UserID,
-		&i.CoachID,
-		&i.ScheduledTime,
-		&i.DurationMinutes,
-		&i.Status,
-		&i.Topic,
-		&i.CoachNotes,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.PaymentStatus,
-		&i.AmountCents,
-		&i.Currency,
-		&i.PaymentRef,
-		&i.HoldExpiresAt,
-	)
-	return i, err
+func (q *Queries) MarkSessionPaid(ctx context.Context, id uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, markSessionPaid, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
-const markSessionRefunded = `-- name: MarkSessionRefunded :one
+const markSessionRefunded = `-- name: MarkSessionRefunded :execrows
 UPDATE coaching_sessions
 SET payment_status = 'refunded', updated_at = now()
-WHERE id = $1 AND payment_status = 'paid'
-RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, payment_status, amount_cents, currency, payment_ref, hold_expires_at
+WHERE id = $1 AND payment_status IN ('paid', 'refund_due')
 `
 
-func (q *Queries) MarkSessionRefunded(ctx context.Context, id uuid.UUID) (CoachingSession, error) {
-	row := q.db.QueryRow(ctx, markSessionRefunded, id)
-	var i CoachingSession
-	err := row.Scan(
-		&i.ID,
-		&i.UserID,
-		&i.CoachID,
-		&i.ScheduledTime,
-		&i.DurationMinutes,
-		&i.Status,
-		&i.Topic,
-		&i.CoachNotes,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.PaymentStatus,
-		&i.AmountCents,
-		&i.Currency,
-		&i.PaymentRef,
-		&i.HoldExpiresAt,
-	)
-	return i, err
+func (q *Queries) MarkSessionRefunded(ctx context.Context, id uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, markSessionRefunded, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const recordPaymentEvent = `-- name: RecordPaymentEvent :execrows
@@ -628,6 +695,20 @@ type RecordPaymentEventParams struct {
 
 func (q *Queries) RecordPaymentEvent(ctx context.Context, arg RecordPaymentEventParams) (int64, error) {
 	result, err := q.db.Exec(ctx, recordPaymentEvent, arg.ProviderEventID, arg.SessionID, arg.EventType)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const reinstatePaidSession = `-- name: ReinstatePaidSession :execrows
+UPDATE coaching_sessions
+SET status = 'scheduled', payment_status = 'paid', hold_expires_at = NULL, updated_at = now()
+WHERE id = $1 AND status = 'cancelled' AND payment_status IN ('pending', 'expiring', 'failed')
+`
+
+func (q *Queries) ReinstatePaidSession(ctx context.Context, id uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, reinstatePaidSession, id)
 	if err != nil {
 		return 0, err
 	}
