@@ -40,6 +40,7 @@ func (h *Handler) Routes(authenticate, active func(http.Handler) http.Handler) h
 	r.Group(func(private chi.Router) {
 		private.Use(authenticate)
 		private.With(active).Get("/me", h.me)
+		private.With(active).Patch("/me", h.updateMe)
 		private.Delete("/me", h.deleteMe)
 	})
 	return r
@@ -150,6 +151,32 @@ func (h *Handler) deleteMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusAccepted, map[string]string{"status": "deleted"})
+}
+
+// updateMe handles PATCH /me, replacing the caller's dating styles and phases
+// and returning the updated profile. Values outside the vocabularies, or a
+// phase listed on both sides, answer 400.
+func (h *Handler) updateMe(w http.ResponseWriter, r *http.Request) {
+	principal, ok := PrincipalFrom(r.Context())
+	if !ok {
+		httpx.Error(w, http.StatusUnauthorized, "unauthenticated")
+		return
+	}
+	var in DatingProfileInput
+	if err := httpx.Decode(r, &in); err != nil {
+		httpx.Error(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	profile, err := h.svc.UpdateDatingProfile(r.Context(), principal, in)
+	switch {
+	case errors.Is(err, ErrInvalidInput):
+		httpx.Error(w, http.StatusBadRequest, err.Error())
+	case err != nil:
+		slog.Error("update dating profile", "error", err, "user_id", principal.UserID)
+		httpx.Error(w, http.StatusInternalServerError, "could not update profile")
+	default:
+		httpx.JSON(w, http.StatusOK, profile)
+	}
 }
 
 // me handles GET /me and returns the profile of the authenticated caller.

@@ -264,3 +264,39 @@ func assertTokenScope(t *testing.T, issuer *TokenIssuer, raw, scope string, ttl 
 		t.Fatalf("token expires in %s, want ~%s", until, ttl)
 	}
 }
+
+// TestNormaliseChoicesCanonicalisesAndRejectsUnknown pins the shape of a stored
+// list: case and whitespace are forgiven, duplicates collapse, the result is in
+// vocabulary order, and anything outside the vocabulary is refused.
+func TestNormaliseChoicesCanonicalisesAndRejectsUnknown(t *testing.T) {
+	got, err := normaliseChoices("dating_styles", []string{" Hinge", "in_person", "hinge", "", "TINDER"}, DatingStyles)
+	if err != nil {
+		t.Fatalf("normalise: %v", err)
+	}
+	want := []string{"in_person", "tinder", "hinge"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+	}
+	if _, err := normaliseChoices("dating_styles", []string{"carrier_pigeon"}, DatingStyles); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("unknown value: got %v, want ErrInvalidInput", err)
+	}
+}
+
+// TestUpdateDatingProfileRejectsPhaseOnBothSides pins that a phase cannot be
+// both a strength and something being worked on; the check runs before any
+// query, so a service without a database is enough.
+func TestUpdateDatingProfileRejectsPhaseOnBothSides(t *testing.T) {
+	svc := &Service{}
+	_, err := svc.UpdateDatingProfile(context.Background(), Principal{}, DatingProfileInput{
+		PhasesStrong:    []string{"flirting"},
+		PhasesWorkingOn: []string{"Flirting"},
+	})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("got %v, want ErrInvalidInput", err)
+	}
+}

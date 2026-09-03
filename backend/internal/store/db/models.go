@@ -133,4 +133,7 @@ type User struct {
 	CreatedAt             time.Time  `json:"created_at"`
 	UpdatedAt             time.Time  `json:"updated_at"`
 	DeletedAt             *time.Time `json:"deleted_at"`
+	DatingStyles          []string   `json:"dating_styles"`
+	PhasesStrong          []string   `json:"phases_strong"`
+	PhasesWorkingOn       []string   `json:"phases_working_on"`
 }

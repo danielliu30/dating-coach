@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
 import { api } from '../api/client';
-import type { AuthSession, Profile, Role } from '../api/types';
+import type { AuthSession, DatingProfileInput, Profile, Role } from '../api/types';
 
 const STORAGE_KEY = 'dating-coach.session';
 
@@ -15,6 +15,7 @@ interface AuthState {
   verify: (token: string) => Promise<Profile>;
   resendVerification: (email: string) => Promise<void>;
   refresh: () => Promise<void>;
+  updateDatingProfile: (input: DatingProfileInput) => Promise<Profile>;
   deleteAccount: () => Promise<void>;
   signOut: () => Promise<void>;
 }
@@ -132,6 +133,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
         if (!tokenRef.current) return;
         await persistUser(await api.me());
       },
+      updateDatingProfile: async (input) => persistUser(await api.updateDatingProfile(input)),
       // The backend revokes the session before it queues the row deletion, so
       // the token on hand is already dead once this resolves: the session is
       // dropped locally rather than left to fail the next request.
