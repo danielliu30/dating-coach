@@ -72,12 +72,16 @@ export default function AccountScreen(): React.ReactElement {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<number | null>(null);
 
-  // A refreshed profile (or one edited on another device) resets the drafts.
+  // Drafts follow the saved profile only when its lists actually change (a
+  // save, or an edit made elsewhere); a refresh that returns the same lists
+  // leaves unsaved choices alone.
+  const savedKey = JSON.stringify([savedStyles, savedStrong, savedWorking]);
   useEffect(() => {
-    setStyles(savedStyles);
-    setStrong(savedStrong);
-    setWorking(savedWorking);
-  }, [user]);
+    const [nextStyles, nextStrong, nextWorking] = JSON.parse(savedKey) as [DatingStyle[], DatingPhase[], DatingPhase[]];
+    setStyles(nextStyles);
+    setStrong(nextStrong);
+    setWorking(nextWorking);
+  }, [savedKey]);
 
   const dirty =
     !sameSet(styles, savedStyles) || !sameSet(strong, savedStrong) || !sameSet(working, savedWorking);

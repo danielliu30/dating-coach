@@ -133,7 +133,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
         if (!tokenRef.current) return;
         await persistUser(await api.me());
       },
-      updateDatingProfile: async (input) => persistUser(await api.updateDatingProfile(input)),
+      // A response that lands after the session changed hands (signed out, or
+      // into another account) is returned but not persisted, so it cannot be
+      // paired with a token that belongs to someone else.
+      updateDatingProfile: async (input) => {
+        const sent = tokenRef.current;
+        const profile = await api.updateDatingProfile(input);
+        if (tokenRef.current !== sent) return profile;
+        return persistUser(profile);
+      },
       // The backend revokes the session before it queues the row deletion, so
       // the token on hand is already dead once this resolves: the session is
       // dropped locally rather than left to fail the next request.
