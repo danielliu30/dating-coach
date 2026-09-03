@@ -9,8 +9,9 @@ import { shared } from '../theme';
 
 export default function VerifyEmailScreen({
   route,
+  navigation,
 }: NativeStackScreenProps<AuthStackParams, 'Verify'>): React.ReactElement {
-  const { verify, resendVerification, user } = useAuth();
+  const { verify, resendVerification, token, user } = useAuth();
   const [email] = useState(route.params?.email ?? user?.email ?? '');
   const [code, setCode] = useState('');
   const [status, setStatus] = useState<string | null>(null);
@@ -22,14 +23,22 @@ export default function VerifyEmailScreen({
     setError(null);
     setStatus(null);
     try {
+      // With a sign-up session on hand a successful verify swaps in a full
+      // session and the navigator leaves this stack on its own; without one
+      // there are no credentials to show, so hand the user to sign-in.
+      const signedIn = Boolean(token);
       await verify(email.trim(), code.trim());
+      if (!signedIn) {
+        navigation.navigate('SignIn');
+        return;
+      }
       setStatus('Email verified.');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'could not verify');
     } finally {
       setBusy(false);
     }
-  }, [verify, email, code]);
+  }, [verify, email, code, token, navigation]);
 
   const resend = async () => {
     setError(null);
@@ -62,6 +71,9 @@ export default function VerifyEmailScreen({
         <Button label="Verify" onPress={() => void submit()} loading={busy} />
         <Button label="Resend code" variant="secondary" onPress={resend} />
       </View>
+      {token ? null : (
+        <Button label="Back to sign in" variant="secondary" onPress={() => navigation.navigate('SignIn')} />
+      )}
     </Screen>
   );
 }

@@ -90,6 +90,33 @@ func TestVerificationCache_IncrementAttempts(t *testing.T) {
 	}
 }
 
+// TestVerificationCache_AttemptsExpireWithCode checks that wrong submissions
+// neither extend the counter past the code nor leave one behind once the code
+// has expired.
+func TestVerificationCache_AttemptsExpireWithCode(t *testing.T) {
+	ctx := context.Background()
+	cache, mr := newTestCache(t)
+
+	if err := cache.Store(ctx, "user-1", "123456"); err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	mr.FastForward(30 * time.Second)
+	if _, err := cache.IncrementAttempts(ctx, "user-1"); err != nil {
+		t.Fatalf("increment: %v", err)
+	}
+	if got, want := mr.TTL(attemptsKey("user-1")), mr.TTL(codeKey("user-1")); got != want {
+		t.Errorf("attempts TTL = %v, want the code's %v", got, want)
+	}
+
+	mr.FastForward(time.Minute)
+	if _, err := cache.IncrementAttempts(ctx, "user-1"); err != nil {
+		t.Fatalf("increment after expiry: %v", err)
+	}
+	if mr.Exists(attemptsKey("user-1")) {
+		t.Error("attempt counter survived its code")
+	}
+}
+
 func TestVerificationCache_Invalidate(t *testing.T) {
 	ctx := context.Background()
 	cache, _ := newTestCache(t)

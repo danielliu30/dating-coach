@@ -62,16 +62,25 @@ func (c *VerificationCache) Get(ctx context.Context, userID string) (code string
 	return code, attempts, nil
 }
 
-// IncrementAttempts increments the failed attempt counter. The counter shares
-// the code's TTL so it expires at the same time.
+// IncrementAttempts increments the failed attempt counter. The counter is
+// pinned to the remaining lifetime of the code so both expire together; once
+// the code is gone the counter is removed rather than left behind.
 func (c *VerificationCache) IncrementAttempts(ctx context.Context, userID string) (int64, error) {
 	key := attemptsKey(userID)
-	// Ensure the TTL is set/reset whenever we increment.
-	count, err := c.rdb.Incr(ctx, key).Result()
-	if err != nil {
+	pipe := c.rdb.Pipeline()
+	incr := pipe.Incr(ctx, key)
+	remaining := pipe.PTTL(ctx, codeKey(userID))
+	if _, err := pipe.Exec(ctx); err != nil {
 		return 0, err
 	}
-	if err := c.rdb.Expire(ctx, key, c.ttl).Err(); err != nil {
+	count := incr.Val()
+	if ttl := remaining.Val(); ttl > 0 {
+		if err := c.rdb.PExpire(ctx, key, ttl).Err(); err != nil {
+			return count, err
+		}
+		return count, nil
+	}
+	if err := c.rdb.Del(ctx, key).Err(); err != nil {
 		return count, err
 	}
 	return count, nil

@@ -139,7 +139,7 @@ services:
 
   # Optional Postgres UI (`--profile tools`) on :5050.
   pgadmin:
-    image: dpage/pgadmin4:latest
+    image: dpage/pgadmin4:9.17
     profiles: ['tools']
     environment:
       PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@admin.com}
