@@ -34,7 +34,11 @@ Go API ──── PostgreSQL (users, coaches, sessions, chat, conversations, a
 
 ```bash
 cp .env.example .env      # set JWT_SECRET, and LLM_API_KEY for real LLM scoring
-docker compose up --build # postgres, redis, rabbitmq, migrations, api, worker, ml-analyzer
+docker compose up -d --build # postgres, redis, rabbitmq, migrations, api, worker, ml-analyzer
+
+# Optional profiles
+# docker compose --profile gateway up -d   # nginx reverse proxy on :80
+# docker compose --profile tools up -d     # pgAdmin on :5050
 ```
 
 - API: http://localhost:8080/healthz
@@ -52,9 +56,9 @@ npx expo start --web          # web target (react-native-web)
 npx expo start                # then press i / a for iOS / Android
 ```
 
-Point the app at the backend with `EXPO_PUBLIC_API_URL` (defaults to `http://localhost:8080`, and `http://10.0.2.2:8080` on the Android emulator).
+Point the app at the backend with `EXPO_PUBLIC_API_URL`. It defaults to `http://localhost:8080` (`http://10.0.2.2:8080` on the Android emulator). If you use the nginx gateway profile, set it to `http://localhost`.
 
-Sign-up returns a session but the app stays on the verify screen until the email is confirmed. With no SMTP credentials configured the verification email is written to the API log instead of being sent, so grab the token locally with:
+Sign-up returns a session but the app stays on the verify screen until the email is confirmed. The verification email contains a 6-digit code that expires after 3 minutes. With no SMTP credentials configured the code is written to the API log instead of being sent, so grab it locally with:
 
 ```bash
 docker compose logs api | grep -i verification
