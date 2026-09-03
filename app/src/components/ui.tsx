@@ -84,7 +84,12 @@ export function Field({
       <TextInput
         placeholderTextColor={colors.muted}
         {...props}
-        style={[styles.input, props.multiline && styles.inputMultiline, props.style]}
+        style={[
+          styles.input,
+          props.multiline && styles.inputMultiline,
+          props.editable === false && styles.inputDisabled,
+          props.style,
+        ]}
       />
     </View>
   );
@@ -150,6 +155,7 @@ const styles = StyleSheet.create({
     color: colors.text,
   },
   inputMultiline: { minHeight: 120, textAlignVertical: 'top' },
+  inputDisabled: { backgroundColor: colors.bg, color: colors.muted },
   barTrack: {
     height: 8,
     borderRadius: 4,
