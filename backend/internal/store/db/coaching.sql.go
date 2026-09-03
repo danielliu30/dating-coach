@@ -46,7 +46,7 @@ func (q *Queries) AddCoachAvailability(ctx context.Context, arg AddCoachAvailabi
 const createCoachingSession = `-- name: CreateCoachingSession :one
 INSERT INTO coaching_sessions (user_id, coach_id, scheduled_time, duration_minutes, topic)
 VALUES ($1, $2, $3, $4, $5)
-RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at
+RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, payment_status, amount_cents, currency, payment_ref, hold_expires_at
 `
 
 type CreateCoachingSessionParams struct {
@@ -77,8 +77,106 @@ func (q *Queries) CreateCoachingSession(ctx context.Context, arg CreateCoachingS
 		&i.CoachNotes,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.PaymentStatus,
+		&i.AmountCents,
+		&i.Currency,
+		&i.PaymentRef,
+		&i.HoldExpiresAt,
 	)
 	return i, err
+}
+
+const createPendingPaymentSession = `-- name: CreatePendingPaymentSession :one
+INSERT INTO coaching_sessions (user_id, coach_id, scheduled_time, duration_minutes, topic,
+                               status, payment_status, amount_cents, currency, hold_expires_at)
+VALUES ($1, $2, $3, $4, $5, 'pending_payment', 'pending', $6, $7, $8)
+RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, payment_status, amount_cents, currency, payment_ref, hold_expires_at
+`
+
+type CreatePendingPaymentSessionParams struct {
+	UserID          uuid.UUID  `json:"user_id"`
+	CoachID         uuid.UUID  `json:"coach_id"`
+	ScheduledTime   time.Time  `json:"scheduled_time"`
+	DurationMinutes int32      `json:"duration_minutes"`
+	Topic           string     `json:"topic"`
+	AmountCents     int32      `json:"amount_cents"`
+	Currency        string     `json:"currency"`
+	HoldExpiresAt   *time.Time `json:"hold_expires_at"`
+}
+
+func (q *Queries) CreatePendingPaymentSession(ctx context.Context, arg CreatePendingPaymentSessionParams) (CoachingSession, error) {
+	row := q.db.QueryRow(ctx, createPendingPaymentSession,
+		arg.UserID,
+		arg.CoachID,
+		arg.ScheduledTime,
+		arg.DurationMinutes,
+		arg.Topic,
+		arg.AmountCents,
+		arg.Currency,
+		arg.HoldExpiresAt,
+	)
+	var i CoachingSession
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.CoachID,
+		&i.ScheduledTime,
+		&i.DurationMinutes,
+		&i.Status,
+		&i.Topic,
+		&i.CoachNotes,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.PaymentStatus,
+		&i.AmountCents,
+		&i.Currency,
+		&i.PaymentRef,
+		&i.HoldExpiresAt,
+	)
+	return i, err
+}
+
+const expirePaymentHolds = `-- name: ExpirePaymentHolds :many
+UPDATE coaching_sessions
+SET status = 'cancelled', payment_status = 'failed', updated_at = now()
+WHERE status = 'pending_payment' AND hold_expires_at < $1
+RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, payment_status, amount_cents, currency, payment_ref, hold_expires_at
+`
+
+func (q *Queries) ExpirePaymentHolds(ctx context.Context, holdExpiresAt *time.Time) ([]CoachingSession, error) {
+	rows, err := q.db.Query(ctx, expirePaymentHolds, holdExpiresAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CoachingSession{}
+	for rows.Next() {
+		var i CoachingSession
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.CoachID,
+			&i.ScheduledTime,
+			&i.DurationMinutes,
+			&i.Status,
+			&i.Topic,
+			&i.CoachNotes,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.PaymentStatus,
+			&i.AmountCents,
+			&i.Currency,
+			&i.PaymentRef,
+			&i.HoldExpiresAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getCoach = `-- name: GetCoach :one
@@ -124,7 +222,7 @@ func (q *Queries) GetCoach(ctx context.Context, userID uuid.UUID) (GetCoachRow, 
 }
 
 const getCoachingSession = `-- name: GetCoachingSession :one
-SELECT id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at FROM coaching_sessions WHERE id = $1
+SELECT id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, payment_status, amount_cents, currency, payment_ref, hold_expires_at FROM coaching_sessions WHERE id = $1
 `
 
 func (q *Queries) GetCoachingSession(ctx context.Context, id uuid.UUID) (CoachingSession, error) {
@@ -141,6 +239,38 @@ func (q *Queries) GetCoachingSession(ctx context.Context, id uuid.UUID) (Coachin
 		&i.CoachNotes,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.PaymentStatus,
+		&i.AmountCents,
+		&i.Currency,
+		&i.PaymentRef,
+		&i.HoldExpiresAt,
+	)
+	return i, err
+}
+
+const getSessionByPaymentRef = `-- name: GetSessionByPaymentRef :one
+SELECT id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, payment_status, amount_cents, currency, payment_ref, hold_expires_at FROM coaching_sessions WHERE payment_ref = $1
+`
+
+func (q *Queries) GetSessionByPaymentRef(ctx context.Context, paymentRef *string) (CoachingSession, error) {
+	row := q.db.QueryRow(ctx, getSessionByPaymentRef, paymentRef)
+	var i CoachingSession
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.CoachID,
+		&i.ScheduledTime,
+		&i.DurationMinutes,
+		&i.Status,
+		&i.Topic,
+		&i.CoachNotes,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.PaymentStatus,
+		&i.AmountCents,
+		&i.Currency,
+		&i.PaymentRef,
+		&i.HoldExpiresAt,
 	)
 	return i, err
 }
@@ -149,7 +279,7 @@ const listBookedSlots = `-- name: ListBookedSlots :many
 SELECT id, scheduled_time, duration_minutes
 FROM coaching_sessions
 WHERE coach_id = $1
-  AND status = 'scheduled'
+  AND status IN ('scheduled', 'pending_payment')
   AND scheduled_time >= $2
   AND scheduled_time < $3
 ORDER BY scheduled_time
@@ -283,7 +413,7 @@ func (q *Queries) ListCoaches(ctx context.Context, arg ListCoachesParams) ([]Lis
 }
 
 const listSessionsForCoach = `-- name: ListSessionsForCoach :many
-SELECT s.id, s.user_id, s.coach_id, s.scheduled_time, s.duration_minutes, s.status, s.topic, s.coach_notes, s.created_at, s.updated_at, u.display_name AS user_name
+SELECT s.id, s.user_id, s.coach_id, s.scheduled_time, s.duration_minutes, s.status, s.topic, s.coach_notes, s.created_at, s.updated_at, s.payment_status, s.amount_cents, s.currency, s.payment_ref, s.hold_expires_at, u.display_name AS user_name
 FROM coaching_sessions s
 JOIN users u ON u.id = s.user_id
 WHERE s.coach_id = $1
@@ -299,17 +429,22 @@ type ListSessionsForCoachParams struct {
 }
 
 type ListSessionsForCoachRow struct {
-	ID              uuid.UUID `json:"id"`
-	UserID          uuid.UUID `json:"user_id"`
-	CoachID         uuid.UUID `json:"coach_id"`
-	ScheduledTime   time.Time `json:"scheduled_time"`
-	DurationMinutes int32     `json:"duration_minutes"`
-	Status          string    `json:"status"`
-	Topic           string    `json:"topic"`
-	CoachNotes      string    `json:"coach_notes"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
-	UserName        string    `json:"user_name"`
+	ID              uuid.UUID  `json:"id"`
+	UserID          uuid.UUID  `json:"user_id"`
+	CoachID         uuid.UUID  `json:"coach_id"`
+	ScheduledTime   time.Time  `json:"scheduled_time"`
+	DurationMinutes int32      `json:"duration_minutes"`
+	Status          string     `json:"status"`
+	Topic           string     `json:"topic"`
+	CoachNotes      string     `json:"coach_notes"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+	PaymentStatus   string     `json:"payment_status"`
+	AmountCents     int32      `json:"amount_cents"`
+	Currency        string     `json:"currency"`
+	PaymentRef      *string    `json:"payment_ref"`
+	HoldExpiresAt   *time.Time `json:"hold_expires_at"`
+	UserName        string     `json:"user_name"`
 }
 
 func (q *Queries) ListSessionsForCoach(ctx context.Context, arg ListSessionsForCoachParams) ([]ListSessionsForCoachRow, error) {
@@ -332,6 +467,11 @@ func (q *Queries) ListSessionsForCoach(ctx context.Context, arg ListSessionsForC
 			&i.CoachNotes,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.PaymentStatus,
+			&i.AmountCents,
+			&i.Currency,
+			&i.PaymentRef,
+			&i.HoldExpiresAt,
 			&i.UserName,
 		); err != nil {
 			return nil, err
@@ -345,7 +485,7 @@ func (q *Queries) ListSessionsForCoach(ctx context.Context, arg ListSessionsForC
 }
 
 const listSessionsForUser = `-- name: ListSessionsForUser :many
-SELECT s.id, s.user_id, s.coach_id, s.scheduled_time, s.duration_minutes, s.status, s.topic, s.coach_notes, s.created_at, s.updated_at, u.display_name AS coach_name
+SELECT s.id, s.user_id, s.coach_id, s.scheduled_time, s.duration_minutes, s.status, s.topic, s.coach_notes, s.created_at, s.updated_at, s.payment_status, s.amount_cents, s.currency, s.payment_ref, s.hold_expires_at, u.display_name AS coach_name
 FROM coaching_sessions s
 JOIN users u ON u.id = s.coach_id
 WHERE s.user_id = $1
@@ -359,17 +499,22 @@ type ListSessionsForUserParams struct {
 }
 
 type ListSessionsForUserRow struct {
-	ID              uuid.UUID `json:"id"`
-	UserID          uuid.UUID `json:"user_id"`
-	CoachID         uuid.UUID `json:"coach_id"`
-	ScheduledTime   time.Time `json:"scheduled_time"`
-	DurationMinutes int32     `json:"duration_minutes"`
-	Status          string    `json:"status"`
-	Topic           string    `json:"topic"`
-	CoachNotes      string    `json:"coach_notes"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
-	CoachName       string    `json:"coach_name"`
+	ID              uuid.UUID  `json:"id"`
+	UserID          uuid.UUID  `json:"user_id"`
+	CoachID         uuid.UUID  `json:"coach_id"`
+	ScheduledTime   time.Time  `json:"scheduled_time"`
+	DurationMinutes int32      `json:"duration_minutes"`
+	Status          string     `json:"status"`
+	Topic           string     `json:"topic"`
+	CoachNotes      string     `json:"coach_notes"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+	PaymentStatus   string     `json:"payment_status"`
+	AmountCents     int32      `json:"amount_cents"`
+	Currency        string     `json:"currency"`
+	PaymentRef      *string    `json:"payment_ref"`
+	HoldExpiresAt   *time.Time `json:"hold_expires_at"`
+	CoachName       string     `json:"coach_name"`
 }
 
 func (q *Queries) ListSessionsForUser(ctx context.Context, arg ListSessionsForUserParams) ([]ListSessionsForUserRow, error) {
@@ -392,6 +537,11 @@ func (q *Queries) ListSessionsForUser(ctx context.Context, arg ListSessionsForUs
 			&i.CoachNotes,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.PaymentStatus,
+			&i.AmountCents,
+			&i.Currency,
+			&i.PaymentRef,
+			&i.HoldExpiresAt,
 			&i.CoachName,
 		); err != nil {
 			return nil, err
@@ -402,6 +552,86 @@ func (q *Queries) ListSessionsForUser(ctx context.Context, arg ListSessionsForUs
 		return nil, err
 	}
 	return items, nil
+}
+
+const markSessionPaid = `-- name: MarkSessionPaid :one
+UPDATE coaching_sessions
+SET status = 'scheduled', payment_status = 'paid', hold_expires_at = NULL, updated_at = now()
+WHERE id = $1 AND status = 'pending_payment'
+RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, payment_status, amount_cents, currency, payment_ref, hold_expires_at
+`
+
+func (q *Queries) MarkSessionPaid(ctx context.Context, id uuid.UUID) (CoachingSession, error) {
+	row := q.db.QueryRow(ctx, markSessionPaid, id)
+	var i CoachingSession
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.CoachID,
+		&i.ScheduledTime,
+		&i.DurationMinutes,
+		&i.Status,
+		&i.Topic,
+		&i.CoachNotes,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.PaymentStatus,
+		&i.AmountCents,
+		&i.Currency,
+		&i.PaymentRef,
+		&i.HoldExpiresAt,
+	)
+	return i, err
+}
+
+const markSessionRefunded = `-- name: MarkSessionRefunded :one
+UPDATE coaching_sessions
+SET payment_status = 'refunded', updated_at = now()
+WHERE id = $1 AND payment_status = 'paid'
+RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, payment_status, amount_cents, currency, payment_ref, hold_expires_at
+`
+
+func (q *Queries) MarkSessionRefunded(ctx context.Context, id uuid.UUID) (CoachingSession, error) {
+	row := q.db.QueryRow(ctx, markSessionRefunded, id)
+	var i CoachingSession
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.CoachID,
+		&i.ScheduledTime,
+		&i.DurationMinutes,
+		&i.Status,
+		&i.Topic,
+		&i.CoachNotes,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.PaymentStatus,
+		&i.AmountCents,
+		&i.Currency,
+		&i.PaymentRef,
+		&i.HoldExpiresAt,
+	)
+	return i, err
+}
+
+const recordPaymentEvent = `-- name: RecordPaymentEvent :execrows
+INSERT INTO payment_events (provider_event_id, session_id, event_type)
+VALUES ($1, $2, $3)
+ON CONFLICT (provider_event_id) DO NOTHING
+`
+
+type RecordPaymentEventParams struct {
+	ProviderEventID string     `json:"provider_event_id"`
+	SessionID       *uuid.UUID `json:"session_id"`
+	EventType       string     `json:"event_type"`
+}
+
+func (q *Queries) RecordPaymentEvent(ctx context.Context, arg RecordPaymentEventParams) (int64, error) {
+	result, err := q.db.Exec(ctx, recordPaymentEvent, arg.ProviderEventID, arg.SessionID, arg.EventType)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const replaceCoachAvailability = `-- name: ReplaceCoachAvailability :exec
@@ -417,7 +647,7 @@ const rescheduleSession = `-- name: RescheduleSession :one
 UPDATE coaching_sessions
 SET scheduled_time = $2, updated_at = now()
 WHERE id = $1 AND status = 'scheduled'
-RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at
+RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, payment_status, amount_cents, currency, payment_ref, hold_expires_at
 `
 
 type RescheduleSessionParams struct {
@@ -439,6 +669,46 @@ func (q *Queries) RescheduleSession(ctx context.Context, arg RescheduleSessionPa
 		&i.CoachNotes,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.PaymentStatus,
+		&i.AmountCents,
+		&i.Currency,
+		&i.PaymentRef,
+		&i.HoldExpiresAt,
+	)
+	return i, err
+}
+
+const setSessionPaymentRef = `-- name: SetSessionPaymentRef :one
+UPDATE coaching_sessions
+SET payment_ref = $2, updated_at = now()
+WHERE id = $1
+RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, payment_status, amount_cents, currency, payment_ref, hold_expires_at
+`
+
+type SetSessionPaymentRefParams struct {
+	ID         uuid.UUID `json:"id"`
+	PaymentRef *string   `json:"payment_ref"`
+}
+
+func (q *Queries) SetSessionPaymentRef(ctx context.Context, arg SetSessionPaymentRefParams) (CoachingSession, error) {
+	row := q.db.QueryRow(ctx, setSessionPaymentRef, arg.ID, arg.PaymentRef)
+	var i CoachingSession
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.CoachID,
+		&i.ScheduledTime,
+		&i.DurationMinutes,
+		&i.Status,
+		&i.Topic,
+		&i.CoachNotes,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.PaymentStatus,
+		&i.AmountCents,
+		&i.Currency,
+		&i.PaymentRef,
+		&i.HoldExpiresAt,
 	)
 	return i, err
 }
@@ -447,7 +717,7 @@ const updateSessionNotes = `-- name: UpdateSessionNotes :one
 UPDATE coaching_sessions
 SET coach_notes = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at
+RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, payment_status, amount_cents, currency, payment_ref, hold_expires_at
 `
 
 type UpdateSessionNotesParams struct {
@@ -469,6 +739,11 @@ func (q *Queries) UpdateSessionNotes(ctx context.Context, arg UpdateSessionNotes
 		&i.CoachNotes,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.PaymentStatus,
+		&i.AmountCents,
+		&i.Currency,
+		&i.PaymentRef,
+		&i.HoldExpiresAt,
 	)
 	return i, err
 }
@@ -477,7 +752,7 @@ const updateSessionStatus = `-- name: UpdateSessionStatus :one
 UPDATE coaching_sessions
 SET status = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at
+RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, payment_status, amount_cents, currency, payment_ref, hold_expires_at
 `
 
 type UpdateSessionStatusParams struct {
@@ -499,6 +774,11 @@ func (q *Queries) UpdateSessionStatus(ctx context.Context, arg UpdateSessionStat
 		&i.CoachNotes,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.PaymentStatus,
+		&i.AmountCents,
+		&i.Currency,
+		&i.PaymentRef,
+		&i.HoldExpiresAt,
 	)
 	return i, err
 }

@@ -44,3 +44,22 @@ func TestOverlapsBookedHonoursExclusion(t *testing.T) {
 		t.Fatal("a slot starting when the session ends does not overlap")
 	}
 }
+
+func TestPriceCentsRoundsToNearestCent(t *testing.T) {
+	cases := []struct {
+		rate, minutes int32
+		want          int64
+	}{
+		{12000, 60, 12000},
+		{12000, 45, 9000},
+		{12000, 30, 6000},
+		{9999, 45, 7499},  // 7499.25
+		{10001, 45, 7501}, // 7500.75
+		{0, 45, 0},
+	}
+	for _, tc := range cases {
+		if got := priceCents(tc.rate, tc.minutes); got != tc.want {
+			t.Errorf("priceCents(%d, %d) = %d, want %d", tc.rate, tc.minutes, got, tc.want)
+		}
+	}
+}

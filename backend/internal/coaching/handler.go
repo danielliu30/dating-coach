@@ -28,6 +28,7 @@ func NewHandler(svc *Service) *Handler {
 // Routes mounts the client-facing coaching endpoints (requires auth).
 func (h *Handler) Routes() http.Handler {
 	r := chi.NewRouter()
+	r.Get("/config", h.config)
 	r.Get("/coaches", h.listCoaches)
 	r.Get("/coaches/{coachID}", h.getCoach)
 	r.Get("/coaches/{coachID}/availability", h.coachAvailability)
@@ -48,6 +49,12 @@ func (h *Handler) CoachRoutes() http.Handler {
 	r.Post("/sessions/{sessionID}/status", h.setSessionStatus)
 	r.Post("/sessions/{sessionID}/notes", h.setSessionNotes)
 	return r
+}
+
+// config handles GET /config, telling the app which booking behaviour the
+// server is running so the two cannot disagree about whether to collect payment.
+func (h *Handler) config(w http.ResponseWriter, r *http.Request) {
+	httpx.JSON(w, http.StatusOK, map[string]any{"payments_enabled": h.svc.PaymentsEnabled()})
 }
 
 // listCoaches handles GET /coaches, hiding coaches that are not accepting
@@ -376,6 +383,9 @@ func respondErr(w http.ResponseWriter, err error, fallback string) {
 		httpx.Error(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, ErrSlotTaken), errors.Is(err, ErrUnavailable):
 		httpx.Error(w, http.StatusConflict, err.Error())
+	case errors.Is(err, ErrPayment):
+		slog.Error("start payment", "error", err)
+		httpx.Error(w, http.StatusBadGateway, ErrPayment.Error())
 	default:
 		slog.Error(fallback, "error", err)
 		httpx.Error(w, http.StatusInternalServerError, fallback)
