@@ -1,5 +1,5 @@
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Text, View } from 'react-native';
 
 import { Button, Field, Screen } from '../components/ui';
@@ -17,28 +17,29 @@ export default function VerifyEmailScreen({
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [verified, setVerified] = useState(false);
+
+  // A verify that hands back a session moves the app to the tabs by itself.
+  // When it does not — no sign-up session, or one that had already expired and
+  // was dropped — the only thing left to do here is sign in.
+  useEffect(() => {
+    if (verified && !token) navigation.navigate('SignIn');
+  }, [verified, token, navigation]);
 
   const submit = useCallback(async () => {
     setBusy(true);
     setError(null);
     setStatus(null);
     try {
-      // With a sign-up session on hand a successful verify swaps in a full
-      // session and the navigator leaves this stack on its own; without one
-      // there are no credentials to show, so hand the user to sign-in.
-      const signedIn = Boolean(token);
       await verify(email.trim(), code.trim());
-      if (!signedIn) {
-        navigation.navigate('SignIn');
-        return;
-      }
       setStatus('Email verified.');
+      setVerified(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'could not verify');
     } finally {
       setBusy(false);
     }
-  }, [verify, email, code, token, navigation]);
+  }, [verify, email, code]);
 
   const resend = async () => {
     setError(null);

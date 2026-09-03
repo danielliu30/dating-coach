@@ -62,28 +62,26 @@ func (c *VerificationCache) Get(ctx context.Context, userID string) (code string
 	return code, attempts, nil
 }
 
+// incrementAttemptsScript bumps the counter (KEYS[2]) and pins it to the code's
+// (KEYS[1]) remaining lifetime in one atomic step, so a concurrent Store cannot
+// slip in between and leave a fresh counter with a stale expiry. A missing code
+// removes the counter and yields 0.
+var incrementAttemptsScript = redis.NewScript(`
+local ttl = redis.call('PTTL', KEYS[1])
+if ttl <= 0 then
+  redis.call('DEL', KEYS[2])
+  return 0
+end
+local n = redis.call('INCR', KEYS[2])
+redis.call('PEXPIRE', KEYS[2], ttl)
+return n
+`)
+
 // IncrementAttempts increments the failed attempt counter. The counter is
 // pinned to the remaining lifetime of the code so both expire together; once
-// the code is gone the counter is removed rather than left behind.
+// the code is gone the counter is removed and 0 is returned.
 func (c *VerificationCache) IncrementAttempts(ctx context.Context, userID string) (int64, error) {
-	key := attemptsKey(userID)
-	pipe := c.rdb.Pipeline()
-	incr := pipe.Incr(ctx, key)
-	remaining := pipe.PTTL(ctx, codeKey(userID))
-	if _, err := pipe.Exec(ctx); err != nil {
-		return 0, err
-	}
-	count := incr.Val()
-	if ttl := remaining.Val(); ttl > 0 {
-		if err := c.rdb.PExpire(ctx, key, ttl).Err(); err != nil {
-			return count, err
-		}
-		return count, nil
-	}
-	if err := c.rdb.Del(ctx, key).Err(); err != nil {
-		return count, err
-	}
-	return count, nil
+	return incrementAttemptsScript.Run(ctx, c.rdb, []string{codeKey(userID), attemptsKey(userID)}).Int64()
 }
 
 // Invalidate removes the code and attempt counter.
