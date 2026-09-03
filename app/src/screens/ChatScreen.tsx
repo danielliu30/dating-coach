@@ -28,6 +28,11 @@ export default function ChatScreen({
   const [peerTyping, setPeerTyping] = useState(false);
   const socketRef = useRef<ChatSocket | null>(null);
   const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The socket reads the token per connection attempt, so a renewal reaches the
+  // next reconnect without tearing the open one down.
+  const tokenRef = useRef(token);
+  tokenRef.current = token;
+  const signedIn = token !== null;
 
   useEffect(() => navigation.setOptions({ title }), [navigation, title]);
 
@@ -63,15 +68,18 @@ export default function ChatScreen({
   );
 
   useEffect(() => {
-    if (!token) return;
-    const socket = new ChatSocket(threadID, token, { onEvent, onStatus: setConnection });
+    if (!signedIn) return;
+    const socket = new ChatSocket(threadID, () => tokenRef.current, {
+      onEvent,
+      onStatus: setConnection,
+    });
     socketRef.current = socket;
     socket.connect();
     return () => {
       socket.close();
       socketRef.current = null;
     };
-  }, [onEvent, threadID, token]);
+  }, [onEvent, signedIn, threadID]);
 
   // The socket echoes the persisted message back, so sending is fire-and-forget.
   const onSend = useCallback((outgoing: IMessage[] = []) => {

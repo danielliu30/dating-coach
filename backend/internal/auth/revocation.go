@@ -4,13 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
-
-	"github.com/danielliu30/dating-coach/backend/internal/httpx"
 )
 
 const (
@@ -114,33 +111,4 @@ func (d *Denylist) Revoked(ctx context.Context, userID uuid.UUID) (bool, error) 
 		return false, fmt.Errorf("check revocation for %s: %w", userID, err)
 	}
 	return n > 0, nil
-}
-
-// RequireActive rejects callers whose account has been revoked, which a valid
-// signature alone cannot detect. It must be mounted after Middleware, which
-// supplies the Principal it reads.
-//
-// It fails closed: when Redis cannot be reached the request is answered 503
-// instead of being allowed through, because "unknown" here means "possibly a
-// deleted account".
-func RequireActive(revocations Revocations) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			principal, ok := PrincipalFrom(r.Context())
-			if !ok {
-				httpx.Error(w, http.StatusUnauthorized, "missing bearer token")
-				return
-			}
-			revoked, err := revocations.Revoked(r.Context(), principal.UserID)
-			if err != nil {
-				httpx.Error(w, http.StatusServiceUnavailable, "could not verify session")
-				return
-			}
-			if revoked {
-				httpx.Error(w, http.StatusUnauthorized, "session revoked")
-				return
-			}
-			next.ServeHTTP(w, r)
-		})
-	}
 }

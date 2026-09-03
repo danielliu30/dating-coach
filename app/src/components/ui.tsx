@@ -108,6 +108,35 @@ export function Badge({ text, tone = colors.muted }: { text: string; tone?: stri
 }
 
 /**
+ * A banner for something the app did to the user rather than something the
+ * user did: it stands apart from field-level errors, and can be dismissed when
+ * `onDismiss` is given.
+ */
+export function Notice({
+  title,
+  text,
+  onDismiss,
+}: {
+  title: string;
+  text: string;
+  onDismiss?: () => void;
+}): React.ReactElement {
+  return (
+    <View accessibilityRole="alert" style={styles.notice}>
+      <View style={{ flex: 1, gap: 2 }}>
+        <Text style={styles.noticeTitle}>{title}</Text>
+        <Text style={styles.noticeText}>{text}</Text>
+      </View>
+      {onDismiss ? (
+        <Pressable accessibilityRole="button" accessibilityLabel="Dismiss" onPress={onDismiss} hitSlop={8}>
+          <Text style={styles.noticeDismiss}>✕</Text>
+        </Pressable>
+      ) : null}
+    </View>
+  );
+}
+
+/**
  * Toggleable pill for multi-select lists. `tone` colours the selected state;
  * a disabled chip renders dimmed and ignores presses.
  */
@@ -209,4 +238,17 @@ const styles = StyleSheet.create({
   },
   chipText: { fontSize: 14, fontWeight: '600' },
   center: { paddingVertical: 32, alignItems: 'center', gap: 8 },
+  notice: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+    backgroundColor: colors.noticeBg,
+    borderWidth: 1,
+    borderColor: colors.neutral,
+    borderRadius: 12,
+    padding: 14,
+  },
+  noticeTitle: { fontSize: 15, fontWeight: '600', color: colors.text },
+  noticeText: { fontSize: 14, color: colors.text, lineHeight: 20 },
+  noticeDismiss: { fontSize: 15, color: colors.muted },
 });

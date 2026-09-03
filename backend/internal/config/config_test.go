@@ -23,6 +23,8 @@ func TestLoadRejectsNonPositiveDurations(t *testing.T) {
 		"negative alert period": {"DEAD_LETTER_ALERT_PERIOD", "-1m"},
 		"zero jwt ttl":          {"JWT_TTL", "0"},
 		"negative rate window":  {"AUTH_RATE_WINDOW", "-30s"},
+		"zero refresh ttl":      {"REFRESH_TOKEN_TTL", "0"},
+		"negative refresh ttl":  {"REFRESH_TOKEN_TTL", "-1h"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

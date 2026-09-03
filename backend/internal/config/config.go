@@ -21,12 +21,13 @@ type Config struct {
 	RedisURL    string
 	RabbitMQURL string
 
-	JWTSecret      string
-	JWTTTL         time.Duration
-	VerifyTokenTTL time.Duration
-	BcryptCost     int
-	AuthRateLimit  int
-	AuthRateWindow time.Duration
+	JWTSecret       string
+	JWTTTL          time.Duration
+	VerifyTokenTTL  time.Duration
+	RefreshTokenTTL time.Duration
+	BcryptCost      int
+	AuthRateLimit   int
+	AuthRateWindow  time.Duration
 
 	MLServiceURL     string
 	MLServiceTimeout time.Duration
@@ -108,8 +109,9 @@ func Load() (*Config, error) {
 		RedisURL:             env("REDIS_URL", "redis://localhost:6379/0"),
 		RabbitMQURL:          env("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/"),
 		JWTSecret:            env("JWT_SECRET", ""),
-		JWTTTL:               envDuration("JWT_TTL", 24*time.Hour),
+		JWTTTL:               envDuration("JWT_TTL", 15*time.Minute),
 		VerifyTokenTTL:       envDuration("VERIFY_TOKEN_TTL", 30*time.Minute),
+		RefreshTokenTTL:      envDuration("REFRESH_TOKEN_TTL", 30*24*time.Hour),
 		BcryptCost:           envInt("BCRYPT_COST", 12),
 		AuthRateLimit:        envInt("AUTH_RATE_LIMIT", 20),
 		AuthRateWindow:       envDuration("AUTH_RATE_WINDOW", time.Minute),
@@ -149,6 +151,7 @@ func Load() (*Config, error) {
 	}{
 		{"JWT_TTL", cfg.JWTTTL},
 		{"VERIFY_TOKEN_TTL", cfg.VerifyTokenTTL},
+		{"REFRESH_TOKEN_TTL", cfg.RefreshTokenTTL},
 		{"AUTH_RATE_WINDOW", cfg.AuthRateWindow},
 		{"ML_SERVICE_TIMEOUT", cfg.MLServiceTimeout},
 		{"DEAD_LETTER_ALERT_PERIOD", cfg.DeadLetterAlertPeriod},

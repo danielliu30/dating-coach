@@ -48,6 +48,8 @@ export interface DatingProfileInput {
 
 export interface AuthSession {
   token: string;
+  /** Absent on responses that do not open a full session, e.g. sign-up. */
+  refresh_token?: string;
   expires_at: string;
   user: Profile;
 }

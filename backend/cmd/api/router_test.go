@@ -16,10 +16,6 @@ import (
 	"github.com/danielliu30/dating-coach/backend/internal/payments"
 )
 
-// allowAll stands in for the revocation middleware, which needs Redis and has
-// nothing to say about scopes.
-func allowAll(next http.Handler) http.Handler { return next }
-
 // testRouter builds the real routing tree over handlers with no backing
 // services: every case below is decided by the auth middleware, so a request
 // that reaches a handler fails loudly instead of returning a plausible status.
@@ -30,9 +26,8 @@ func testRouter(t *testing.T, issuer *auth.TokenIssuer) http.Handler {
 	return newRouter(
 		&config.Config{Env: "test", CORSOrigins: []string{"*"}},
 		auth.Middleware(issuer),
-		allowAll,
 		handlers{
-			auth:     auth.NewHandler(auth.NewService(nil, issuer, nil, 4, "", nil, nil, time.Hour, 30*time.Minute), auth.NewRateLimiter(nil, 100, time.Minute)),
+			auth:     auth.NewHandler(auth.NewService(nil, nil, issuer, nil, 4, "", nil, nil, 15*time.Minute, 30*time.Minute, time.Hour), auth.NewRateLimiter(nil, 100, time.Minute)),
 			coaching: coaching.NewHandler(coaching.NewService(nil, nil, payments.Disabled{}, 15*time.Minute, "", "")),
 			chat:     chat.NewHandler(chat.NewService(nil, hub), hub, nil, []string{"*"}),
 			analysis: analysis.NewHandler(analysis.NewService(nil, nil, nil)),

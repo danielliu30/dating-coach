@@ -77,7 +77,11 @@ func run() error {
 	)
 
 	var wg sync.WaitGroup
-	wg.Add(7)
+	wg.Add(8)
+	go func() {
+		defer wg.Done()
+		deleter.PurgeExpiredRefreshTokens(ctx, refreshTokenPurgeInterval)
+	}()
 	go func() {
 		defer wg.Done()
 		consume(ctx, "analysis", func(ctx context.Context) error {
@@ -136,6 +140,9 @@ func run() error {
 const (
 	minBackoff = time.Second
 	maxBackoff = 30 * time.Second
+	// Expired refresh tokens are only dead weight, so sweeping them hourly is
+	// frequent enough to keep the table bounded.
+	refreshTokenPurgeInterval = time.Hour
 )
 
 // consume runs one consumer for the life of ctx, restarting it with exponential
@@ -173,7 +180,7 @@ func runAnalysisConsumer(ctx context.Context, url, name string, handle analysis.
 
 // watchDeadLetters logs the depth of the deletion dead-letter queue every
 // period until ctx ends, so a deployment can alert on deletions that failed
-// while the account's revocation entry is still live. It holds its own broker
+// after the API already answered the account holder. It holds its own broker
 // connection: a failed inspection closes the channel, which must not take the
 // consumer down with it. period must be positive; config.Load rejects anything
 // else.

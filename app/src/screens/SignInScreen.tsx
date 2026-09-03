@@ -3,7 +3,7 @@ import React, { useState } from 'react';
 import { Text, View } from 'react-native';
 
 import { ApiError } from '../api/client';
-import { Button, Field, Screen } from '../components/ui';
+import { Button, Field, Notice, Screen } from '../components/ui';
 import type { AuthStackParams } from '../navigation/types';
 import { useAuth } from '../state/auth';
 import { shared } from '../theme';
@@ -11,7 +11,7 @@ import { shared } from '../theme';
 export default function SignInScreen({
   navigation,
 }: NativeStackScreenProps<AuthStackParams, 'SignIn'>): React.ReactElement {
-  const { signIn } = useAuth();
+  const { signIn, signedOutReason, dismissSignedOutReason } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -40,6 +40,13 @@ export default function SignInScreen({
         <Text style={shared.title}>Welcome back</Text>
         <Text style={shared.muted}>Coaching and conversation feedback, in one place.</Text>
       </View>
+      {signedOutReason ? (
+        <Notice
+          title="You were signed out"
+          text="Your session expired, so we signed you out to keep your account safe. Sign in to pick up where you left off."
+          onDismiss={dismissSignedOutReason}
+        />
+      ) : null}
       <View style={shared.card}>
         <Field
           label="Email"

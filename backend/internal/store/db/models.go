@@ -137,6 +137,15 @@ type PaymentEvent struct {
 	ReceivedAt      time.Time  `json:"received_at"`
 }
 
+type RefreshToken struct {
+	ID        uuid.UUID  `json:"id"`
+	UserID    uuid.UUID  `json:"user_id"`
+	TokenHash string     `json:"token_hash"`
+	IssuedAt  time.Time  `json:"issued_at"`
+	ExpiresAt time.Time  `json:"expires_at"`
+	UsedAt    *time.Time `json:"used_at"`
+}
+
 type TrainingExample struct {
 	ID              uuid.UUID       `json:"id"`
 	ConversationID  uuid.UUID       `json:"conversation_id"`

@@ -110,9 +110,11 @@ Top tab labels may be truncated ("Coac…", "Analy…") at ~1024px — cosmetic,
 
 ## Auth: short-lived access tokens + refresh tokens
 - Access tokens are signature-verified JWTs (`JWT_TTL`, default 15m); refresh tokens live in
-  `refresh_tokens` as sha256 hashes (`REFRESH_TOKEN_TTL`, default 720h). Migration order is
-  `000003_deletion_outbox`, `000004_dating_profile`, `000005_session_confirmation`, `000006_payments`;
-  a fresh DB must reach `schema_migrations` version 6 (`docker compose down -v && docker compose up -d --build`).
+  `refresh_tokens` as sha256 hashes (`REFRESH_TOKEN_TTL`, default 720h). Migration order ends
+  `000004_dating_profile`, `000005_session_confirmation`, `000006_refresh_tokens`, `000007_payments`; a fresh
+  DB must reach `schema_migrations` version 7 (`docker compose down -v && docker compose up -d --build`). Two
+  migrations sharing a version number makes `migrate` refuse the whole set (`duplicate migration file`)
+  — always check `ls backend/migrations` after merging a branch that adds one.
 - Make expiry observable: `JWT_TTL=30s docker compose up -d --build api` (rebuild/restart api only),
   then sign in, idle >35 s and press "Refresh profile". Expect `GET /auth/me 401` →
   `POST /auth/refresh 200` → `GET /auth/me 200`, no UI bounce, and in psql one revoked + one active
