@@ -43,18 +43,52 @@ func (q *Queries) AddCoachAvailability(ctx context.Context, arg AddCoachAvailabi
 	return i, err
 }
 
+const confirmSession = `-- name: ConfirmSession :one
+UPDATE coaching_sessions
+SET status = 'scheduled',
+    confirmed_at = now(),
+    confirmation_token = NULL,
+    respond_by = NULL,
+    updated_at = now()
+WHERE id = $1 AND status = 'pending'
+RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, confirmation_token, respond_by, confirmed_at
+`
+
+func (q *Queries) ConfirmSession(ctx context.Context, id uuid.UUID) (CoachingSession, error) {
+	row := q.db.QueryRow(ctx, confirmSession, id)
+	var i CoachingSession
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.CoachID,
+		&i.ScheduledTime,
+		&i.DurationMinutes,
+		&i.Status,
+		&i.Topic,
+		&i.CoachNotes,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ConfirmationToken,
+		&i.RespondBy,
+		&i.ConfirmedAt,
+	)
+	return i, err
+}
+
 const createCoachingSession = `-- name: CreateCoachingSession :one
-INSERT INTO coaching_sessions (user_id, coach_id, scheduled_time, duration_minutes, topic)
-VALUES ($1, $2, $3, $4, $5)
-RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at
+INSERT INTO coaching_sessions (user_id, coach_id, scheduled_time, duration_minutes, topic, status, confirmation_token, respond_by)
+VALUES ($1, $2, $3, $4, $5, 'pending', $6, $7)
+RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, confirmation_token, respond_by, confirmed_at
 `
 
 type CreateCoachingSessionParams struct {
-	UserID          uuid.UUID `json:"user_id"`
-	CoachID         uuid.UUID `json:"coach_id"`
-	ScheduledTime   time.Time `json:"scheduled_time"`
-	DurationMinutes int32     `json:"duration_minutes"`
-	Topic           string    `json:"topic"`
+	UserID            uuid.UUID  `json:"user_id"`
+	CoachID           uuid.UUID  `json:"coach_id"`
+	ScheduledTime     time.Time  `json:"scheduled_time"`
+	DurationMinutes   int32      `json:"duration_minutes"`
+	Topic             string     `json:"topic"`
+	ConfirmationToken *string    `json:"confirmation_token"`
+	RespondBy         *time.Time `json:"respond_by"`
 }
 
 func (q *Queries) CreateCoachingSession(ctx context.Context, arg CreateCoachingSessionParams) (CoachingSession, error) {
@@ -64,6 +98,8 @@ func (q *Queries) CreateCoachingSession(ctx context.Context, arg CreateCoachingS
 		arg.ScheduledTime,
 		arg.DurationMinutes,
 		arg.Topic,
+		arg.ConfirmationToken,
+		arg.RespondBy,
 	)
 	var i CoachingSession
 	err := row.Scan(
@@ -77,8 +113,85 @@ func (q *Queries) CreateCoachingSession(ctx context.Context, arg CreateCoachingS
 		&i.CoachNotes,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ConfirmationToken,
+		&i.RespondBy,
+		&i.ConfirmedAt,
 	)
 	return i, err
+}
+
+const declineSession = `-- name: DeclineSession :one
+UPDATE coaching_sessions
+SET status = 'declined',
+    confirmation_token = NULL,
+    respond_by = NULL,
+    updated_at = now()
+WHERE id = $1 AND status = 'pending'
+RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, confirmation_token, respond_by, confirmed_at
+`
+
+func (q *Queries) DeclineSession(ctx context.Context, id uuid.UUID) (CoachingSession, error) {
+	row := q.db.QueryRow(ctx, declineSession, id)
+	var i CoachingSession
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.CoachID,
+		&i.ScheduledTime,
+		&i.DurationMinutes,
+		&i.Status,
+		&i.Topic,
+		&i.CoachNotes,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ConfirmationToken,
+		&i.RespondBy,
+		&i.ConfirmedAt,
+	)
+	return i, err
+}
+
+const expirePendingSessions = `-- name: ExpirePendingSessions :many
+UPDATE coaching_sessions
+SET status = 'expired',
+    confirmation_token = NULL,
+    updated_at = now()
+WHERE status = 'pending' AND respond_by < now()
+RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, confirmation_token, respond_by, confirmed_at
+`
+
+func (q *Queries) ExpirePendingSessions(ctx context.Context) ([]CoachingSession, error) {
+	rows, err := q.db.Query(ctx, expirePendingSessions)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CoachingSession{}
+	for rows.Next() {
+		var i CoachingSession
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.CoachID,
+			&i.ScheduledTime,
+			&i.DurationMinutes,
+			&i.Status,
+			&i.Topic,
+			&i.CoachNotes,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.ConfirmationToken,
+			&i.RespondBy,
+			&i.ConfirmedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getCoach = `-- name: GetCoach :one
@@ -124,7 +237,7 @@ func (q *Queries) GetCoach(ctx context.Context, userID uuid.UUID) (GetCoachRow, 
 }
 
 const getCoachingSession = `-- name: GetCoachingSession :one
-SELECT id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at FROM coaching_sessions WHERE id = $1
+SELECT id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, confirmation_token, respond_by, confirmed_at FROM coaching_sessions WHERE id = $1
 `
 
 func (q *Queries) GetCoachingSession(ctx context.Context, id uuid.UUID) (CoachingSession, error) {
@@ -141,6 +254,101 @@ func (q *Queries) GetCoachingSession(ctx context.Context, id uuid.UUID) (Coachin
 		&i.CoachNotes,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ConfirmationToken,
+		&i.RespondBy,
+		&i.ConfirmedAt,
+	)
+	return i, err
+}
+
+const getSessionByConfirmationToken = `-- name: GetSessionByConfirmationToken :one
+SELECT id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, confirmation_token, respond_by, confirmed_at FROM coaching_sessions
+WHERE id = $1 AND confirmation_token = $2
+`
+
+type GetSessionByConfirmationTokenParams struct {
+	ID                uuid.UUID `json:"id"`
+	ConfirmationToken *string   `json:"confirmation_token"`
+}
+
+func (q *Queries) GetSessionByConfirmationToken(ctx context.Context, arg GetSessionByConfirmationTokenParams) (CoachingSession, error) {
+	row := q.db.QueryRow(ctx, getSessionByConfirmationToken, arg.ID, arg.ConfirmationToken)
+	var i CoachingSession
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.CoachID,
+		&i.ScheduledTime,
+		&i.DurationMinutes,
+		&i.Status,
+		&i.Topic,
+		&i.CoachNotes,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ConfirmationToken,
+		&i.RespondBy,
+		&i.ConfirmedAt,
+	)
+	return i, err
+}
+
+const getSessionParties = `-- name: GetSessionParties :one
+SELECT s.id, s.user_id, s.coach_id, s.scheduled_time, s.duration_minutes, s.status, s.topic, s.coach_notes, s.created_at, s.updated_at, s.confirmation_token, s.respond_by, s.confirmed_at,
+       u.email        AS user_email,
+       u.display_name AS user_name,
+       cu.email       AS coach_email,
+       cu.display_name AS coach_name,
+       c.timezone     AS coach_timezone
+FROM coaching_sessions s
+JOIN users u ON u.id = s.user_id
+JOIN users cu ON cu.id = s.coach_id
+JOIN coaches c ON c.user_id = s.coach_id
+WHERE s.id = $1
+`
+
+type GetSessionPartiesRow struct {
+	ID                uuid.UUID  `json:"id"`
+	UserID            uuid.UUID  `json:"user_id"`
+	CoachID           uuid.UUID  `json:"coach_id"`
+	ScheduledTime     time.Time  `json:"scheduled_time"`
+	DurationMinutes   int32      `json:"duration_minutes"`
+	Status            string     `json:"status"`
+	Topic             string     `json:"topic"`
+	CoachNotes        string     `json:"coach_notes"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
+	ConfirmationToken *string    `json:"confirmation_token"`
+	RespondBy         *time.Time `json:"respond_by"`
+	ConfirmedAt       *time.Time `json:"confirmed_at"`
+	UserEmail         string     `json:"user_email"`
+	UserName          string     `json:"user_name"`
+	CoachEmail        string     `json:"coach_email"`
+	CoachName         string     `json:"coach_name"`
+	CoachTimezone     string     `json:"coach_timezone"`
+}
+
+func (q *Queries) GetSessionParties(ctx context.Context, id uuid.UUID) (GetSessionPartiesRow, error) {
+	row := q.db.QueryRow(ctx, getSessionParties, id)
+	var i GetSessionPartiesRow
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.CoachID,
+		&i.ScheduledTime,
+		&i.DurationMinutes,
+		&i.Status,
+		&i.Topic,
+		&i.CoachNotes,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ConfirmationToken,
+		&i.RespondBy,
+		&i.ConfirmedAt,
+		&i.UserEmail,
+		&i.UserName,
+		&i.CoachEmail,
+		&i.CoachName,
+		&i.CoachTimezone,
 	)
 	return i, err
 }
@@ -149,7 +357,7 @@ const listBookedSlots = `-- name: ListBookedSlots :many
 SELECT id, scheduled_time, duration_minutes
 FROM coaching_sessions
 WHERE coach_id = $1
-  AND status = 'scheduled'
+  AND status IN ('pending', 'scheduled')
   AND scheduled_time >= $2
   AND scheduled_time < $3
 ORDER BY scheduled_time
@@ -283,7 +491,7 @@ func (q *Queries) ListCoaches(ctx context.Context, arg ListCoachesParams) ([]Lis
 }
 
 const listSessionsForCoach = `-- name: ListSessionsForCoach :many
-SELECT s.id, s.user_id, s.coach_id, s.scheduled_time, s.duration_minutes, s.status, s.topic, s.coach_notes, s.created_at, s.updated_at, u.display_name AS user_name
+SELECT s.id, s.user_id, s.coach_id, s.scheduled_time, s.duration_minutes, s.status, s.topic, s.coach_notes, s.created_at, s.updated_at, s.confirmation_token, s.respond_by, s.confirmed_at, u.display_name AS user_name
 FROM coaching_sessions s
 JOIN users u ON u.id = s.user_id
 WHERE s.coach_id = $1
@@ -299,17 +507,20 @@ type ListSessionsForCoachParams struct {
 }
 
 type ListSessionsForCoachRow struct {
-	ID              uuid.UUID `json:"id"`
-	UserID          uuid.UUID `json:"user_id"`
-	CoachID         uuid.UUID `json:"coach_id"`
-	ScheduledTime   time.Time `json:"scheduled_time"`
-	DurationMinutes int32     `json:"duration_minutes"`
-	Status          string    `json:"status"`
-	Topic           string    `json:"topic"`
-	CoachNotes      string    `json:"coach_notes"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
-	UserName        string    `json:"user_name"`
+	ID                uuid.UUID  `json:"id"`
+	UserID            uuid.UUID  `json:"user_id"`
+	CoachID           uuid.UUID  `json:"coach_id"`
+	ScheduledTime     time.Time  `json:"scheduled_time"`
+	DurationMinutes   int32      `json:"duration_minutes"`
+	Status            string     `json:"status"`
+	Topic             string     `json:"topic"`
+	CoachNotes        string     `json:"coach_notes"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
+	ConfirmationToken *string    `json:"confirmation_token"`
+	RespondBy         *time.Time `json:"respond_by"`
+	ConfirmedAt       *time.Time `json:"confirmed_at"`
+	UserName          string     `json:"user_name"`
 }
 
 func (q *Queries) ListSessionsForCoach(ctx context.Context, arg ListSessionsForCoachParams) ([]ListSessionsForCoachRow, error) {
@@ -332,6 +543,9 @@ func (q *Queries) ListSessionsForCoach(ctx context.Context, arg ListSessionsForC
 			&i.CoachNotes,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ConfirmationToken,
+			&i.RespondBy,
+			&i.ConfirmedAt,
 			&i.UserName,
 		); err != nil {
 			return nil, err
@@ -345,7 +559,7 @@ func (q *Queries) ListSessionsForCoach(ctx context.Context, arg ListSessionsForC
 }
 
 const listSessionsForUser = `-- name: ListSessionsForUser :many
-SELECT s.id, s.user_id, s.coach_id, s.scheduled_time, s.duration_minutes, s.status, s.topic, s.coach_notes, s.created_at, s.updated_at, u.display_name AS coach_name
+SELECT s.id, s.user_id, s.coach_id, s.scheduled_time, s.duration_minutes, s.status, s.topic, s.coach_notes, s.created_at, s.updated_at, s.confirmation_token, s.respond_by, s.confirmed_at, u.display_name AS coach_name
 FROM coaching_sessions s
 JOIN users u ON u.id = s.coach_id
 WHERE s.user_id = $1
@@ -359,17 +573,20 @@ type ListSessionsForUserParams struct {
 }
 
 type ListSessionsForUserRow struct {
-	ID              uuid.UUID `json:"id"`
-	UserID          uuid.UUID `json:"user_id"`
-	CoachID         uuid.UUID `json:"coach_id"`
-	ScheduledTime   time.Time `json:"scheduled_time"`
-	DurationMinutes int32     `json:"duration_minutes"`
-	Status          string    `json:"status"`
-	Topic           string    `json:"topic"`
-	CoachNotes      string    `json:"coach_notes"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
-	CoachName       string    `json:"coach_name"`
+	ID                uuid.UUID  `json:"id"`
+	UserID            uuid.UUID  `json:"user_id"`
+	CoachID           uuid.UUID  `json:"coach_id"`
+	ScheduledTime     time.Time  `json:"scheduled_time"`
+	DurationMinutes   int32      `json:"duration_minutes"`
+	Status            string     `json:"status"`
+	Topic             string     `json:"topic"`
+	CoachNotes        string     `json:"coach_notes"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
+	ConfirmationToken *string    `json:"confirmation_token"`
+	RespondBy         *time.Time `json:"respond_by"`
+	ConfirmedAt       *time.Time `json:"confirmed_at"`
+	CoachName         string     `json:"coach_name"`
 }
 
 func (q *Queries) ListSessionsForUser(ctx context.Context, arg ListSessionsForUserParams) ([]ListSessionsForUserRow, error) {
@@ -392,6 +609,9 @@ func (q *Queries) ListSessionsForUser(ctx context.Context, arg ListSessionsForUs
 			&i.CoachNotes,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ConfirmationToken,
+			&i.RespondBy,
+			&i.ConfirmedAt,
 			&i.CoachName,
 		); err != nil {
 			return nil, err
@@ -415,18 +635,32 @@ func (q *Queries) ReplaceCoachAvailability(ctx context.Context, coachID uuid.UUI
 
 const rescheduleSession = `-- name: RescheduleSession :one
 UPDATE coaching_sessions
-SET scheduled_time = $2, updated_at = now()
-WHERE id = $1 AND status = 'scheduled'
-RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at
+SET scheduled_time = $2,
+    status = $3,
+    confirmation_token = $4,
+    respond_by = $5,
+    confirmed_at = CASE WHEN $3 = 'scheduled' THEN confirmed_at ELSE NULL END,
+    updated_at = now()
+WHERE id = $1 AND status IN ('pending', 'scheduled')
+RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, confirmation_token, respond_by, confirmed_at
 `
 
 type RescheduleSessionParams struct {
-	ID            uuid.UUID `json:"id"`
-	ScheduledTime time.Time `json:"scheduled_time"`
+	ID                uuid.UUID  `json:"id"`
+	ScheduledTime     time.Time  `json:"scheduled_time"`
+	Status            string     `json:"status"`
+	ConfirmationToken *string    `json:"confirmation_token"`
+	RespondBy         *time.Time `json:"respond_by"`
 }
 
 func (q *Queries) RescheduleSession(ctx context.Context, arg RescheduleSessionParams) (CoachingSession, error) {
-	row := q.db.QueryRow(ctx, rescheduleSession, arg.ID, arg.ScheduledTime)
+	row := q.db.QueryRow(ctx, rescheduleSession,
+		arg.ID,
+		arg.ScheduledTime,
+		arg.Status,
+		arg.ConfirmationToken,
+		arg.RespondBy,
+	)
 	var i CoachingSession
 	err := row.Scan(
 		&i.ID,
@@ -439,6 +673,9 @@ func (q *Queries) RescheduleSession(ctx context.Context, arg RescheduleSessionPa
 		&i.CoachNotes,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ConfirmationToken,
+		&i.RespondBy,
+		&i.ConfirmedAt,
 	)
 	return i, err
 }
@@ -447,7 +684,7 @@ const updateSessionNotes = `-- name: UpdateSessionNotes :one
 UPDATE coaching_sessions
 SET coach_notes = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at
+RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, confirmation_token, respond_by, confirmed_at
 `
 
 type UpdateSessionNotesParams struct {
@@ -469,6 +706,9 @@ func (q *Queries) UpdateSessionNotes(ctx context.Context, arg UpdateSessionNotes
 		&i.CoachNotes,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ConfirmationToken,
+		&i.RespondBy,
+		&i.ConfirmedAt,
 	)
 	return i, err
 }
@@ -477,7 +717,7 @@ const updateSessionStatus = `-- name: UpdateSessionStatus :one
 UPDATE coaching_sessions
 SET status = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at
+RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, confirmation_token, respond_by, confirmed_at
 `
 
 type UpdateSessionStatusParams struct {
@@ -499,6 +739,9 @@ func (q *Queries) UpdateSessionStatus(ctx context.Context, arg UpdateSessionStat
 		&i.CoachNotes,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ConfirmationToken,
+		&i.RespondBy,
+		&i.ConfirmedAt,
 	)
 	return i, err
 }

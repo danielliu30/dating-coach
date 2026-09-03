@@ -40,12 +40,56 @@ WHERE coach_id = $1
 ORDER BY weekday, start_minute;
 
 -- name: CreateCoachingSession :one
-INSERT INTO coaching_sessions (user_id, coach_id, scheduled_time, duration_minutes, topic)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO coaching_sessions (user_id, coach_id, scheduled_time, duration_minutes, topic, status, confirmation_token, respond_by)
+VALUES ($1, $2, $3, $4, $5, 'pending', $6, $7)
 RETURNING *;
 
 -- name: GetCoachingSession :one
 SELECT * FROM coaching_sessions WHERE id = $1;
+
+-- name: GetSessionParties :one
+SELECT s.*,
+       u.email        AS user_email,
+       u.display_name AS user_name,
+       cu.email       AS coach_email,
+       cu.display_name AS coach_name,
+       c.timezone     AS coach_timezone
+FROM coaching_sessions s
+JOIN users u ON u.id = s.user_id
+JOIN users cu ON cu.id = s.coach_id
+JOIN coaches c ON c.user_id = s.coach_id
+WHERE s.id = $1;
+
+-- name: GetSessionByConfirmationToken :one
+SELECT * FROM coaching_sessions
+WHERE id = $1 AND confirmation_token = $2;
+
+-- name: ConfirmSession :one
+UPDATE coaching_sessions
+SET status = 'scheduled',
+    confirmed_at = now(),
+    confirmation_token = NULL,
+    respond_by = NULL,
+    updated_at = now()
+WHERE id = $1 AND status = 'pending'
+RETURNING *;
+
+-- name: DeclineSession :one
+UPDATE coaching_sessions
+SET status = 'declined',
+    confirmation_token = NULL,
+    respond_by = NULL,
+    updated_at = now()
+WHERE id = $1 AND status = 'pending'
+RETURNING *;
+
+-- name: ExpirePendingSessions :many
+UPDATE coaching_sessions
+SET status = 'expired',
+    confirmation_token = NULL,
+    updated_at = now()
+WHERE status = 'pending' AND respond_by < now()
+RETURNING *;
 
 -- name: ListSessionsForUser :many
 SELECT s.*, u.display_name AS coach_name
@@ -68,7 +112,7 @@ ORDER BY s.scheduled_time;
 SELECT id, scheduled_time, duration_minutes
 FROM coaching_sessions
 WHERE coach_id = $1
-  AND status = 'scheduled'
+  AND status IN ('pending', 'scheduled')
   AND scheduled_time >= $2
   AND scheduled_time < $3
 ORDER BY scheduled_time;
@@ -81,8 +125,13 @@ RETURNING *;
 
 -- name: RescheduleSession :one
 UPDATE coaching_sessions
-SET scheduled_time = $2, updated_at = now()
-WHERE id = $1 AND status = 'scheduled'
+SET scheduled_time = $2,
+    status = $3,
+    confirmation_token = $4,
+    respond_by = $5,
+    confirmed_at = CASE WHEN $3 = 'scheduled' THEN confirmed_at ELSE NULL END,
+    updated_at = now()
+WHERE id = $1 AND status IN ('pending', 'scheduled')
 RETURNING *;
 
 -- name: UpdateSessionNotes :one

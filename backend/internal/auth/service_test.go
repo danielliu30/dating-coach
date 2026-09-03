@@ -13,6 +13,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/danielliu30/dating-coach/backend/internal/account"
+	"github.com/danielliu30/dating-coach/backend/internal/notify"
 	"github.com/danielliu30/dating-coach/backend/internal/store/db"
 )
 
@@ -48,6 +49,9 @@ type silentNotifier struct{}
 
 // Email discards the message and reports success.
 func (silentNotifier) Email(context.Context, string, string, string) error { return nil }
+
+// Send discards the message.
+func (silentNotifier) Send(context.Context, notify.Message) error { return nil }
 
 // Push discards the notification and reports success.
 func (silentNotifier) Push(context.Context, string, string, string) error { return nil }

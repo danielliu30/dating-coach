@@ -111,21 +111,6 @@ func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (User, error) {
 	return i, err
 }
 
-const markUserDeleted = `-- name: MarkUserDeleted :execrows
-UPDATE users
-SET deleted_at = COALESCE(deleted_at, now()),
-    updated_at = now()
-WHERE id = $1
-`
-
-func (q *Queries) MarkUserDeleted(ctx context.Context, id uuid.UUID) (int64, error) {
-	result, err := q.db.Exec(ctx, markUserDeleted, id)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
 const setVerificationToken = `-- name: SetVerificationToken :exec
 UPDATE users
 SET verification_token = $2,

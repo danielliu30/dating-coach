@@ -66,6 +66,18 @@ Top tab labels may be truncated ("Coac…", "Analy…") at ~1024px — cosmetic,
   `GET /coaching/coaches/{id}/slots?...&exclude_session_id=<session>`, so the session's own time is
   offered and rescheduling onto it returns 200 (no 409). The reschedule chip list appears capped at
   ~8 slots, so a desired later time may not be reachable there.
+- **Coach confirmation of bookings** (migration `000004_session_confirmation`): a new booking is
+  `pending` and still holds the slot (a second client booking the same time gets 409). The coach is
+  emailed confirm/decline links; without SMTP the worker logs the email instead, so read it from
+  `select to_email, subject, body from email_outbox order by created_at desc limit 3` (the token is only
+  in the link, its sha256 is in `coaching_sessions.confirmation_token`). Answer with
+  `POST /api/v1/booking/respond {session_id, token, action: confirm|decline}` (no bearer) or
+  `POST /api/v1/coach/sessions/{id}/respond {action}` as the coach. Deadline is `respond_by`
+  (24h, capped at 2h before start); to see expiry, `update coaching_sessions set respond_by = now() -
+  interval '1m' where id = …` and wait for the worker sweep (≤1 min) → status `expired`, slot free,
+  client emailed. A client-initiated reschedule drops a `scheduled` session back to `pending` with a
+  fresh token; a coach-initiated one keeps it `scheduled`. Statuses: `pending, scheduled, declined,
+  expired, completed, cancelled, no_show`.
 - **Chat offline queue/replay**: `docker compose stop api` (banner → "Reconnecting…"), send a message
   (nothing renders while offline), `docker compose start api`; the message replays once — verify with
   `select count(*) from chat_messages where body='…'` = 1.
@@ -99,7 +111,7 @@ Top tab labels may be truncated ("Coac…", "Analy…") at ~1024px — cosmetic,
 ## Auth: short-lived access tokens + refresh tokens
 - Access tokens are signature-verified JWTs (`JWT_TTL`, default 15m); refresh tokens live in
   `refresh_tokens` as sha256 hashes (`REFRESH_TOKEN_TTL`, default 720h). Migration order is
-  `000003_deletion_outbox` then `000004_refresh_tokens`; a fresh DB must reach `schema_migrations`
+  `000003_deletion_outbox` then `000004_session_confirmation`; a fresh DB must reach `schema_migrations`
   version 4 (`docker compose down -v && docker compose up -d --build`).
 - Make expiry observable: `JWT_TTL=30s docker compose up -d --build api` (rebuild/restart api only),
   then sign in, idle >35 s and press "Refresh profile". Expect `GET /auth/me 401` →
