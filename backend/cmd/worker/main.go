@@ -15,8 +15,10 @@ import (
 	"github.com/danielliu30/dating-coach/backend/internal/account"
 	"github.com/danielliu30/dating-coach/backend/internal/analysis"
 	"github.com/danielliu30/dating-coach/backend/internal/auth"
+	"github.com/danielliu30/dating-coach/backend/internal/coaching"
 	"github.com/danielliu30/dating-coach/backend/internal/config"
 	"github.com/danielliu30/dating-coach/backend/internal/notify"
+	"github.com/danielliu30/dating-coach/backend/internal/payments"
 	"github.com/danielliu30/dating-coach/backend/internal/store"
 	"github.com/danielliu30/dating-coach/backend/internal/store/db"
 )
@@ -46,11 +48,17 @@ func run() error {
 	}
 	defer pg.Close()
 
+	notifier := notify.New(cfg)
 	worker := analysis.NewWorker(
 		pg.Queries,
 		analysis.NewMLClient(cfg.MLServiceURL, cfg.MLServiceTimeout),
-		notify.New(cfg),
+		notifier,
 	)
+	provider, err := payments.New(cfg.PaymentsEnabled)
+	if err != nil {
+		return err
+	}
+	bookings := coaching.NewService(pg.Pool, pg.Queries, provider, cfg.PaymentHoldTTL, cfg.PublicAppURL, cfg.MailFrom)
 	// The worker revokes the sessions of the accounts it deletes, so it needs
 	// the same denylist the API writes.
 	rdb, err := store.OpenRedis(ctx, cfg.RedisURL)
@@ -69,7 +77,7 @@ func run() error {
 	)
 
 	var wg sync.WaitGroup
-	wg.Add(4)
+	wg.Add(7)
 	go func() {
 		defer wg.Done()
 		consume(ctx, "analysis", func(ctx context.Context) error {
@@ -94,6 +102,33 @@ func run() error {
 			return relayDeletions(ctx, cfg.RabbitMQURL, cfg.AccountDeletionQueue, pg.Queries)
 		})
 	}()
+	go func() {
+		defer wg.Done()
+		consume(ctx, "email outbox relay", func(ctx context.Context) error {
+			return notify.NewRelay(pg.Queries, notifier).Run(ctx)
+		})
+	}()
+	go func() {
+		defer wg.Done()
+		consume(ctx, "email outbox monitor", func(ctx context.Context) error {
+			return notify.NewRelay(pg.Queries, notifier).WatchExhausted(ctx, cfg.DeadLetterAlertPeriod)
+		})
+	}()
+	go func() {
+		defer wg.Done()
+		consume(ctx, "booking expiry", func(ctx context.Context) error {
+			return expireBookings(ctx, bookings)
+		})
+	}()
+	if provider.Enabled() {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			consume(ctx, "payment sweep", func(ctx context.Context) error {
+				return sweepPayments(ctx, bookings)
+			})
+		}()
+	}
 	wg.Wait()
 	return nil
 }
@@ -181,6 +216,61 @@ func relayDeletions(ctx context.Context, url, name string, queries *db.Queries) 
 	}
 	defer publisher.Close()
 	return account.NewRelay(queries, publisher).Run(ctx)
+}
+
+// bookingExpiryInterval is how often unanswered session requests are checked
+// against their deadline; it bounds how long an expired request keeps its slot.
+const bookingExpiryInterval = time.Minute
+
+// expireBookings releases session requests whose coach did not respond in time,
+// every bookingExpiryInterval until ctx ends. A failed pass is logged and
+// retried on the next tick rather than returned.
+func expireBookings(ctx context.Context, svc *coaching.Service) error {
+	ticker := time.NewTicker(bookingExpiryInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			n, err := svc.ExpirePending(ctx)
+			if err != nil {
+				slog.Error("expire session requests", "error", err)
+				continue
+			}
+			if n > 0 {
+				slog.Info("expired unanswered session requests", "count", n)
+			}
+		}
+	}
+}
+
+// sweepPayments releases lapsed payment holds and retries the provider
+// clean-up owed by declined, expired and cancelled paid bookings, every
+// bookingExpiryInterval until ctx ends. A failed pass is logged and retried on
+// the next tick rather than returned.
+func sweepPayments(ctx context.Context, svc *coaching.Service) error {
+	ticker := time.NewTicker(bookingExpiryInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			res, err := svc.SweepPayments(ctx, time.Now())
+			if err != nil {
+				slog.Error("sweep payments", "error", err)
+			}
+			if res != (coaching.SweepResult{}) {
+				slog.Info("swept payments",
+					"holds_released", res.HoldsReleased,
+					"checkouts_expired", res.CheckoutsExpired,
+					"authorizations_released", res.AuthorizationsFreed,
+					"refunds_issued", res.RefundsIssued,
+				)
+			}
+		}
+	}
 }
 
 // runDeletionConsumer holds one broker connection for as long as it stays

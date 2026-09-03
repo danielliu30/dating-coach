@@ -100,7 +100,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	coachingHandler := coaching.NewHandler(coaching.NewService(pg.Pool, pg.Queries, provider, cfg.PaymentHoldTTL, cfg.PublicAppURL))
+	coachingHandler := coaching.NewHandler(coaching.NewService(pg.Pool, pg.Queries, provider, cfg.PaymentHoldTTL, cfg.PublicAppURL, cfg.MailFrom))
 	hub := chat.NewHub(rdb)
 	// Sockets authenticated before a deletion would otherwise keep running
 	// until their next scheduled re-check; this closes them as it happens.
@@ -164,7 +164,7 @@ func newRouter(cfg *config.Config, verifyToken, active func(http.Handler) http.H
 	router.Use(middleware.RequestID, middleware.RealIP, middleware.Recoverer, middleware.Logger)
 	router.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   cfg.CORSOrigins,
-		AllowedMethods:   []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodOptions},
+		AllowedMethods:   []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodOptions},
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type"},
 		AllowCredentials: true,
 		MaxAge:           300,
@@ -176,6 +176,7 @@ func newRouter(cfg *config.Config, verifyToken, active func(http.Handler) http.H
 
 	router.Route("/api/v1", func(v1 chi.Router) {
 		v1.Mount("/auth", h.auth.Routes(verifyToken, active))
+		v1.Mount("/booking", h.coaching.PublicRoutes())
 		v1.Group(func(private chi.Router) {
 			private.Use(authenticate, auth.RequireScope(auth.ScopeSession))
 			private.Mount("/coaching", h.coaching.Routes())

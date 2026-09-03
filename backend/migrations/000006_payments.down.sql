@@ -12,10 +12,10 @@ ALTER TABLE coaching_sessions
     ADD CONSTRAINT coaching_sessions_no_overlap EXCLUDE USING gist (
         coach_id WITH =,
         session_range(scheduled_time, duration_minutes) WITH &&
-    ) WHERE (status = 'scheduled'),
+    ) WHERE (status IN ('pending', 'scheduled')),
     DROP CONSTRAINT coaching_sessions_status_check,
     ADD CONSTRAINT coaching_sessions_status_check
-        CHECK (status IN ('scheduled', 'completed', 'cancelled', 'no_show')),
+        CHECK (status IN ('pending', 'scheduled', 'declined', 'expired', 'completed', 'cancelled', 'no_show')),
     DROP CONSTRAINT coaching_sessions_amount_check,
     DROP CONSTRAINT coaching_sessions_payment_status_check,
     DROP COLUMN hold_expires_at,

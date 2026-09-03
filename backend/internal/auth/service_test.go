@@ -13,6 +13,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/danielliu30/dating-coach/backend/internal/account"
+	"github.com/danielliu30/dating-coach/backend/internal/notify"
 	"github.com/danielliu30/dating-coach/backend/internal/store/db"
 )
 
@@ -48,6 +49,9 @@ type silentNotifier struct{}
 
 // Email discards the message and reports success.
 func (silentNotifier) Email(context.Context, string, string, string) error { return nil }
+
+// Send discards the message.
+func (silentNotifier) Send(context.Context, notify.Message) error { return nil }
 
 // Push discards the notification and reports success.
 func (silentNotifier) Push(context.Context, string, string, string) error { return nil }
@@ -262,5 +266,41 @@ func assertTokenScope(t *testing.T, issuer *TokenIssuer, raw, scope string, ttl 
 	}
 	if until := time.Until(claims.ExpiresAt.Time); until > ttl || until < ttl-time.Minute {
 		t.Fatalf("token expires in %s, want ~%s", until, ttl)
+	}
+}
+
+// TestNormaliseChoicesCanonicalisesAndRejectsUnknown pins the shape of a stored
+// list: case and whitespace are forgiven, duplicates collapse, the result is in
+// vocabulary order, and anything outside the vocabulary is refused.
+func TestNormaliseChoicesCanonicalisesAndRejectsUnknown(t *testing.T) {
+	got, err := normaliseChoices("dating_styles", []string{" Hinge", "in_person", "hinge", "", "TINDER"}, DatingStyles)
+	if err != nil {
+		t.Fatalf("normalise: %v", err)
+	}
+	want := []string{"in_person", "tinder", "hinge"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+	}
+	if _, err := normaliseChoices("dating_styles", []string{"carrier_pigeon"}, DatingStyles); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("unknown value: got %v, want ErrInvalidInput", err)
+	}
+}
+
+// TestUpdateDatingProfileRejectsPhaseOnBothSides pins that a phase cannot be
+// both a strength and something being worked on; the check runs before any
+// query, so a service without a database is enough.
+func TestUpdateDatingProfileRejectsPhaseOnBothSides(t *testing.T) {
+	svc := &Service{}
+	_, err := svc.UpdateDatingProfile(context.Background(), Principal{}, DatingProfileInput{
+		PhasesStrong:    []string{"flirting"},
+		PhasesWorkingOn: []string{"Flirting"},
+	})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("got %v, want ErrInvalidInput", err)
 	}
 }

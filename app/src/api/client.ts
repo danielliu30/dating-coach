@@ -9,6 +9,7 @@ import type {
   CoachingConfig,
   CoachingSession,
   Conversation,
+  DatingProfileInput,
   Outcome,
   Profile,
   Role,
@@ -102,6 +103,15 @@ export class ApiClient {
 
   me() {
     return this.request<Profile>('GET', '/auth/me');
+  }
+
+  /**
+   * Replaces the authenticated account's dating styles and phases wholesale
+   * and resolves with the updated profile. Rejects with a 400 ApiError when a
+   * value is outside the vocabulary or a phase is listed on both sides.
+   */
+  updateDatingProfile(input: DatingProfileInput) {
+    return this.request<Profile>('PATCH', '/auth/me', input);
   }
 
   /**

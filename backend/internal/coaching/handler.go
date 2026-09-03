@@ -46,6 +46,7 @@ func (h *Handler) CoachRoutes() http.Handler {
 	r.Put("/profile", h.upsertProfile)
 	r.Put("/availability", h.setAvailability)
 	r.Get("/sessions", h.listCoachSessions)
+	r.Post("/sessions/{sessionID}/respond", h.respondAsCoach)
 	r.Post("/sessions/{sessionID}/status", h.setSessionStatus)
 	r.Post("/sessions/{sessionID}/notes", h.setSessionNotes)
 	return r
@@ -55,6 +56,66 @@ func (h *Handler) CoachRoutes() http.Handler {
 // server is running so the two cannot disagree about whether to collect payment.
 func (h *Handler) config(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{"payments_enabled": h.svc.PaymentsEnabled()})
+}
+
+// PublicRoutes mounts the endpoints reached from links in emails, which carry
+// their own single-use token instead of a bearer token.
+func (h *Handler) PublicRoutes() http.Handler {
+	r := chi.NewRouter()
+	r.Post("/respond", h.respondWithToken)
+	return r
+}
+
+// respondWithToken handles POST /booking/respond, the target of the confirm and
+// decline links in the coach's email: {session_id, token, action}.
+func (h *Handler) respondWithToken(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		SessionID string `json:"session_id"`
+		Token     string `json:"token"`
+		Action    string `json:"action"`
+	}
+	if err := httpx.Decode(r, &in); err != nil {
+		httpx.Error(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	sessionID, err := uuid.Parse(in.SessionID)
+	if err != nil {
+		httpx.Error(w, http.StatusBadRequest, "session_id must be a uuid")
+		return
+	}
+	session, err := h.svc.RespondWithToken(r.Context(), sessionID, in.Token, in.Action)
+	if err != nil {
+		respondErr(w, err, "could not respond to request")
+		return
+	}
+	httpx.JSON(w, http.StatusOK, session)
+}
+
+// respondAsCoach handles POST /coach/sessions/{sessionID}/respond, the
+// dashboard's confirm and decline buttons: {action}.
+func (h *Handler) respondAsCoach(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFrom(r.Context())
+	if !ok {
+		httpx.Error(w, http.StatusUnauthorized, "unauthenticated")
+		return
+	}
+	sessionID, ok := pathUUID(w, r, "sessionID")
+	if !ok {
+		return
+	}
+	var in struct {
+		Action string `json:"action"`
+	}
+	if err := httpx.Decode(r, &in); err != nil {
+		httpx.Error(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	session, err := h.svc.RespondAsCoach(r.Context(), sessionID, principal.UserID, in.Action)
+	if err != nil {
+		respondErr(w, err, "could not respond to request")
+		return
+	}
+	httpx.JSON(w, http.StatusOK, session)
 }
 
 // listCoaches handles GET /coaches, hiding coaches that are not accepting
@@ -386,6 +447,8 @@ func respondErr(w http.ResponseWriter, err error, fallback string) {
 	case errors.Is(err, ErrPayment):
 		slog.Error("start payment", "error", err)
 		httpx.Error(w, http.StatusBadGateway, ErrPayment.Error())
+	case errors.Is(err, ErrExpired):
+		httpx.Error(w, http.StatusGone, err.Error())
 	default:
 		slog.Error(fallback, "error", err)
 		httpx.Error(w, http.StatusInternalServerError, fallback)

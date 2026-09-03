@@ -8,6 +8,42 @@ export interface Profile {
   display_name: string;
   role: Role;
   email_verified: boolean;
+  dating_styles: DatingStyle[];
+  phases_strong: DatingPhase[];
+  phases_working_on: DatingPhase[];
+}
+
+// Vocabularies mirror auth.DatingStyles / auth.DatingPhases in the backend.
+export const DATING_STYLES = [
+  'in_person',
+  'tinder',
+  'hinge',
+  'bumble',
+  'coffee_meets_bagel',
+  'match',
+  'okcupid',
+  'feeld',
+  'speed_dating',
+  'friends_intro',
+] as const;
+export type DatingStyle = (typeof DATING_STYLES)[number];
+
+export const DATING_PHASES = [
+  'opening',
+  'first_messages',
+  'building_rapport',
+  'flirting',
+  'asking_out',
+  'first_date',
+  'follow_up',
+  'defining_relationship',
+] as const;
+export type DatingPhase = (typeof DATING_PHASES)[number];
+
+export interface DatingProfileInput {
+  dating_styles: DatingStyle[];
+  phases_strong: DatingPhase[];
+  phases_working_on: DatingPhase[];
 }
 
 export interface AuthSession {
