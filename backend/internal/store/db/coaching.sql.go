@@ -43,12 +43,54 @@ func (q *Queries) AddCoachAvailability(ctx context.Context, arg AddCoachAvailabi
 	return i, err
 }
 
+const attachCheckout = `-- name: AttachCheckout :one
+UPDATE coaching_sessions
+SET payment_ref = $2,
+    payment_status = CASE WHEN status = 'pending_payment' THEN payment_status ELSE 'expiring' END,
+    updated_at = now()
+WHERE id = $1
+RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, payment_status, amount_cents, currency, payment_ref, hold_expires_at
+`
+
+type AttachCheckoutParams struct {
+	ID         uuid.UUID `json:"id"`
+	PaymentRef *string   `json:"payment_ref"`
+}
+
+// Stores the provider checkout on the session. If the hold has already been
+// released meanwhile, the checkout is recorded as owed clean-up ('expiring')
+// so the sweeper closes it; the caller must not hand out its URL.
+func (q *Queries) AttachCheckout(ctx context.Context, arg AttachCheckoutParams) (CoachingSession, error) {
+	row := q.db.QueryRow(ctx, attachCheckout, arg.ID, arg.PaymentRef)
+	var i CoachingSession
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.CoachID,
+		&i.ScheduledTime,
+		&i.DurationMinutes,
+		&i.Status,
+		&i.Topic,
+		&i.CoachNotes,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.PaymentStatus,
+		&i.AmountCents,
+		&i.Currency,
+		&i.PaymentRef,
+		&i.HoldExpiresAt,
+	)
+	return i, err
+}
+
 const cancelPendingPaymentSession = `-- name: CancelPendingPaymentSession :execrows
 UPDATE coaching_sessions
 SET status = 'cancelled', payment_status = 'failed', updated_at = now()
 WHERE id = $1 AND status = 'pending_payment'
 `
 
+// For a hold whose checkout is already closed (provider expired it, or it
+// was never created).
 func (q *Queries) CancelPendingPaymentSession(ctx context.Context, id uuid.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, cancelPendingPaymentSession, id)
 	if err != nil {
@@ -715,6 +757,40 @@ func (q *Queries) ReinstatePaidSession(ctx context.Context, id uuid.UUID) (int64
 	return result.RowsAffected(), nil
 }
 
+const releasePendingPaymentSession = `-- name: ReleasePendingPaymentSession :one
+UPDATE coaching_sessions
+SET status = 'cancelled',
+    payment_status = CASE WHEN payment_ref IS NULL THEN 'failed' ELSE 'expiring' END,
+    updated_at = now()
+WHERE id = $1 AND status = 'pending_payment'
+RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, payment_status, amount_cents, currency, payment_ref, hold_expires_at
+`
+
+// For a hold abandoned by a participant while its checkout may still be open:
+// the checkout becomes owed clean-up for the sweeper.
+func (q *Queries) ReleasePendingPaymentSession(ctx context.Context, id uuid.UUID) (CoachingSession, error) {
+	row := q.db.QueryRow(ctx, releasePendingPaymentSession, id)
+	var i CoachingSession
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.CoachID,
+		&i.ScheduledTime,
+		&i.DurationMinutes,
+		&i.Status,
+		&i.Topic,
+		&i.CoachNotes,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.PaymentStatus,
+		&i.AmountCents,
+		&i.Currency,
+		&i.PaymentRef,
+		&i.HoldExpiresAt,
+	)
+	return i, err
+}
+
 const replaceCoachAvailability = `-- name: ReplaceCoachAvailability :exec
 DELETE FROM coach_availability WHERE coach_id = $1
 `
@@ -738,41 +814,6 @@ type RescheduleSessionParams struct {
 
 func (q *Queries) RescheduleSession(ctx context.Context, arg RescheduleSessionParams) (CoachingSession, error) {
 	row := q.db.QueryRow(ctx, rescheduleSession, arg.ID, arg.ScheduledTime)
-	var i CoachingSession
-	err := row.Scan(
-		&i.ID,
-		&i.UserID,
-		&i.CoachID,
-		&i.ScheduledTime,
-		&i.DurationMinutes,
-		&i.Status,
-		&i.Topic,
-		&i.CoachNotes,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.PaymentStatus,
-		&i.AmountCents,
-		&i.Currency,
-		&i.PaymentRef,
-		&i.HoldExpiresAt,
-	)
-	return i, err
-}
-
-const setSessionPaymentRef = `-- name: SetSessionPaymentRef :one
-UPDATE coaching_sessions
-SET payment_ref = $2, updated_at = now()
-WHERE id = $1
-RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, payment_status, amount_cents, currency, payment_ref, hold_expires_at
-`
-
-type SetSessionPaymentRefParams struct {
-	ID         uuid.UUID `json:"id"`
-	PaymentRef *string   `json:"payment_ref"`
-}
-
-func (q *Queries) SetSessionPaymentRef(ctx context.Context, arg SetSessionPaymentRefParams) (CoachingSession, error) {
-	row := q.db.QueryRow(ctx, setSessionPaymentRef, arg.ID, arg.PaymentRef)
 	var i CoachingSession
 	err := row.Scan(
 		&i.ID,

@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/google/uuid"
@@ -25,6 +26,10 @@ var (
 	ErrUnavailable  = errors.New("coach is not available then")
 	ErrPayment      = errors.New("payment could not be started")
 )
+
+// maxHourlyRateCents keeps priceCents inside amount_cents (int32) for the
+// longest bookable session.
+const maxHourlyRateCents = math.MaxInt32 / (maxSessionMinutes / 60)
 
 const (
 	defaultSessionMinutes = 45
@@ -217,6 +222,9 @@ func (s *Service) UpsertProfile(ctx context.Context, coachID uuid.UUID, in Upser
 	}
 	if _, err := time.LoadLocation(in.Timezone); err != nil {
 		return Coach{}, fmt.Errorf("%w: unknown timezone %q", ErrInvalidInput, in.Timezone)
+	}
+	if in.HourlyRateCents < 0 || in.HourlyRateCents > maxHourlyRateCents {
+		return Coach{}, fmt.Errorf("%w: hourly_rate_cents must be between 0 and %d", ErrInvalidInput, maxHourlyRateCents)
 	}
 	if in.Specialties == nil {
 		in.Specialties = []string{}
@@ -455,6 +463,9 @@ func (s *Service) bookPaid(ctx context.Context, userID, coachID uuid.UUID, sched
 		return Session{}, fmt.Errorf("get user: %w", err)
 	}
 	amount := priceCents(coach.HourlyRateCents, duration)
+	if amount < 0 || amount > math.MaxInt32 {
+		return Session{}, fmt.Errorf("%w: coach rate yields an unpayable amount", ErrInvalidInput)
+	}
 	holdUntil := time.Now().Add(s.holdTTL)
 
 	session, err := s.queries.CreatePendingPaymentSession(ctx, db.CreatePendingPaymentSessionParams{
@@ -490,7 +501,7 @@ func (s *Service) bookPaid(ctx context.Context, userID, coachID uuid.UUID, sched
 		}
 		return Session{}, fmt.Errorf("%w: %v", ErrPayment, err)
 	}
-	session, err = s.queries.SetSessionPaymentRef(ctx, db.SetSessionPaymentRefParams{ID: session.ID, PaymentRef: &checkout.Ref})
+	session, err = s.queries.AttachCheckout(ctx, db.AttachCheckoutParams{ID: session.ID, PaymentRef: &checkout.Ref})
 	if err != nil {
 		err = fmt.Errorf("store payment ref: %w", err)
 		if expireErr := s.payments.ExpireCheckout(ctx, checkout.Ref); expireErr != nil {
@@ -500,6 +511,15 @@ func (s *Service) bookPaid(ctx context.Context, userID, coachID uuid.UUID, sched
 			err = fmt.Errorf("%w; release hold: %v", err, cancelErr)
 		}
 		return Session{}, err
+	}
+	if session.Status != "pending_payment" {
+		// The hold lapsed (or was cancelled) while the checkout was being
+		// created; it is now recorded as 'expiring', so the sweeper will close
+		// it even if this immediate attempt fails.
+		if err := s.payments.ExpireCheckout(ctx, checkout.Ref); err == nil {
+			_, _ = s.queries.MarkCheckoutExpired(ctx, session.ID)
+		}
+		return Session{}, fmt.Errorf("%w: hold lapsed before checkout was ready", ErrPayment)
 	}
 	out := sessionOf(session, "")
 	out.CheckoutURL = checkout.URL
@@ -628,7 +648,7 @@ func (s *Service) SweepPayments(ctx context.Context, now time.Time) (SweepResult
 		return res, fmt.Errorf("list refunds due: %w", err)
 	}
 	for _, session := range refunds {
-		if err := s.payments.Refund(ctx, *session.PaymentRef); err != nil {
+		if err := s.payments.Refund(ctx, *session.PaymentRef, session.ID.String()); err != nil {
 			return res, fmt.Errorf("refund %s: %w", *session.PaymentRef, err)
 		}
 		if _, err := s.queries.MarkSessionRefunded(ctx, session.ID); err != nil {
@@ -778,8 +798,21 @@ func (s *Service) SetStatus(ctx context.Context, sessionID, actorID uuid.UUID, s
 	}
 	// Only a confirmed payment moves a hold forward; participants may just
 	// abandon it.
-	if session.Status == "pending_payment" && status != "cancelled" {
-		return Session{}, fmt.Errorf("%w: session is awaiting payment", ErrInvalidInput)
+	if session.Status == "pending_payment" {
+		if status != "cancelled" {
+			return Session{}, fmt.Errorf("%w: session is awaiting payment", ErrInvalidInput)
+		}
+		// Releasing the hold leaves its checkout open at the provider; the row
+		// is marked 'expiring' so SweepPayments closes it, and a payment that
+		// still lands is handled by ApplyPaymentEvent's reinstate-or-refund.
+		updated, err := s.queries.ReleasePendingPaymentSession(ctx, sessionID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return s.SetStatus(ctx, sessionID, actorID, status)
+			}
+			return Session{}, fmt.Errorf("release hold: %w", err)
+		}
+		return sessionOf(updated, ""), nil
 	}
 	updated, err := s.queries.UpdateSessionStatus(ctx, db.UpdateSessionStatusParams{ID: sessionID, Status: status})
 	if err != nil {

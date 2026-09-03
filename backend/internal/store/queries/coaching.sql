@@ -50,9 +50,14 @@ INSERT INTO coaching_sessions (user_id, coach_id, scheduled_time, duration_minut
 VALUES ($1, $2, $3, $4, $5, 'pending_payment', 'pending', $6, $7, $8)
 RETURNING *;
 
--- name: SetSessionPaymentRef :one
+-- name: AttachCheckout :one
+-- Stores the provider checkout on the session. If the hold has already been
+-- released meanwhile, the checkout is recorded as owed clean-up ('expiring')
+-- so the sweeper closes it; the caller must not hand out its URL.
 UPDATE coaching_sessions
-SET payment_ref = $2, updated_at = now()
+SET payment_ref = $2,
+    payment_status = CASE WHEN status = 'pending_payment' THEN payment_status ELSE 'expiring' END,
+    updated_at = now()
 WHERE id = $1
 RETURNING *;
 
@@ -80,9 +85,21 @@ SET payment_status = 'refunded', updated_at = now()
 WHERE id = $1 AND payment_status IN ('paid', 'refund_due');
 
 -- name: CancelPendingPaymentSession :execrows
+-- For a hold whose checkout is already closed (provider expired it, or it
+-- was never created).
 UPDATE coaching_sessions
 SET status = 'cancelled', payment_status = 'failed', updated_at = now()
 WHERE id = $1 AND status = 'pending_payment';
+
+-- name: ReleasePendingPaymentSession :one
+-- For a hold abandoned by a participant while its checkout may still be open:
+-- the checkout becomes owed clean-up for the sweeper.
+UPDATE coaching_sessions
+SET status = 'cancelled',
+    payment_status = CASE WHEN payment_ref IS NULL THEN 'failed' ELSE 'expiring' END,
+    updated_at = now()
+WHERE id = $1 AND status = 'pending_payment'
+RETURNING *;
 
 -- name: ExpirePaymentHolds :execrows
 UPDATE coaching_sessions

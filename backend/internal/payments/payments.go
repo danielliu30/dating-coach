@@ -73,10 +73,15 @@ type Provider interface {
 	// the client. It must not be called when Enabled is false.
 	CreateCheckout(ctx context.Context, in CheckoutInput) (Checkout, error)
 	// ExpireCheckout invalidates a hosted page whose booking hold has lapsed,
-	// so a late payment cannot land on a slot that has been released.
+	// so a late payment cannot land on a slot that has been released. The
+	// sweeper retries it until it succeeds, so a checkout that is already
+	// expired or completed must be reported as success, not an error.
 	ExpireCheckout(ctx context.Context, ref string) error
-	// Refund returns the full amount of a completed checkout.
-	Refund(ctx context.Context, ref string) error
+	// Refund returns the full amount of a completed checkout. idempotencyKey
+	// is stable per refund (the session ID); implementations must pass it to
+	// the provider so a retried call after a crash or a concurrent sweep
+	// returns the original refund instead of issuing a second one.
+	Refund(ctx context.Context, ref, idempotencyKey string) error
 	// ParseWebhook verifies payload against signature and returns the
 	// normalised event. It must reject anything not signed by the provider.
 	ParseWebhook(payload []byte, signature string) (Event, error)
@@ -113,7 +118,7 @@ func (Disabled) CreateCheckout(context.Context, CheckoutInput) (Checkout, error)
 func (Disabled) ExpireCheckout(context.Context, string) error { return ErrDisabled }
 
 // Refund always fails with ErrDisabled.
-func (Disabled) Refund(context.Context, string) error { return ErrDisabled }
+func (Disabled) Refund(context.Context, string, string) error { return ErrDisabled }
 
 // ParseWebhook always fails with ErrDisabled.
 func (Disabled) ParseWebhook([]byte, string) (Event, error) { return Event{}, ErrDisabled }
