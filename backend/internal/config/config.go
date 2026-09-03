@@ -43,6 +43,7 @@ type Config struct {
 	SMTPPort     int
 	SMTPUsername string
 	SMTPPassword string
+	SMTPTimeout  time.Duration
 	MailFrom     string
 
 	PublicAppURL string
@@ -103,6 +104,7 @@ func Load() (*Config, error) {
 		SMTPPort:     envInt("SMTP_PORT", 587),
 		SMTPUsername: env("SMTP_USERNAME", ""),
 		SMTPPassword: env("SMTP_PASSWORD", ""),
+		SMTPTimeout:  envDuration("SMTP_TIMEOUT", 30*time.Second),
 		MailFrom:     env("MAIL_FROM", "no-reply@datingcoach.local"),
 		PublicAppURL: env("PUBLIC_APP_URL", "http://localhost:19006"),
 		CORSOrigins:  envList("CORS_ORIGINS", []string{"http://localhost:19006", "http://localhost:8081"}),
@@ -125,6 +127,7 @@ func Load() (*Config, error) {
 		{"AUTH_RATE_WINDOW", cfg.AuthRateWindow},
 		{"ML_SERVICE_TIMEOUT", cfg.MLServiceTimeout},
 		{"DEAD_LETTER_ALERT_PERIOD", cfg.DeadLetterAlertPeriod},
+		{"SMTP_TIMEOUT", cfg.SMTPTimeout},
 	} {
 		if d.value <= 0 {
 			bad = append(bad, fmt.Sprintf("%s=%s must be positive", d.key, d.value))
