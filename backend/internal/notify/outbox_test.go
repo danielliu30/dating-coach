@@ -7,16 +7,79 @@ import (
 	"io"
 	"mime"
 	"mime/multipart"
+	"net"
 	"net/mail"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/danielliu30/dating-coach/backend/internal/config"
 	"github.com/danielliu30/dating-coach/backend/internal/store/db"
 )
+
+// stalledSMTP accepts connections and never speaks, standing in for a server
+// that hangs mid-handshake. It returns the port it listens on.
+func stalledSMTP(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var conns []net.Conn
+	t.Cleanup(func() {
+		ln.Close()
+		mu.Lock()
+		defer mu.Unlock()
+		for _, c := range conns {
+			c.Close()
+		}
+	})
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			conns = append(conns, conn)
+			mu.Unlock()
+		}
+	}()
+	return ln.Addr().(*net.TCPAddr).Port
+}
+
+func TestSendGivesUpOnStalledServer(t *testing.T) {
+	svc := New(&config.Config{SMTPHost: "127.0.0.1", SMTPPort: stalledSMTP(t), SMTPTimeout: 200 * time.Millisecond, MailFrom: "from@example.test"})
+	start := time.Now()
+	err := svc.Send(context.Background(), Message{To: "to@example.test", Subject: "s", Body: "b"})
+	if err == nil {
+		t.Fatal("Send succeeded against a server that never answers")
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Fatalf("Send took %s, timeout not enforced", took)
+	}
+}
+
+func TestSendStopsWhenContextCancelled(t *testing.T) {
+	svc := New(&config.Config{SMTPHost: "127.0.0.1", SMTPPort: stalledSMTP(t), SMTPTimeout: time.Minute, MailFrom: "from@example.test"})
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+	start := time.Now()
+	if err := svc.Send(ctx, Message{To: "to@example.test", Subject: "s", Body: "b"}); err == nil {
+		t.Fatal("Send succeeded after cancellation")
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Fatalf("Send took %s after cancel, connection not closed", took)
+	}
+}
 
 func TestEncodeAttachesInviteWithMethod(t *testing.T) {
 	ics := "BEGIN:VCALENDAR\r\nMETHOD:CANCEL\r\nEND:VCALENDAR\r\n"

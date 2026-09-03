@@ -162,12 +162,18 @@ SET status = 'expired',
     confirmation_token = NULL,
     calendar_sequence = calendar_sequence + 1,
     updated_at = now()
-WHERE status = 'pending' AND respond_by < now()
+WHERE id IN (
+    SELECT id FROM coaching_sessions
+    WHERE status = 'pending' AND respond_by < now()
+    ORDER BY respond_by
+    LIMIT $1
+    FOR UPDATE SKIP LOCKED
+)
 RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, confirmation_token, respond_by, confirmed_at, calendar_sequence
 `
 
-func (q *Queries) ExpirePendingSessions(ctx context.Context) ([]CoachingSession, error) {
-	rows, err := q.db.Query(ctx, expirePendingSessions)
+func (q *Queries) ExpirePendingSessions(ctx context.Context, limit int32) ([]CoachingSession, error) {
+	rows, err := q.db.Query(ctx, expirePendingSessions, limit)
 	if err != nil {
 		return nil, err
 	}

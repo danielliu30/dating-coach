@@ -596,11 +596,32 @@ func (s *Service) whyNotPending(ctx context.Context, sessionID uuid.UUID) error 
 	return fmt.Errorf("%w: request is already %s", ErrInvalidInput, current.Status)
 }
 
+// expireBatchSize bounds how many overdue requests one transaction expires, so
+// a backlog is worked through in short transactions instead of one long one.
+const expireBatchSize = 100
+
 // ExpirePending moves every pending request whose deadline has passed to
 // expired, releasing its slot, and queues an email to each client and a
-// calendar cancellation to each coach. It returns how many expired; cmd/worker
-// calls it periodically.
+// calendar cancellation to each coach. Work is committed in batches of
+// expireBatchSize; rows another sweep already holds are skipped. It returns how
+// many expired in total; cmd/worker calls it periodically.
 func (s *Service) ExpirePending(ctx context.Context) (int, error) {
+	total := 0
+	for {
+		n, err := s.expireBatch(ctx)
+		total += n
+		if err != nil {
+			return total, err
+		}
+		if n < expireBatchSize {
+			return total, nil
+		}
+	}
+}
+
+// expireBatch expires up to expireBatchSize overdue requests in one transaction
+// together with their notification emails, returning how many it expired.
+func (s *Service) expireBatch(ctx context.Context) (int, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("begin: %w", err)
@@ -608,7 +629,7 @@ func (s *Service) ExpirePending(ctx context.Context) (int, error) {
 	defer func() { _ = tx.Rollback(ctx) }()
 	q := s.queries.WithTx(tx)
 
-	expired, err := q.ExpirePendingSessions(ctx)
+	expired, err := q.ExpirePendingSessions(ctx, expireBatchSize)
 	if err != nil {
 		return 0, fmt.Errorf("expire pending sessions: %w", err)
 	}

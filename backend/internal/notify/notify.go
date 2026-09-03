@@ -7,9 +7,11 @@ package notify
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"fmt"
 	"log/slog"
 	"mime/multipart"
+	"net"
 	"net/smtp"
 	"net/textproto"
 
@@ -55,8 +57,10 @@ func (s *Service) Email(ctx context.Context, to, subject, body string) error {
 // Send delivers msg over SMTP, as a plain-text message or, when it carries an
 // ICS payload, as a multipart/mixed message with the invite attached. When SMTP
 // is not configured the message is logged instead, including any invite, so
-// local runs can still read the links it contains.
-func (s *Service) Send(_ context.Context, msg Message) error {
+// local runs can still read the links it contains. The whole exchange is bounded
+// by SMTPTimeout and by ctx, so a stalled server fails this send instead of
+// blocking the caller (and the outbox behind it) indefinitely.
+func (s *Service) Send(ctx context.Context, msg Message) error {
 	if s.cfg.SMTPHost == "" {
 		slog.Info("email (smtp not configured, logging instead)", "to", msg.To, "subject", msg.Subject, "body", msg.Body, "has_ics", msg.ICS != "")
 		return nil
@@ -66,16 +70,66 @@ func (s *Service) Send(_ context.Context, msg Message) error {
 	if err != nil {
 		return err
 	}
-	addr := fmt.Sprintf("%s:%d", s.cfg.SMTPHost, s.cfg.SMTPPort)
-
-	var auth smtp.Auth
-	if s.cfg.SMTPUsername != "" {
-		auth = smtp.PlainAuth("", s.cfg.SMTPUsername, s.cfg.SMTPPassword, s.cfg.SMTPHost)
-	}
-	if err := smtp.SendMail(addr, auth, s.cfg.MailFrom, []string{msg.To}, raw); err != nil {
+	if err := s.deliver(ctx, msg.To, raw); err != nil {
 		return fmt.Errorf("send mail: %w", err)
 	}
 	return nil
+}
+
+// deliver performs the SMTP conversation for one message: dial, STARTTLS when
+// offered, AUTH when credentials are configured, MAIL/RCPT/DATA, QUIT. The
+// connection carries an absolute deadline of SMTPTimeout and is closed as soon
+// as ctx is cancelled, which makes any blocked read or write return an error.
+func (s *Service) deliver(ctx context.Context, to string, raw []byte) error {
+	ctx, cancel := context.WithTimeout(ctx, s.cfg.SMTPTimeout)
+	defer cancel()
+
+	addr := fmt.Sprintf("%s:%d", s.cfg.SMTPHost, s.cfg.SMTPPort)
+	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if deadline, ok := ctx.Deadline(); ok {
+		if err := conn.SetDeadline(deadline); err != nil {
+			return err
+		}
+	}
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
+
+	c, err := smtp.NewClient(conn, s.cfg.SMTPHost)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	if ok, _ := c.Extension("STARTTLS"); ok {
+		if err := c.StartTLS(&tls.Config{ServerName: s.cfg.SMTPHost, MinVersion: tls.VersionTLS12}); err != nil {
+			return err
+		}
+	}
+	if s.cfg.SMTPUsername != "" {
+		if err := c.Auth(smtp.PlainAuth("", s.cfg.SMTPUsername, s.cfg.SMTPPassword, s.cfg.SMTPHost)); err != nil {
+			return err
+		}
+	}
+	if err := c.Mail(s.cfg.MailFrom); err != nil {
+		return err
+	}
+	if err := c.Rcpt(to); err != nil {
+		return err
+	}
+	w, err := c.Data()
+	if err != nil {
+		return err
+	}
+	if _, err := w.Write(raw); err != nil {
+		return err
+	}
+	if err := w.Close(); err != nil {
+		return err
+	}
+	return c.Quit()
 }
 
 // encode renders msg as an RFC 5322 message from the given sender: text/plain

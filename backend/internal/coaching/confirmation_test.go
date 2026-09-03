@@ -77,6 +77,39 @@ func TestInviteMethodFollowsStatus(t *testing.T) {
 	}
 }
 
+func TestInviteAttendeeNamesAreParameterSafe(t *testing.T) {
+	row := db.GetSessionPartiesRow{
+		ID:            uuid.New(),
+		Status:        StatusScheduled,
+		ScheduledTime: time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC),
+		UserName:      "Ana \"Nina\" O'Neil, Jr.",
+		UserEmail:     "ana@example.test",
+		CoachName:     "Coach: José;\nMüller",
+		CoachEmail:    "coach@example.test",
+	}
+	ics := invite(row, "no-reply@example.test")
+	for _, want := range []string{
+		"ATTENDEE;CN=\"Ana 'Nina' O'Neil, Jr.\";ROLE=REQ-PARTICIPANT:mailto:ana@example.test\r\n",
+		"ATTENDEE;CN=\"Coach: José;Müller\";ROLE=REQ-PARTICIPANT:mailto:coach@example.test\r\n",
+		`SUMMARY:Dating Coach session: Ana "Nina" O'Neil\, Jr. with Coach: José\;\nMüller` + "\r\n",
+	} {
+		if !strings.Contains(ics, want) {
+			t.Errorf("invite lacks %q in:\n%s", want, ics)
+		}
+	}
+	for in, want := range map[string]string{
+		"Ana":         "Ana",
+		"Ana, Jr.":    `"Ana, Jr."`,
+		`Say "hi"`:    "Say 'hi'",
+		"tab\there":   "tabhere",
+		"Élodie Ünal": "Élodie Ünal",
+	} {
+		if got := paramICS(in); got != want {
+			t.Errorf("paramICS(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 // testService connects to TEST_DATABASE_URL, skipping the test when it is unset
 // so the suite still runs without Postgres.
 func testService(t *testing.T) (*Service, *pgxpool.Pool) {

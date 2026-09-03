@@ -78,7 +78,11 @@ func (r *Relay) Drain(ctx context.Context) (int, error) {
 			msg.ICS = *row.Ics
 		}
 		if err := r.notifier.Send(ctx, msg); err != nil {
-			slog.Error("send queued email", "id", row.ID, "to", row.ToEmail, "attempt", row.Attempts+1, "error", err)
+			if row.Attempts+1 >= MaxAttempts {
+				slog.Error("queued email abandoned, needs an operator", "id", row.ID, "to", row.ToEmail, "subject", row.Subject, "attempts", row.Attempts+1, "error", err)
+			} else {
+				slog.Error("send queued email", "id", row.ID, "to", row.ToEmail, "attempt", row.Attempts+1, "error", err)
+			}
 			if _, err := r.queries.MarkEmailFailed(ctx, db.MarkEmailFailedParams{
 				ID:         row.ID,
 				LastError:  err.Error(),
@@ -94,6 +98,29 @@ func (r *Relay) Drain(ctx context.Context) (int, error) {
 		sent++
 	}
 	return sent, nil
+}
+
+// WatchExhausted logs, every period until ctx ends, how many outbox rows have
+// used up MaxAttempts without being delivered, so a deployment can alert on
+// confirmations and cancellations that never reached anyone. Nothing is logged
+// while the count is zero. period must be positive.
+func (r *Relay) WatchExhausted(ctx context.Context, period time.Duration) error {
+	ticker := time.NewTicker(period)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			n, err := r.queries.CountExhaustedEmails(ctx, MaxAttempts)
+			if err != nil {
+				return fmt.Errorf("count exhausted emails: %w", err)
+			}
+			if n > 0 {
+				slog.Warn("undelivered emails need an operator", "count", n, "max_attempts", MaxAttempts)
+			}
+		}
+	}
 }
 
 // retryDelay is how long to wait before the next attempt after the given number

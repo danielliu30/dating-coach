@@ -12,6 +12,18 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countExhaustedEmails = `-- name: CountExhaustedEmails :one
+SELECT count(*) FROM email_outbox
+WHERE sent_at IS NULL AND attempts >= $1
+`
+
+func (q *Queries) CountExhaustedEmails(ctx context.Context, attempts int32) (int64, error) {
+	row := q.db.QueryRow(ctx, countExhaustedEmails, attempts)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const enqueueEmail = `-- name: EnqueueEmail :one
 INSERT INTO email_outbox (to_email, subject, body, ics)
 VALUES ($1, $2, $3, $4)

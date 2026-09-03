@@ -53,8 +53,8 @@ func invite(s db.GetSessionPartiesRow, organizer string) string {
 	line("DESCRIPTION:%s", escapeICS(description))
 	line("STATUS:%s", status)
 	line("ORGANIZER:mailto:%s", organizer)
-	line("ATTENDEE;CN=%s;ROLE=REQ-PARTICIPANT:mailto:%s", escapeICS(s.CoachName), s.CoachEmail)
-	line("ATTENDEE;CN=%s;ROLE=REQ-PARTICIPANT:mailto:%s", escapeICS(s.UserName), s.UserEmail)
+	line("ATTENDEE;CN=%s;ROLE=REQ-PARTICIPANT:mailto:%s", paramICS(s.CoachName), s.CoachEmail)
+	line("ATTENDEE;CN=%s;ROLE=REQ-PARTICIPANT:mailto:%s", paramICS(s.UserName), s.UserEmail)
 	line("END:VEVENT")
 	line("END:VCALENDAR")
 	return b.String()
@@ -64,4 +64,26 @@ func invite(s db.GetSessionPartiesRow, organizer string) string {
 func escapeICS(v string) string {
 	r := strings.NewReplacer(`\`, `\\`, ";", `\;`, ",", `\,`, "\n", `\n`)
 	return r.Replace(v)
+}
+
+// paramICS renders v as an RFC 5545 property parameter value (e.g. CN=...):
+// control characters are dropped, double quotes (which cannot be escaped in a
+// parameter) are replaced with apostrophes, and the value is quoted when it
+// contains a colon, semicolon or comma so it is not mistaken for a delimiter.
+func paramICS(v string) string {
+	var b strings.Builder
+	for _, r := range v {
+		switch {
+		case r == '"':
+			b.WriteRune('\'')
+		case r < 0x20 || r == 0x7f:
+		default:
+			b.WriteRune(r)
+		}
+	}
+	v = b.String()
+	if strings.ContainsAny(v, ":;,") {
+		return `"` + v + `"`
+	}
+	return v
 }

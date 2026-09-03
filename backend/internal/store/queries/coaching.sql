@@ -91,7 +91,13 @@ SET status = 'expired',
     confirmation_token = NULL,
     calendar_sequence = calendar_sequence + 1,
     updated_at = now()
-WHERE status = 'pending' AND respond_by < now()
+WHERE id IN (
+    SELECT id FROM coaching_sessions
+    WHERE status = 'pending' AND respond_by < now()
+    ORDER BY respond_by
+    LIMIT $1
+    FOR UPDATE SKIP LOCKED
+)
 RETURNING *;
 
 -- name: ListSessionsForUser :many

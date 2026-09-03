@@ -72,7 +72,7 @@ func run() error {
 	)
 
 	var wg sync.WaitGroup
-	wg.Add(6)
+	wg.Add(7)
 	go func() {
 		defer wg.Done()
 		consume(ctx, "analysis", func(ctx context.Context) error {
@@ -101,6 +101,12 @@ func run() error {
 		defer wg.Done()
 		consume(ctx, "email outbox relay", func(ctx context.Context) error {
 			return notify.NewRelay(pg.Queries, notifier).Run(ctx)
+		})
+	}()
+	go func() {
+		defer wg.Done()
+		consume(ctx, "email outbox monitor", func(ctx context.Context) error {
+			return notify.NewRelay(pg.Queries, notifier).WatchExhausted(ctx, cfg.DeadLetterAlertPeriod)
 		})
 	}()
 	go func() {
