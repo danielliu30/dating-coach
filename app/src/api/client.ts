@@ -76,8 +76,8 @@ export class ApiClient {
     return this.request<AuthSession>('POST', '/auth/signin', input);
   }
 
-  verifyEmail(token: string) {
-    return this.request<Profile>('POST', '/auth/verify', { token });
+  verifyEmail(email: string, code: string) {
+    return this.request<Profile>('POST', '/auth/verify', { email, code });
   }
 
   resendVerification(email: string) {

@@ -5,10 +5,10 @@ package auth
 import (
 	"context"
 	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/big"
 	"net/mail"
 	"strings"
 	"time"
@@ -25,21 +25,25 @@ var (
 	ErrEmailTaken         = errors.New("email already registered")
 	ErrInvalidCredentials = errors.New("invalid email or password")
 	ErrInvalidInput       = errors.New("invalid input")
-	ErrInvalidToken       = errors.New("invalid or expired verification token")
+	ErrInvalidCode        = errors.New("invalid or expired verification code")
 )
 
-const verificationTTL = 48 * time.Hour
+const (
+	verificationTTL         = 3 * time.Minute
+	maxVerificationAttempts = 3
+	codeSpace               = 1000000 // 6-digit numeric codes
+)
 
 type Service struct {
 	queries    *db.Queries
 	issuer     *TokenIssuer
 	notifier   notify.Notifier
+	cache      *VerificationCache
 	bcryptCost int
-	appURL     string
 }
 
-func NewService(queries *db.Queries, issuer *TokenIssuer, notifier notify.Notifier, bcryptCost int, appURL string) *Service {
-	return &Service{queries: queries, issuer: issuer, notifier: notifier, bcryptCost: bcryptCost, appURL: appURL}
+func NewService(queries *db.Queries, issuer *TokenIssuer, notifier notify.Notifier, cache *VerificationCache, bcryptCost int) *Service {
+	return &Service{queries: queries, issuer: issuer, notifier: notifier, cache: cache, bcryptCost: bcryptCost}
 }
 
 type SignUpInput struct {
@@ -100,19 +104,16 @@ func (s *Service) SignUp(ctx context.Context, in SignUpInput) (Session, error) {
 		return Session{}, fmt.Errorf("hash password: %w", err)
 	}
 
-	token, err := randomToken()
+	code, err := randomCode()
 	if err != nil {
 		return Session{}, err
 	}
-	expires := time.Now().Add(verificationTTL)
 
 	user, err := s.queries.CreateUser(ctx, db.CreateUserParams{
-		Email:                 email,
-		PasswordHash:          string(hash),
-		DisplayName:           displayName,
-		Role:                  role,
-		VerificationToken:     &token,
-		VerificationExpiresAt: &expires,
+		Email:        email,
+		PasswordHash: string(hash),
+		DisplayName:  displayName,
+		Role:         role,
 	})
 	if err != nil {
 		var pgErr *pgconn.PgError
@@ -122,7 +123,10 @@ func (s *Service) SignUp(ctx context.Context, in SignUpInput) (Session, error) {
 		return Session{}, fmt.Errorf("create user: %w", err)
 	}
 
-	s.sendVerificationEmail(ctx, user.Email, token)
+	if err := s.cache.Store(ctx, user.ID.String(), code); err != nil {
+		return Session{}, fmt.Errorf("store verification code: %w", err)
+	}
+	s.sendVerificationEmail(ctx, user.Email, code)
 
 	jwtToken, expiresAt, err := s.issuer.Issue(user.ID, user.Email, user.Role)
 	if err != nil {
@@ -158,15 +162,56 @@ func (s *Service) SignIn(ctx context.Context, email, password string) (Session, 
 	}, nil
 }
 
-func (s *Service) VerifyEmail(ctx context.Context, token string) (Profile, error) {
-	user, err := s.queries.VerifyUserEmail(ctx, &token)
+func (s *Service) VerifyEmail(ctx context.Context, email, code string) (Profile, error) {
+	user, err := s.queries.GetUserByEmail(ctx, strings.ToLower(strings.TrimSpace(email)))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return Profile{}, ErrInvalidToken
+			return Profile{}, ErrInvalidCode
 		}
+		return Profile{}, fmt.Errorf("lookup user: %w", err)
+	}
+	if user.EmailVerified {
+		return profileOf(user), nil
+	}
+
+	storedCode, _, err := s.cache.Get(ctx, user.ID.String())
+	if err != nil {
+		return Profile{}, fmt.Errorf("read verification code: %w", err)
+	}
+	if storedCode == "" || storedCode != code {
+		if err := s.handleFailedAttempt(ctx, user.ID.String()); err != nil {
+			return Profile{}, err
+		}
+		return Profile{}, ErrInvalidCode
+	}
+
+	// Consume the code immediately so it cannot be reused.
+	if err := s.cache.Invalidate(ctx, user.ID.String()); err != nil {
+		return Profile{}, fmt.Errorf("invalidate verification code: %w", err)
+	}
+
+	verifiedUser, err := s.queries.VerifyUserEmail(ctx, user.ID)
+	if err != nil {
 		return Profile{}, fmt.Errorf("verify email: %w", err)
 	}
-	return profileOf(user), nil
+
+	// Ignore failed-attempt cleanup errors; the code is already consumed.
+	_ = s.cache.Invalidate(ctx, user.ID.String())
+
+	return profileOf(verifiedUser), nil
+}
+
+func (s *Service) handleFailedAttempt(ctx context.Context, userID string) error {
+	count, err := s.cache.IncrementAttempts(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("increment attempts: %w", err)
+	}
+	if count >= maxVerificationAttempts {
+		if err := s.cache.Invalidate(ctx, userID); err != nil {
+			return fmt.Errorf("invalidate after max attempts: %w", err)
+		}
+	}
+	return nil
 }
 
 func (s *Service) ResendVerification(ctx context.Context, email string) error {
@@ -180,19 +225,14 @@ func (s *Service) ResendVerification(ctx context.Context, email string) error {
 	if user.EmailVerified {
 		return nil
 	}
-	token, err := randomToken()
+	code, err := randomCode()
 	if err != nil {
 		return err
 	}
-	expires := time.Now().Add(verificationTTL)
-	if err := s.queries.SetVerificationToken(ctx, db.SetVerificationTokenParams{
-		ID:                    user.ID,
-		VerificationToken:     &token,
-		VerificationExpiresAt: &expires,
-	}); err != nil {
-		return fmt.Errorf("set verification token: %w", err)
+	if err := s.cache.Store(ctx, user.ID.String(), code); err != nil {
+		return fmt.Errorf("store verification code: %w", err)
 	}
-	s.sendVerificationEmail(ctx, user.Email, token)
+	s.sendVerificationEmail(ctx, user.Email, code)
 	return nil
 }
 
@@ -204,18 +244,17 @@ func (s *Service) Profile(ctx context.Context, principal Principal) (Profile, er
 	return profileOf(user), nil
 }
 
-func (s *Service) sendVerificationEmail(ctx context.Context, email, token string) {
-	link := fmt.Sprintf("%s/verify?token=%s", strings.TrimRight(s.appURL, "/"), token)
-	body := fmt.Sprintf("Welcome to Dating Coach!\n\nVerify your email address: %s\n\nThis link expires in 48 hours.", link)
+func (s *Service) sendVerificationEmail(ctx context.Context, email, code string) {
+	body := fmt.Sprintf("Welcome to Dating Coach!\n\nYour verification code is: %s\n\nThis code expires in 3 minutes and will be invalidated after 3 failed attempts.", code)
 	if err := s.notifier.Email(ctx, email, "Verify your Dating Coach email", body); err != nil {
 		slog.Error("send verification email", "error", err, "email", email)
 	}
 }
 
-func randomToken() (string, error) {
-	buf := make([]byte, 32)
-	if _, err := rand.Read(buf); err != nil {
-		return "", fmt.Errorf("generate token: %w", err)
+func randomCode() (string, error) {
+	n, err := rand.Int(rand.Reader, big.NewInt(codeSpace))
+	if err != nil {
+		return "", fmt.Errorf("generate code: %w", err)
 	}
-	return hex.EncodeToString(buf), nil
+	return fmt.Sprintf("%06d", n.Int64()), nil
 }

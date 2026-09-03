@@ -14,7 +14,7 @@ x-backend-env: &backend-env
   ML_SERVICE_TIMEOUT: ${ML_SERVICE_TIMEOUT:-60s}
   ANALYSIS_QUEUE: ${ANALYSIS_QUEUE:-conversation.analysis}
   PUBLIC_APP_URL: ${PUBLIC_APP_URL:-http://localhost:8081}
-  CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8081,http://localhost:19006}
+  CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost,http://localhost:8081,http://localhost:19006}
   SMTP_HOST: ${SMTP_HOST:-}
   SMTP_PORT: ${SMTP_PORT:-587}
   SMTP_USERNAME: ${SMTP_USERNAME:-}
@@ -108,5 +108,31 @@ services:
       ML_MODEL_DIR: ${ML_MODEL_DIR:-/models/segment-scorer}
     ports: ['8000:8000']
 
+  nginx:
+    image: nginx:alpine
+    profiles: [gateway]
+    ports: ['80:80']
+    volumes:
+      - './nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro'
+    depends_on:
+      api:
+        condition: service_started
+    restart: unless-stopped
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    profiles: [tools]
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@admin.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-admin}
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    ports: ['5050:80']
+    volumes: ['pgadmin-data:/var/lib/pgadmin']
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   postgres-data:
+  pgadmin-data:

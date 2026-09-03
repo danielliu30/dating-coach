@@ -80,15 +80,16 @@ func (h *Handler) signIn(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) verify(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Token string `json:"token"`
+		Email string `json:"email"`
+		Code  string `json:"code"`
 	}
 	if err := httpx.Decode(r, &in); err != nil {
 		httpx.Error(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	profile, err := h.svc.VerifyEmail(r.Context(), in.Token)
+	profile, err := h.svc.VerifyEmail(r.Context(), in.Email, in.Code)
 	switch {
-	case errors.Is(err, ErrInvalidToken):
+	case errors.Is(err, ErrInvalidCode):
 		httpx.Error(w, http.StatusBadRequest, err.Error())
 	case err != nil:
 		slog.Error("verify email", "error", err)

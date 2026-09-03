@@ -64,10 +64,11 @@ func run() error {
 	notifier := notify.New(cfg)
 	issuer := auth.NewTokenIssuer(cfg.JWTSecret, cfg.JWTTTL)
 	limiter := auth.NewRateLimiter(rdb, cfg.AuthRateLimit, cfg.AuthRateWindow)
+	verifyCache := auth.NewVerificationCache(rdb, 3*time.Minute)
 	authenticate := auth.Middleware(issuer)
 
 	authHandler := auth.NewHandler(
-		auth.NewService(pg.Queries, issuer, notifier, cfg.BcryptCost, cfg.PublicAppURL),
+		auth.NewService(pg.Queries, issuer, notifier, verifyCache, cfg.BcryptCost),
 		limiter,
 	)
 	coachingHandler := coaching.NewHandler(coaching.NewService(pg.Pool, pg.Queries))

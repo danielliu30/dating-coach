@@ -1,11 +1,12 @@
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import React, { useState } from 'react';
-import { Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 
-import { Button, Field, Screen } from '../components/ui';
+import { AuthLayout } from '../components/AuthLayout';
+import { Button, Field } from '../components/ui';
 import type { AuthStackParams } from '../navigation/types';
 import { useAuth } from '../state/auth';
-import { shared } from '../theme';
+import { colors } from '../theme';
 
 export default function SignInScreen({
   navigation,
@@ -29,12 +30,12 @@ export default function SignInScreen({
   };
 
   return (
-    <Screen>
-      <View style={{ gap: 4, paddingTop: 24, paddingBottom: 8 }}>
-        <Text style={shared.title}>Welcome back</Text>
-        <Text style={shared.muted}>Coaching and conversation feedback, in one place.</Text>
+    <AuthLayout>
+      <View style={{ gap: 4 }}>
+        <Text style={styles.title}>Welcome back</Text>
+        <Text style={styles.subtitle}>Coaching and conversation feedback, in one place.</Text>
       </View>
-      <View style={shared.card}>
+      <View style={styles.card}>
         <Field
           label="Email"
           value={email}
@@ -52,11 +53,28 @@ export default function SignInScreen({
           autoComplete="current-password"
           placeholder="••••••••"
         />
-        {error ? <Text style={shared.error}>{error}</Text> : null}
+        {error ? <Text style={styles.error}>{error}</Text> : null}
         <Button label="Sign in" onPress={submit} loading={busy} />
       </View>
-      <Button label="Create an account" variant="secondary" onPress={() => navigation.navigate('SignUp')} />
-      <Button label="I have a verification code" variant="secondary" onPress={() => navigation.navigate('Verify')} />
-    </Screen>
+      <Button
+        label="Create an account"
+        variant="secondary"
+        onPress={() => navigation.navigate('SignUp')}
+      />
+    </AuthLayout>
   );
 }
+
+const styles = StyleSheet.create({
+  title: { fontSize: 28, fontWeight: '700', color: colors.text },
+  subtitle: { fontSize: 14, color: colors.muted, lineHeight: 20 },
+  card: {
+    backgroundColor: colors.surface,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: 16,
+    gap: 10,
+  },
+  error: { color: colors.flat, fontSize: 14 },
+});

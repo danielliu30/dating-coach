@@ -12,7 +12,7 @@ interface AuthState {
   user: Profile | null;
   signIn: (email: string, password: string) => Promise<Profile>;
   signUp: (input: { email: string; password: string; displayName: string; role: Role }) => Promise<Profile>;
-  verify: (token: string) => Promise<Profile>;
+  verify: (email: string, code: string) => Promise<Profile>;
   resendVerification: (email: string) => Promise<void>;
   refresh: () => Promise<void>;
   signOut: () => Promise<void>;
@@ -102,7 +102,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
       signIn: async (email, password) => persist(await api.signIn({ email, password })),
       signUp: async ({ email, password, displayName, role }) =>
         persist(await api.signUp({ email, password, display_name: displayName, role })),
-      verify: async (verificationToken) => persistUser(await api.verifyEmail(verificationToken)),
+      verify: async (email, code) => persistUser(await api.verifyEmail(email, code)),
       resendVerification: async (email) => {
         await api.resendVerification(email);
       },
