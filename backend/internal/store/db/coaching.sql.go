@@ -332,6 +332,22 @@ func (q *Queries) DeclineSession(ctx context.Context, id uuid.UUID) (CoachingSes
 	return i, err
 }
 
+const expireLateAuthorizedHold = `-- name: ExpireLateAuthorizedHold :execrows
+UPDATE coaching_sessions
+SET status = 'expired', payment_status = 'releasing', updated_at = now()
+WHERE id = $1 AND status = 'pending_payment'
+`
+
+// A card hold whose authorisation arrived after the session had already
+// started: the booking is over and the money is owed back.
+func (q *Queries) ExpireLateAuthorizedHold(ctx context.Context, id uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, expireLateAuthorizedHold, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const expirePaymentHolds = `-- name: ExpirePaymentHolds :execrows
 UPDATE coaching_sessions
 SET status = 'expired',

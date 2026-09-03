@@ -84,6 +84,13 @@ WHERE id = $1 AND status = 'expired' AND hold_expires_at IS NOT NULL
   AND payment_status IN ('pending', 'expiring', 'failed')
 RETURNING *;
 
+-- name: ExpireLateAuthorizedHold :execrows
+-- A card hold whose authorisation arrived after the session had already
+-- started: the booking is over and the money is owed back.
+UPDATE coaching_sessions
+SET status = 'expired', payment_status = 'releasing', updated_at = now()
+WHERE id = $1 AND status = 'pending_payment';
+
 -- name: MarkAuthorizationToRelease :execrows
 -- A card hold on a booking that will not go ahead (declined, expired,
 -- cancelled, or authorised after the participant cancelled the request).

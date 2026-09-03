@@ -299,6 +299,47 @@ func TestLapsedHoldRefusesLateAuthorisationUnlessSlotStillFree(t *testing.T) {
 	outboxFor(t, pool, emailOf(t, pool, other))
 }
 
+func TestPaymentHoldNeverOutlivesSessionStart(t *testing.T) {
+	svc, provider, pool, coach := paidService(t)
+	ctx := context.Background()
+	client := insertUser(t, pool, "user")
+
+	// Too close to start for a checkout at all.
+	soon := time.Now().Add(minCheckoutWindow - time.Minute).UTC().Format(time.RFC3339)
+	if _, err := svc.BookSession(ctx, client, BookInput{CoachID: coach.String(), ScheduledTime: soon}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("booking %s before start: err = %v, want ErrInvalidInput", minCheckoutWindow-time.Minute, err)
+	}
+
+	// Sooner than holdTTL: the hold is capped at the session start.
+	start := time.Now().Add(minCheckoutWindow + time.Minute).Truncate(time.Second).UTC()
+	s, err := svc.BookSession(ctx, client, BookInput{CoachID: coach.String(), ScheduledTime: start.Format(time.RFC3339), DurationMinutes: 30})
+	if err != nil {
+		t.Fatalf("book: %v", err)
+	}
+	if row := rowOf(t, svc, s.ID); row.HoldExpiresAt == nil || !row.HoldExpiresAt.Equal(start) {
+		t.Fatalf("hold_expires_at = %v, want the session start %v", row.HoldExpiresAt, start)
+	}
+
+	// The card is authorised only after the session has begun: the hold is
+	// closed and the authorisation owed back, never a coach request.
+	if _, err := pool.Exec(ctx, "UPDATE coaching_sessions SET scheduled_time = now() - interval '1 minute' WHERE id = $1", uuid.MustParse(s.ID)); err != nil {
+		t.Fatal(err)
+	}
+	authorize(t, svc, s, "late_"+s.ID)
+	if row := rowOf(t, svc, s.ID); row.Status != StatusExpired || row.PaymentStatus != payments.StatusReleasing || row.ConfirmationToken != nil {
+		t.Fatalf("late authorisation = %s/%s token=%v, want expired/releasing without a request", row.Status, row.PaymentStatus, row.ConfirmationToken)
+	}
+	if got := outboxFor(t, pool, emailOf(t, pool, coach)); len(got) != 0 {
+		t.Fatalf("coach emails = %v, want none", got)
+	}
+	if _, err := svc.SweepPayments(ctx, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if len(provider.released) != 1 || len(provider.captured) != 0 {
+		t.Fatalf("provider = %+v, want one release and no capture", provider)
+	}
+}
+
 func TestClientCancelReleasesHoldOrAuthorisation(t *testing.T) {
 	svc, provider, pool, coach := paidService(t)
 	ctx := context.Background()

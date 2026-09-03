@@ -260,7 +260,7 @@ func (s *Service) UpsertProfile(ctx context.Context, coachID uuid.UUID, in Upser
 	if _, err := time.LoadLocation(in.Timezone); err != nil {
 		return Coach{}, fmt.Errorf("%w: unknown timezone %q", ErrInvalidInput, in.Timezone)
 	}
-	if in.HourlyRateCents < 0 || in.HourlyRateCents > maxHourlyRateCents {
+	if in.HourlyRateCents < 0 || (s.payments.Enabled() && in.HourlyRateCents > maxHourlyRateCents) {
 		return Coach{}, fmt.Errorf("%w: hourly_rate_cents must be between 0 and %d", ErrInvalidInput, maxHourlyRateCents)
 	}
 	if in.Specialties == nil {

@@ -20,10 +20,19 @@ func priceCents(hourlyRateCents, duration int32) int64 {
 	return (int64(hourlyRateCents)*int64(duration) + 30) / 60
 }
 
+// minCheckoutWindow is the least time a client must have to authorise their
+// card: a paid booking closer than this to its start is refused, and one
+// further away has its hold capped at the session start so the checkout can
+// never be completed for a session that has already begun.
+const minCheckoutWindow = 5 * time.Minute
+
 // bookPaid inserts the pending_payment hold and starts the provider checkout
 // for it. The hold is written first so the slot is taken before the client is
 // sent to authorise their card; the coach is not asked until that succeeded
-// (see ApplyPaymentEvent). If the checkout cannot be started, or its reference
+// (see ApplyPaymentEvent). The hold, and the checkout's expiry, end at
+// holdTTL or the session start, whichever is sooner; a booking that leaves
+// less than minCheckoutWindow is rejected with ErrInvalidInput. If the
+// checkout cannot be started, or its reference
 // cannot be stored, the hold is released again so no dangling checkout that is
 // still payable is left behind; the checkout's own ExpiresAt bounds the damage
 // if that clean-up fails too.
@@ -40,7 +49,14 @@ func (s *Service) bookPaid(ctx context.Context, userID, coachID uuid.UUID, sched
 	if amount < 0 || amount > math.MaxInt32 {
 		return Session{}, fmt.Errorf("%w: coach rate yields an unpayable amount", ErrInvalidInput)
 	}
-	holdUntil := time.Now().Add(s.holdTTL)
+	now := time.Now()
+	if scheduled.Sub(now) < minCheckoutWindow {
+		return Session{}, fmt.Errorf("%w: scheduled_time must be at least %s away to complete payment", ErrInvalidInput, minCheckoutWindow)
+	}
+	holdUntil := now.Add(s.holdTTL)
+	if scheduled.Before(holdUntil) {
+		holdUntil = scheduled
+	}
 
 	session, err := s.queries.CreatePendingPaymentSession(ctx, db.CreatePendingPaymentSessionParams{
 		UserID:          userID,
@@ -160,25 +176,33 @@ func (s *Service) ApplyPaymentEvent(ctx context.Context, ev payments.Event) erro
 // pending_payment hold becomes a pending request, a hold the sweeper timed out
 // is revived if its slot is still free (the reinstate runs in a savepoint so a
 // slot conflict does not abort tx), and anything else, including a slot that
-// has since been taken or a deliberately cancelled hold, has its
-// authorisation marked for release. It queues the request emails when the
-// coach is asked.
+// has since been taken, a deliberately cancelled hold, or a session that has
+// already started, has its authorisation marked for release. It queues the
+// request emails when the coach is asked.
 func (s *Service) authorized(ctx context.Context, tx pgx.Tx, q *db.Queries, session db.CoachingSession) error {
 	token, err := randomToken()
 	if err != nil {
 		return err
 	}
-	respondBy := respondDeadline(time.Now(), session.ScheduledTime)
+	now := time.Now()
+	respondBy := respondDeadline(now, session.ScheduledTime)
 	tokenHash := hashToken(token)
 
 	var requested bool
-	switch session.Status {
-	case StatusPendingPayment:
+	switch {
+	case !session.ScheduledTime.After(now):
+		if session.Status == StatusPendingPayment {
+			if _, err := q.ExpireLateAuthorizedHold(ctx, session.ID); err != nil {
+				return fmt.Errorf("expire late hold: %w", err)
+			}
+			return nil
+		}
+	case session.Status == StatusPendingPayment:
 		if _, err := q.AuthorizeSession(ctx, db.AuthorizeSessionParams{ID: session.ID, ConfirmationToken: &tokenHash, RespondBy: &respondBy}); err != nil {
 			return fmt.Errorf("authorize session: %w", err)
 		}
 		requested = true
-	case StatusExpired:
+	case session.Status == StatusExpired:
 		sp, err := tx.Begin(ctx)
 		if err != nil {
 			return fmt.Errorf("savepoint: %w", err)
