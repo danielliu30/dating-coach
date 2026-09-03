@@ -340,6 +340,43 @@ func TestPaymentHoldNeverOutlivesSessionStart(t *testing.T) {
 	}
 }
 
+func TestOpenSlotsSkipUnpayableStartsOnlyWhenPaid(t *testing.T) {
+	svc, _, pool, coach := paidService(t)
+	ctx := context.Background()
+	client := insertUser(t, pool, "user")
+
+	// A range starting an hour ago: with payments on, nothing inside the
+	// checkout window is offered, and everything offered can be booked.
+	now := time.Now()
+	slots, err := svc.OpenSlots(ctx, coach, client, now.Add(-time.Hour), now.Add(2*time.Hour), 30, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(slots) == 0 {
+		t.Fatal("no slots offered")
+	}
+	for _, slot := range slots {
+		start, _ := time.Parse(time.RFC3339, slot.Start)
+		if start.Sub(now) < minCheckoutWindow {
+			t.Fatalf("paid slot %s is only %s away", slot.Start, start.Sub(now))
+		}
+	}
+	first, _ := time.Parse(time.RFC3339, slots[0].Start)
+	if first.Sub(now) >= minCheckoutWindow+slotStepMinutes*time.Minute {
+		t.Fatalf("first paid slot %s is further away than one step past the window", slots[0].Start)
+	}
+
+	// Payments off: the range is expanded as given, including past starts.
+	svc.payments = payments.Disabled{}
+	unpaid, err := svc.OpenSlots(ctx, coach, client, now.Add(-time.Hour), now.Add(2*time.Hour), 30, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unpaid) <= len(slots) {
+		t.Fatalf("unpaid slots = %d, want more than the %d paid ones", len(unpaid), len(slots))
+	}
+}
+
 func TestClientCancelReleasesHoldOrAuthorisation(t *testing.T) {
 	svc, provider, pool, coach := paidService(t)
 	ctx := context.Background()

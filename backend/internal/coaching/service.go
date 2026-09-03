@@ -333,7 +333,9 @@ func (s *Service) ListAvailability(ctx context.Context, coachID uuid.UUID) ([]Av
 // OpenSlots expands the coach's weekly availability into concrete slots between
 // from and to, dropping anything that overlaps an already booked session.
 // excludeSessionID ignores one of the actor's own sessions, so a reschedule can
-// offer times that overlap the slot being moved.
+// offer times that overlap the slot being moved. With payments on, slots too
+// close to start for the client to complete checkout (see minCheckoutWindow)
+// are not offered either; a reschedule takes no payment, so it keeps those.
 func (s *Service) OpenSlots(ctx context.Context, coachID, actorID uuid.UUID, from, to time.Time, durationMinutes int32, excludeSessionID *uuid.UUID) ([]Slot, error) {
 	if excludeSessionID != nil {
 		session, err := s.participant(ctx, *excludeSessionID, actorID)
@@ -380,6 +382,12 @@ func (s *Service) OpenSlots(ctx context.Context, coachID, actorID uuid.UUID, fro
 	byWeekday := map[int16][]AvailabilityWindow{}
 	for _, w := range windows {
 		byWeekday[w.Weekday] = append(byWeekday[w.Weekday], w)
+	}
+
+	if s.payments.Enabled() && excludeSessionID == nil {
+		if earliest := time.Now().Add(minCheckoutWindow); earliest.After(from) {
+			from = earliest
+		}
 	}
 
 	slots := []Slot{}
