@@ -145,6 +145,7 @@ export class ApiClient {
     return slots ?? [];
   }
 
+  /** Fetches server-side coaching switches (e.g. whether booking requires payment). */
   coachingConfig() {
     return this.request<CoachingConfig>('GET', '/coaching/config');
   }
