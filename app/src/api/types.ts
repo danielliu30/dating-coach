@@ -75,13 +75,24 @@ export interface Slot {
   duration_minutes: number;
 }
 
-export type SessionStatus = 'pending_payment' | 'scheduled' | 'completed' | 'cancelled' | 'no_show';
+export type SessionStatus =
+  | 'pending_payment'
+  | 'pending'
+  | 'scheduled'
+  | 'declined'
+  | 'expired'
+  | 'completed'
+  | 'cancelled'
+  | 'no_show';
 
 export type PaymentStatus =
   | 'not_required'
   | 'pending'
   | 'expiring'
+  | 'authorized'
   | 'paid'
+  | 'releasing'
+  | 'released'
   | 'refund_due'
   | 'refunded'
   | 'failed';

@@ -293,7 +293,10 @@ func (q *Queries) CreatePendingPaymentSession(ctx context.Context, arg CreatePen
 const declineSession = `-- name: DeclineSession :one
 UPDATE coaching_sessions
 SET status = 'declined',
-    payment_status = CASE WHEN payment_status = 'authorized' THEN 'releasing' ELSE payment_status END,
+    payment_status = CASE payment_status
+                         WHEN 'authorized' THEN 'releasing'
+                         WHEN 'paid' THEN 'refund_due'
+                         ELSE payment_status END,
     confirmation_token = NULL,
     respond_by = NULL,
     calendar_sequence = calendar_sequence + 1,
@@ -348,7 +351,10 @@ func (q *Queries) ExpirePaymentHolds(ctx context.Context, holdExpiresAt *time.Ti
 const expirePendingSessions = `-- name: ExpirePendingSessions :many
 UPDATE coaching_sessions
 SET status = 'expired',
-    payment_status = CASE WHEN payment_status = 'authorized' THEN 'releasing' ELSE payment_status END,
+    payment_status = CASE payment_status
+                         WHEN 'authorized' THEN 'releasing'
+                         WHEN 'paid' THEN 'refund_due'
+                         ELSE payment_status END,
     confirmation_token = NULL,
     calendar_sequence = calendar_sequence + 1,
     updated_at = now()

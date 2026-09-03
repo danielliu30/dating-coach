@@ -345,3 +345,44 @@ func TestClientCancelReleasesHoldOrAuthorisation(t *testing.T) {
 	outboxFor(t, pool, emailOf(t, pool, coach))
 	outboxFor(t, pool, emailOf(t, pool, client))
 }
+
+func TestDeclineAfterPaidRescheduleQueuesRefund(t *testing.T) {
+	svc, provider, pool, coach := paidService(t)
+	ctx := context.Background()
+	client := insertUser(t, pool, "user")
+
+	s, err := svc.BookSession(ctx, client, BookInput{CoachID: coach.String(), ScheduledTime: nextSlot()})
+	if err != nil {
+		t.Fatalf("book: %v", err)
+	}
+	authorize(t, svc, s, "evt_"+s.ID)
+	if _, err := svc.RespondAsCoach(ctx, uuid.MustParse(s.ID), coach, "confirm"); err != nil {
+		t.Fatalf("confirm: %v", err)
+	}
+	moved, err := svc.Reschedule(ctx, uuid.MustParse(s.ID), client, time.Now().Add(96*time.Hour).Truncate(time.Hour).UTC().Format(time.RFC3339))
+	if err != nil {
+		t.Fatalf("reschedule: %v", err)
+	}
+	if moved.Status != StatusPending || moved.PaymentStatus != payments.StatusPaid {
+		t.Fatalf("rescheduled = %s/%s, want pending/paid", moved.Status, moved.PaymentStatus)
+	}
+	got, err := svc.RespondAsCoach(ctx, uuid.MustParse(s.ID), coach, "decline")
+	if err != nil {
+		t.Fatalf("decline: %v", err)
+	}
+	if got.Status != StatusDeclined || got.PaymentStatus != payments.StatusRefundDue {
+		t.Fatalf("declined paid = %s/%s, want declined/refund_due", got.Status, got.PaymentStatus)
+	}
+	res, err := svc.SweepPayments(ctx, time.Now())
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if res.RefundsIssued != 1 || len(provider.refunded) != 1 || len(provider.captured) != 1 || len(provider.released) != 0 {
+		t.Fatalf("sweep = %+v, provider = %+v; want one refund of the captured charge", res, provider)
+	}
+	if row := rowOf(t, svc, s.ID); row.PaymentStatus != payments.StatusRefunded {
+		t.Fatalf("payment_status = %s, want refunded", row.PaymentStatus)
+	}
+	outboxFor(t, pool, emailOf(t, pool, coach))
+	outboxFor(t, pool, emailOf(t, pool, client))
+}
