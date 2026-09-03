@@ -32,3 +32,12 @@ SELECT EXISTS (SELECT 1 FROM users WHERE id = $1);
 
 -- name: DeleteUser :execrows
 DELETE FROM users WHERE id = $1;
+
+-- name: UpdateUserDatingProfile :one
+UPDATE users
+SET dating_styles = $2,
+    phases_strong = $3,
+    phases_working_on = $4,
+    updated_at = now()
+WHERE id = $1 AND deleted_at IS NULL
+RETURNING *;

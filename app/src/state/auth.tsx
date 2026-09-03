@@ -3,7 +3,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 
 import { ApiError, api } from '../api/client';
 import type { RenewalResult } from '../api/client';
-import type { AuthSession, Profile, Role } from '../api/types';
+import type { AuthSession, DatingProfileInput, Profile, Role } from '../api/types';
 
 const STORAGE_KEY = 'dating-coach.session';
 
@@ -26,6 +26,7 @@ interface AuthState {
   verify: (token: string) => Promise<Profile>;
   resendVerification: (email: string) => Promise<void>;
   refresh: () => Promise<void>;
+  updateDatingProfile: (input: DatingProfileInput) => Promise<Profile>;
   deleteAccount: () => Promise<void>;
   signOut: () => Promise<void>;
 }
@@ -268,6 +269,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
       refresh: async () => {
         if (!tokenRef.current) return;
         await persistUser(await api.me());
+      },
+      // A response that lands after the session changed hands (signed out, or
+      // into another account) is returned but not persisted, so it cannot be
+      // paired with a token that belongs to someone else.
+      updateDatingProfile: async (input) => {
+        const sent = tokenRef.current;
+        const profile = await api.updateDatingProfile(input);
+        if (tokenRef.current !== sent) return profile;
+        return persistUser(profile);
       },
       // The deletion is certain once this resolves, and the token on hand can no
       // longer be renewed, so the session is dropped locally rather than left to

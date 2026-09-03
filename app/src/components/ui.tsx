@@ -136,6 +136,41 @@ export function Notice({
   );
 }
 
+/**
+ * Toggleable pill for multi-select lists. `tone` colours the selected state;
+ * a disabled chip renders dimmed and ignores presses.
+ */
+export function Chip({
+  label,
+  selected,
+  onPress,
+  tone = colors.primary,
+  disabled,
+}: {
+  label: string;
+  selected: boolean;
+  onPress: () => void;
+  tone?: string;
+  disabled?: boolean;
+}): React.ReactElement {
+  return (
+    <Pressable
+      accessibilityRole="checkbox"
+      accessibilityState={{ checked: selected, disabled }}
+      onPress={onPress}
+      disabled={disabled}
+      style={({ pressed }) => [
+        styles.chip,
+        { borderColor: selected ? tone : colors.border, backgroundColor: selected ? tone : colors.surface },
+        pressed && styles.buttonPressed,
+        disabled && styles.buttonDisabled,
+      ]}
+    >
+      <Text style={[styles.chipText, { color: selected ? colors.primaryText : colors.text }]}>{label}</Text>
+    </Pressable>
+  );
+}
+
 export function Loading({ label }: { label?: string }): React.ReactElement {
   return (
     <View style={styles.center}>
@@ -193,6 +228,15 @@ const styles = StyleSheet.create({
     paddingVertical: 3,
   },
   badgeText: { fontSize: 12, fontWeight: '600' },
+  chip: {
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    minHeight: 36,
+    justifyContent: 'center',
+  },
+  chipText: { fontSize: 14, fontWeight: '600' },
   center: { paddingVertical: 32, alignItems: 'center', gap: 8 },
   notice: {
     flexDirection: 'row',

@@ -69,16 +69,20 @@ type CoachAvailability struct {
 }
 
 type CoachingSession struct {
-	ID              uuid.UUID `json:"id"`
-	UserID          uuid.UUID `json:"user_id"`
-	CoachID         uuid.UUID `json:"coach_id"`
-	ScheduledTime   time.Time `json:"scheduled_time"`
-	DurationMinutes int32     `json:"duration_minutes"`
-	Status          string    `json:"status"`
-	Topic           string    `json:"topic"`
-	CoachNotes      string    `json:"coach_notes"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	ID                uuid.UUID  `json:"id"`
+	UserID            uuid.UUID  `json:"user_id"`
+	CoachID           uuid.UUID  `json:"coach_id"`
+	ScheduledTime     time.Time  `json:"scheduled_time"`
+	DurationMinutes   int32      `json:"duration_minutes"`
+	Status            string     `json:"status"`
+	Topic             string     `json:"topic"`
+	CoachNotes        string     `json:"coach_notes"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
+	ConfirmationToken *string    `json:"confirmation_token"`
+	RespondBy         *time.Time `json:"respond_by"`
+	ConfirmedAt       *time.Time `json:"confirmed_at"`
+	CalendarSequence  int32      `json:"calendar_sequence"`
 }
 
 type Conversation struct {
@@ -88,6 +92,19 @@ type Conversation struct {
 	Platform  string    `json:"platform"`
 	MatchName string    `json:"match_name"`
 	CreatedAt time.Time `json:"created_at"`
+}
+
+type EmailOutbox struct {
+	ID            uuid.UUID  `json:"id"`
+	ToEmail       string     `json:"to_email"`
+	Subject       string     `json:"subject"`
+	Body          string     `json:"body"`
+	Ics           *string    `json:"ics"`
+	Attempts      int32      `json:"attempts"`
+	LastError     string     `json:"last_error"`
+	NextAttemptAt time.Time  `json:"next_attempt_at"`
+	CreatedAt     time.Time  `json:"created_at"`
+	SentAt        *time.Time `json:"sent_at"`
 }
 
 type Message struct {
@@ -142,4 +159,7 @@ type User struct {
 	CreatedAt             time.Time  `json:"created_at"`
 	UpdatedAt             time.Time  `json:"updated_at"`
 	DeletedAt             *time.Time `json:"deleted_at"`
+	DatingStyles          []string   `json:"dating_styles"`
+	PhasesStrong          []string   `json:"phases_strong"`
+	PhasesWorkingOn       []string   `json:"phases_working_on"`
 }
