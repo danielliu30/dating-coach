@@ -170,8 +170,12 @@ WHERE coach_id = $1
 ORDER BY scheduled_time;
 
 -- name: UpdateSessionStatus :one
+-- A participant's cancel clears the hold marker so a late payment refunds
+-- rather than reinstates, even if the sweeper had already released the hold.
 UPDATE coaching_sessions
-SET status = $2, updated_at = now()
+SET status = $2,
+    hold_expires_at = CASE WHEN $2 = 'cancelled' THEN NULL ELSE hold_expires_at END,
+    updated_at = now()
 WHERE id = $1
 RETURNING *;
 

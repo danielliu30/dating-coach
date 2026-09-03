@@ -908,7 +908,9 @@ func (q *Queries) UpdateSessionNotes(ctx context.Context, arg UpdateSessionNotes
 
 const updateSessionStatus = `-- name: UpdateSessionStatus :one
 UPDATE coaching_sessions
-SET status = $2, updated_at = now()
+SET status = $2,
+    hold_expires_at = CASE WHEN $2 = 'cancelled' THEN NULL ELSE hold_expires_at END,
+    updated_at = now()
 WHERE id = $1
 RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, payment_status, amount_cents, currency, payment_ref, hold_expires_at
 `
@@ -918,6 +920,8 @@ type UpdateSessionStatusParams struct {
 	Status string    `json:"status"`
 }
 
+// A participant's cancel clears the hold marker so a late payment refunds
+// rather than reinstates, even if the sweeper had already released the hold.
 func (q *Queries) UpdateSessionStatus(ctx context.Context, arg UpdateSessionStatusParams) (CoachingSession, error) {
 	row := q.db.QueryRow(ctx, updateSessionStatus, arg.ID, arg.Status)
 	var i CoachingSession
