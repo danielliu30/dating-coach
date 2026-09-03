@@ -8,33 +8,54 @@ import (
 	"github.com/google/uuid"
 )
 
+// Roles carried in the token; RoleAdmin is treated as a superset of RoleCoach.
 const (
 	RoleUser  = "user"
 	RoleCoach = "coach"
 	RoleAdmin = "admin"
 )
 
+// Scopes carried in the token. ScopeVerify is issued at sign-up and reaches
+// only the /auth endpoints; ScopeSession is issued once the account is usable
+// and reaches the rest of the API. A token's scope is frozen for its lifetime,
+// so widening it means issuing a new token.
+const (
+	ScopeVerify  = "verify"
+	ScopeSession = "session"
+)
+
+// Claims is the JWT payload: the standard registered claims plus the role,
+// email and scope the middleware needs to build a Principal without a database
+// round trip.
 type Claims struct {
 	jwt.RegisteredClaims
 	Role  string `json:"role"`
 	Email string `json:"email"`
+	Scope string `json:"scope"`
 }
 
+// UserID parses the subject claim, which holds the user's UUID.
 func (c Claims) UserID() (uuid.UUID, error) {
 	return uuid.Parse(c.Subject)
 }
 
+// TokenIssuer signs and verifies the HS256 tokens. One instance is shared by
+// Service (issuing) and Middleware (verifying).
 type TokenIssuer struct {
 	secret []byte
-	ttl    time.Duration
 }
 
-func NewTokenIssuer(secret string, ttl time.Duration) *TokenIssuer {
-	return &TokenIssuer{secret: []byte(secret), ttl: ttl}
+// NewTokenIssuer returns an issuer for the configured secret.
+func NewTokenIssuer(secret string) *TokenIssuer {
+	return &TokenIssuer{secret: []byte(secret)}
 }
 
-func (t *TokenIssuer) Issue(userID uuid.UUID, email, role string) (string, time.Time, error) {
-	expires := time.Now().Add(t.ttl)
+// Issue mints a signed token for a user and reports when it expires, which the
+// sign-up and sign-in responses hand to clients as the session expiry. Scope
+// and ttl are per call, so the same issuer mints both the short-lived verify
+// token and the full session token.
+func (t *TokenIssuer) Issue(userID uuid.UUID, email, role, scope string, ttl time.Duration) (string, time.Time, error) {
+	expires := time.Now().Add(ttl)
 	claims := Claims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			Subject:   userID.String(),
@@ -44,6 +65,7 @@ func (t *TokenIssuer) Issue(userID uuid.UUID, email, role string) (string, time.
 		},
 		Role:  role,
 		Email: email,
+		Scope: scope,
 	}
 	signed, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(t.secret)
 	if err != nil {
@@ -52,6 +74,8 @@ func (t *TokenIssuer) Issue(userID uuid.UUID, email, role string) (string, time.
 	return signed, expires, nil
 }
 
+// Parse validates a token's signature, algorithm and expiry, returning its
+// claims. Used by Middleware on every authenticated request.
 func (t *TokenIssuer) Parse(raw string) (*Claims, error) {
 	claims := &Claims{}
 	token, err := jwt.ParseWithClaims(raw, claims, func(*jwt.Token) (any, error) {

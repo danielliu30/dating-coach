@@ -10,6 +10,7 @@ export const colors = {
   primaryText: '#ffffff',
   engaging: '#2f9e44',
   neutral: '#f08c00',
+  noticeBg: '#fff4e6',
   flat: '#e03131',
 };
 

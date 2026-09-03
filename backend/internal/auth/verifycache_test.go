@@ -117,6 +117,9 @@ func TestVerificationCache_Invalidate(t *testing.T) {
 	}
 }
 
+// TestRandomCode checks the shape of generated codes. Collisions between
+// independent 6-digit samples are expected now and then, so only a generator
+// that never varies is treated as broken.
 func TestRandomCode(t *testing.T) {
 	seen := make(map[string]struct{})
 	for i := 0; i < 100; i++ {
@@ -133,9 +136,9 @@ func TestRandomCode(t *testing.T) {
 				break
 			}
 		}
-		if _, ok := seen[code]; ok {
-			t.Fatalf("duplicate code generated: %q", code)
-		}
 		seen[code] = struct{}{}
+	}
+	if len(seen) < 2 {
+		t.Fatalf("randomCode produced a single value across 100 draws: %v", seen)
 	}
 }

@@ -11,10 +11,14 @@ import (
 
 var ErrValidation = errors.New("validation error")
 
+// ErrorBody is the shape of every error response, so clients have one place to
+// read a failure message from.
 type ErrorBody struct {
 	Error string `json:"error"`
 }
 
+// JSON writes payload as the response body. A nil payload sends only the status.
+// Encoding failures are logged: the status line is already on the wire.
 func JSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -26,11 +30,13 @@ func JSON(w http.ResponseWriter, status int, payload any) {
 	}
 }
 
+// Error writes an ErrorBody with the given status.
 func Error(w http.ResponseWriter, status int, message string) {
 	JSON(w, status, ErrorBody{Error: message})
 }
 
-// Decode reads a JSON request body into dst.
+// Decode reads a JSON request body into dst. Unknown fields are rejected, so a
+// typo in a client payload fails loudly instead of being silently ignored.
 func Decode(r *http.Request, dst any) error {
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()

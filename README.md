@@ -28,6 +28,8 @@ Go API ──── PostgreSQL (users, coaches, sessions, chat, conversations, a
 
 - Analysis is asynchronous: `POST /api/v1/analysis/conversations` stores the transcript, creates a `pending` result and publishes a job. The worker calls the ML service, stores per-segment scores as JSONB and notifies the user. The app polls the result endpoint.
 - Live chat messages are persisted in PostgreSQL and fanned out over Redis pub/sub, so any API replica can serve a socket.
+- Sessions are a short-lived access JWT (15m) plus a rotating refresh token stored hashed in PostgreSQL. Authenticating a request is pure signature checking — no database round trip — and ending a session means deleting its refresh tokens: `POST /api/v1/auth/refresh` rotates one into a new pair, and replaying a spent token drops every refresh token of that account. Open chat sockets outlive the token that opened them, so they alone still re-check the Redis revocation record, and close on their token's expiry for the client to renew and reconnect.
+- Account deletion goes through an outbox: `DELETE /api/v1/auth/me` stamps `users.deleted_at` and records the deletion in `account_deletions` in one statement, which is the only failure the caller is told about — once it commits the deletion is certain, because a relay in the worker queues every recorded deletion the request itself does not. The stamp is what locks the account out: sign-in refuses it like an unknown one and a refresh token can no longer be exchanged, so the session cannot outlive the few minutes its access token has left. Deleting the refresh tokens, revoking in Redis and publishing the job directly are optimisations the request does on a best-effort basis (they only log on failure): the revoke closes live chat sockets in milliseconds instead of waiting for the worker, and the direct publish skips the relay's next pass. The worker revokes before it removes any rows, then deletes the row (cascading across every table, refresh tokens included) and clears the outbox entry. A failed attempt waits 30s on `account.deletion.retry` before it is redelivered, and deletions that keep failing land on `account.deletion.dlq`. The worker logs that queue's depth every `DEAD_LETTER_ALERT_PERIOD`; alert on a non-zero depth, because those accounts are marked deleted but still hold rows.
 - The ML service is fully decoupled — HTTP only, no shared database.
 
 ## Quick start (Docker Compose)
@@ -47,6 +49,23 @@ docker compose up -d --build # postgres, redis, rabbitmq, migrations, api, worke
 
 Migrations run in a one-shot `migrate` service before `api` and `worker` start.
 
+Prebuilt images are published to Docker Hub as `danielliu30/dating-coach-backend` (both `api` and `worker` entrypoints) and `danielliu30/dating-coach-ml-analyzer`. To run from them instead of building:
+
+```bash
+docker compose pull api ml-analyzer && docker compose up -d --no-build
+```
+
+To publish a new version: `docker compose build && docker compose push api ml-analyzer` (override the target with `DOCKERHUB_NAMESPACE` / `IMAGE_TAG`).
+
+### Exposing the stack through nginx
+
+`nginx/` holds one route table in two flavours — `/api/*` and `/healthz` go to the API (WebSocket upgrades included), `/ml/*` goes to the ML service:
+
+- Containerised: `docker compose --profile gateway up -d` adds an `nginx` service on `:${NGINX_PORT:-80}`.
+- Host-installed nginx: install `nginx/host-site.conf` as a site (instructions in the file); it proxies to the ports compose publishes on `localhost`.
+
+Point the app at the gateway with `EXPO_PUBLIC_API_URL=http://<host>`. The full workflow is written up in `.agents/skills/running-dating-coach-in-docker/SKILL.md`.
+
 The Expo app is not containerised — run it on the host:
 
 ```bash
@@ -58,7 +77,7 @@ npx expo start                # then press i / a for iOS / Android
 
 Point the app at the backend with `EXPO_PUBLIC_API_URL`. It defaults to `http://localhost:8080` (`http://10.0.2.2:8080` on the Android emulator). If you use the nginx gateway profile, set it to `http://localhost`.
 
-Sign-up returns a session but the app stays on the verify screen until the email is confirmed. The verification email contains a 6-digit code that expires after 3 minutes. With no SMTP credentials configured the code is written to the API log instead of being sent, so grab it locally with:
+Sign-up returns a short-lived `verify`-scoped token that only reaches `/api/v1/auth`; every other endpoint answers 403 until the email is confirmed, at which point verification hands back a full `session`-scoped token. Sign-in refuses accounts whose address is unconfirmed (403), and the app sends those users to the verify screen. The verification email carries a 6-digit code that expires after 3 minutes and is discarded after 3 wrong attempts. With no SMTP credentials configured the email is written to the API log instead of being sent, so grab the code locally with:
 
 ```bash
 docker compose logs api | grep -i verification
@@ -72,10 +91,15 @@ docker compose logs api | grep -i verification
 cd backend
 migrate -path migrations -database "$DATABASE_URL" up   # golang-migrate
 go run ./cmd/api        # HTTP + WebSocket API on :8080
-go run ./cmd/worker     # analysis worker
+go run ./cmd/worker     # analysis + account-deletion worker
 sqlc generate           # after editing internal/store/queries/*.sql
 go build ./... && go vet ./...
+go test ./...           # database-backed tests skip themselves
+TEST_DATABASE_URL="$DATABASE_URL" go test ./...   # …and run with this set
 ```
+
+The tests gated on `TEST_DATABASE_URL` talk to a real PostgreSQL and delete the
+rows they create; point it at a scratch database, never a production one.
 
 **ML analyzer:**
 
@@ -100,7 +124,7 @@ npx expo export --platform web    # production web bundle
 
 | Area     | Endpoints                                                                                                                                                              |
 | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Auth     | `POST /api/v1/auth/signup` · `signin` · `verify` · `resend-verification` · `GET /me` (rate limited per IP)                                                              |
+| Auth     | `POST /api/v1/auth/signup` · `signin` · `refresh` · `verify` · `resend-verification` · `GET /me` · `DELETE /me` (rate limited per IP)                                  |
 | Coaching | `GET /coaching/coaches` · `/coaches/{id}` · `/coaches/{id}/availability` · `/coaches/{id}/slots` · `POST /coaching/sessions` · `.../cancel` · `.../reschedule`           |
 | Coach    | `PUT /coach/profile` · `PUT /coach/availability` · `GET /coach/sessions` · `POST /coach/sessions/{id}/status` · `.../notes` · `GET /chat/coach/threads`                  |
 | Chat     | `POST /chat/threads` · `GET /chat/threads` · `GET/POST /chat/threads/{id}/messages` · `POST /chat/threads/{id}/close` · `GET /chat/threads/{id}/ws`                      |

@@ -14,7 +14,7 @@ import (
 const createUser = `-- name: CreateUser :one
 INSERT INTO users (email, password_hash, display_name, role)
 VALUES ($1, $2, $3, $4)
-RETURNING id, email, password_hash, display_name, role, email_verified, created_at, updated_at
+RETURNING id, email, password_hash, display_name, role, email_verified, created_at, updated_at, deleted_at, dating_styles, phases_strong, phases_working_on
 `
 
 type CreateUserParams struct {
@@ -41,12 +41,28 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.EmailVerified,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.DeletedAt,
+		&i.DatingStyles,
+		&i.PhasesStrong,
+		&i.PhasesWorkingOn,
 	)
 	return i, err
 }
 
+const deleteUser = `-- name: DeleteUser :execrows
+DELETE FROM users WHERE id = $1
+`
+
+func (q *Queries) DeleteUser(ctx context.Context, id uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteUser, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, email, password_hash, display_name, role, email_verified, created_at, updated_at FROM users WHERE email = $1
+SELECT id, email, password_hash, display_name, role, email_verified, created_at, updated_at, deleted_at, dating_styles, phases_strong, phases_working_on FROM users WHERE email = $1 AND deleted_at IS NULL
 `
 
 func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error) {
@@ -61,12 +77,16 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 		&i.EmailVerified,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.DeletedAt,
+		&i.DatingStyles,
+		&i.PhasesStrong,
+		&i.PhasesWorkingOn,
 	)
 	return i, err
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, email, password_hash, display_name, role, email_verified, created_at, updated_at FROM users WHERE id = $1
+SELECT id, email, password_hash, display_name, role, email_verified, created_at, updated_at, deleted_at, dating_styles, phases_strong, phases_working_on FROM users WHERE id = $1 AND deleted_at IS NULL
 `
 
 func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (User, error) {
@@ -81,8 +101,65 @@ func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (User, error) {
 		&i.EmailVerified,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.DeletedAt,
+		&i.DatingStyles,
+		&i.PhasesStrong,
+		&i.PhasesWorkingOn,
 	)
 	return i, err
+}
+
+const updateUserDatingProfile = `-- name: UpdateUserDatingProfile :one
+UPDATE users
+SET dating_styles = $2,
+    phases_strong = $3,
+    phases_working_on = $4,
+    updated_at = now()
+WHERE id = $1 AND deleted_at IS NULL
+RETURNING id, email, password_hash, display_name, role, email_verified, created_at, updated_at, deleted_at, dating_styles, phases_strong, phases_working_on
+`
+
+type UpdateUserDatingProfileParams struct {
+	ID              uuid.UUID `json:"id"`
+	DatingStyles    []string  `json:"dating_styles"`
+	PhasesStrong    []string  `json:"phases_strong"`
+	PhasesWorkingOn []string  `json:"phases_working_on"`
+}
+
+func (q *Queries) UpdateUserDatingProfile(ctx context.Context, arg UpdateUserDatingProfileParams) (User, error) {
+	row := q.db.QueryRow(ctx, updateUserDatingProfile,
+		arg.ID,
+		arg.DatingStyles,
+		arg.PhasesStrong,
+		arg.PhasesWorkingOn,
+	)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.PasswordHash,
+		&i.DisplayName,
+		&i.Role,
+		&i.EmailVerified,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+		&i.DatingStyles,
+		&i.PhasesStrong,
+		&i.PhasesWorkingOn,
+	)
+	return i, err
+}
+
+const userRowExists = `-- name: UserRowExists :one
+SELECT EXISTS (SELECT 1 FROM users WHERE id = $1)
+`
+
+func (q *Queries) UserRowExists(ctx context.Context, id uuid.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, userRowExists, id)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
 }
 
 const verifyUserEmail = `-- name: VerifyUserEmail :one
@@ -90,7 +167,8 @@ UPDATE users
 SET email_verified = true,
     updated_at = now()
 WHERE id = $1
-RETURNING id, email, password_hash, display_name, role, email_verified, created_at, updated_at
+  AND deleted_at IS NULL
+RETURNING id, email, password_hash, display_name, role, email_verified, created_at, updated_at, deleted_at, dating_styles, phases_strong, phases_working_on
 `
 
 func (q *Queries) VerifyUserEmail(ctx context.Context, id uuid.UUID) (User, error) {
@@ -105,6 +183,10 @@ func (q *Queries) VerifyUserEmail(ctx context.Context, id uuid.UUID) (User, erro
 		&i.EmailVerified,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.DeletedAt,
+		&i.DatingStyles,
+		&i.PhasesStrong,
+		&i.PhasesWorkingOn,
 	)
 	return i, err
 }

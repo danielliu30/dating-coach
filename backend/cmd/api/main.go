@@ -15,6 +15,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 
+	"github.com/danielliu30/dating-coach/backend/internal/account"
 	"github.com/danielliu30/dating-coach/backend/internal/analysis"
 	"github.com/danielliu30/dating-coach/backend/internal/auth"
 	"github.com/danielliu30/dating-coach/backend/internal/chat"
@@ -22,6 +23,7 @@ import (
 	"github.com/danielliu30/dating-coach/backend/internal/config"
 	"github.com/danielliu30/dating-coach/backend/internal/httpx"
 	"github.com/danielliu30/dating-coach/backend/internal/notify"
+	"github.com/danielliu30/dating-coach/backend/internal/payments"
 	"github.com/danielliu30/dating-coach/backend/internal/store"
 )
 
@@ -34,6 +36,8 @@ func main() {
 	}
 }
 
+// run loads configuration, opens the backing services, assembles each feature's
+// service and handler, and serves until a signal arrives.
 func run() error {
 	cfg, err := config.Load()
 	if err != nil {
@@ -61,47 +65,42 @@ func run() error {
 	}
 	defer queue.Close()
 
+	deletions, err := account.OpenPublisher(cfg.RabbitMQURL, cfg.AccountDeletionQueue)
+	if err != nil {
+		return err
+	}
+	defer deletions.Close()
+
 	notifier := notify.New(cfg)
-	issuer := auth.NewTokenIssuer(cfg.JWTSecret, cfg.JWTTTL)
+	issuer := auth.NewTokenIssuer(cfg.JWTSecret)
 	limiter := auth.NewRateLimiter(rdb, cfg.AuthRateLimit, cfg.AuthRateWindow)
-	verifyCache := auth.NewVerificationCache(rdb, 3*time.Minute)
-	authenticate := auth.Middleware(issuer)
+	// Authenticated requests are answered from the token's signature alone, so
+	// the denylist is only read by open chat sockets, which outlive the token
+	// that opened them.
+	denylist := auth.NewDenylist(rdb, cfg.JWTTTL)
+	verificationCodes := auth.NewVerificationCache(rdb, auth.VerificationCodeTTL)
 
 	authHandler := auth.NewHandler(
-		auth.NewService(pg.Queries, issuer, notifier, verifyCache, cfg.BcryptCost),
+		auth.NewService(pg.Pool, pg.Queries, issuer, notifier, cfg.BcryptCost, cfg.PublicAppURL, verificationCodes, denylist, deletions, cfg.JWTTTL, cfg.VerifyTokenTTL, cfg.RefreshTokenTTL),
 		limiter,
 	)
-	coachingHandler := coaching.NewHandler(coaching.NewService(pg.Pool, pg.Queries))
+	provider, err := payments.New(cfg.PaymentsEnabled)
+	if err != nil {
+		return err
+	}
+	coachingHandler := coaching.NewHandler(coaching.NewService(pg.Pool, pg.Queries, provider, cfg.PaymentHoldTTL, cfg.PublicAppURL, cfg.MailFrom))
 	hub := chat.NewHub(rdb)
-	chatHandler := chat.NewHandler(chat.NewService(pg.Queries, hub), hub, cfg.CORSOrigins)
+	// Sockets authenticated before a deletion would otherwise keep running
+	// until their next scheduled re-check; this closes them as it happens.
+	go auth.WatchRevocations(ctx, rdb, hub.EndSessions)
+	chatHandler := chat.NewHandler(chat.NewService(pg.Queries, hub), hub, denylist, cfg.CORSOrigins)
 	analysisHandler := analysis.NewHandler(analysis.NewService(pg.Pool, pg.Queries, queue))
 
-	router := chi.NewRouter()
-	router.Use(middleware.RequestID, middleware.RealIP, middleware.Recoverer, middleware.Logger)
-	router.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   cfg.CORSOrigins,
-		AllowedMethods:   []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodOptions},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type"},
-		AllowCredentials: true,
-		MaxAge:           300,
-	}))
-
-	router.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		httpx.JSON(w, http.StatusOK, map[string]string{"status": "ok", "env": cfg.Env})
-	})
-
-	router.Route("/api/v1", func(v1 chi.Router) {
-		v1.Mount("/auth", authHandler.Routes(authenticate))
-		v1.Group(func(private chi.Router) {
-			private.Use(authenticate)
-			private.Mount("/coaching", coachingHandler.Routes())
-			private.Mount("/chat", chatHandler.Routes())
-			private.Mount("/analysis", analysisHandler.Routes())
-			private.Route("/coach", func(coach chi.Router) {
-				coach.Use(auth.RequireCoach)
-				coach.Mount("/", coachingHandler.CoachRoutes())
-			})
-		})
+	router := newRouter(cfg, auth.Middleware(issuer), handlers{
+		auth:     authHandler,
+		coaching: coachingHandler,
+		chat:     chatHandler,
+		analysis: analysisHandler,
 	})
 
 	server := &http.Server{
@@ -129,4 +128,50 @@ func run() error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	return server.Shutdown(shutdownCtx)
+}
+
+// handlers groups the feature handlers newRouter mounts.
+type handlers struct {
+	auth     *auth.Handler
+	coaching *coaching.Handler
+	chat     *chat.Handler
+	analysis *analysis.Handler
+}
+
+// newRouter builds the API routing tree: an unauthenticated health check, the
+// auth endpoints (reachable by verify-scoped tokens so a fresh sign-up can
+// confirm its address) and a private group every other feature is mounted
+// under, which authenticates the caller and then demands a session-scoped
+// token. authenticate only verifies the token's signature and expiry, so no
+// route costs a database round trip before reaching its handler.
+func newRouter(cfg *config.Config, authenticate func(http.Handler) http.Handler, h handlers) http.Handler {
+	router := chi.NewRouter()
+	router.Use(middleware.RequestID, middleware.RealIP, middleware.Recoverer, middleware.Logger)
+	router.Use(cors.Handler(cors.Options{
+		AllowedOrigins:   cfg.CORSOrigins,
+		AllowedMethods:   []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodOptions},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type"},
+		AllowCredentials: true,
+		MaxAge:           300,
+	}))
+
+	router.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		httpx.JSON(w, http.StatusOK, map[string]string{"status": "ok", "env": cfg.Env})
+	})
+
+	router.Route("/api/v1", func(v1 chi.Router) {
+		v1.Mount("/auth", h.auth.Routes(authenticate))
+		v1.Mount("/booking", h.coaching.PublicRoutes())
+		v1.Group(func(private chi.Router) {
+			private.Use(authenticate, auth.RequireScope(auth.ScopeSession))
+			private.Mount("/coaching", h.coaching.Routes())
+			private.Mount("/chat", h.chat.Routes())
+			private.Mount("/analysis", h.analysis.Routes())
+			private.Route("/coach", func(coach chi.Router) {
+				coach.Use(auth.RequireCoach)
+				coach.Mount("/", h.coaching.CoachRoutes())
+			})
+		})
+	})
+	return router
 }

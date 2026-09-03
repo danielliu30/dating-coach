@@ -2,8 +2,9 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import React, { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
+import { ApiError } from '../api/client';
 import { AuthLayout } from '../components/AuthLayout';
-import { Button, Field } from '../components/ui';
+import { Button, Field, Notice } from '../components/ui';
 import type { AuthStackParams } from '../navigation/types';
 import { useAuth } from '../state/auth';
 import { colors } from '../theme';
@@ -11,7 +12,7 @@ import { colors } from '../theme';
 export default function SignInScreen({
   navigation,
 }: NativeStackScreenProps<AuthStackParams, 'SignIn'>): React.ReactElement {
-  const { signIn } = useAuth();
+  const { signIn, signedOutReason, dismissSignedOutReason } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -20,9 +21,14 @@ export default function SignInScreen({
   const submit = async () => {
     setBusy(true);
     setError(null);
+    const address = email.trim();
     try {
-      await signIn(email.trim(), password);
+      await signIn(address, password);
     } catch (err) {
+      if (err instanceof ApiError && err.status === 403) {
+        navigation.navigate('Verify', { email: address });
+        return;
+      }
       setError(err instanceof Error ? err.message : 'could not sign in');
     } finally {
       setBusy(false);
@@ -35,6 +41,13 @@ export default function SignInScreen({
         <Text style={styles.title}>Welcome back</Text>
         <Text style={styles.subtitle}>Coaching and conversation feedback, in one place.</Text>
       </View>
+      {signedOutReason ? (
+        <Notice
+          title="You were signed out"
+          text="Your session expired, so we signed you out to keep your account safe. Sign in to pick up where you left off."
+          onDismiss={dismissSignedOutReason}
+        />
+      ) : null}
       <View style={styles.card}>
         <Field
           label="Email"

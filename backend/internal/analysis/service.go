@@ -17,6 +17,7 @@ import (
 	"github.com/danielliu30/dating-coach/backend/internal/store/db"
 )
 
+// Sentinel errors respondErr maps onto HTTP status codes.
 var (
 	ErrNotFound     = errors.New("not found")
 	ErrForbidden    = errors.New("not allowed")
@@ -30,20 +31,28 @@ const (
 	analysisQueueKind = "analysis_ready"
 )
 
+// Publisher enqueues analysis jobs for the worker. JobPublisher is the RabbitMQ
+// implementation; tests substitute a fake.
 type Publisher interface {
 	Publish(ctx context.Context, job Job) error
 }
 
+// Service owns the conversation-analysis business rules: it validates and
+// stores submitted transcripts, enqueues the scoring job, reads results back
+// with an ownership check, and records outcome labels for model training.
 type Service struct {
 	pool      *pgxpool.Pool
 	queries   *db.Queries
 	publisher Publisher
 }
 
+// NewService wires the service dependencies; called once from cmd/api.
 func NewService(pool *pgxpool.Pool, queries *db.Queries, publisher Publisher) *Service {
 	return &Service{pool: pool, queries: queries, publisher: publisher}
 }
 
+// SubmitInput is the decoded POST /analysis/conversations body: the transcript
+// the user pasted in, plus where it came from.
 type SubmitInput struct {
 	Title     string          `json:"title"`
 	Platform  string          `json:"platform"`
@@ -51,12 +60,16 @@ type SubmitInput struct {
 	Messages  []SubmitMessage `json:"messages"`
 }
 
+// SubmitMessage is one message of a submitted transcript. Sender is "self" or
+// "match"; SentAt is optional RFC3339 and defaults to now.
 type SubmitMessage struct {
 	Sender string `json:"sender"`
 	Body   string `json:"body"`
 	SentAt string `json:"sent_at"`
 }
 
+// Result is the API view of an analysis row. Segments and Overall stay raw JSON
+// so the stored scoring payload reaches clients unchanged.
 type Result struct {
 	ID             string          `json:"id"`
 	ConversationID string          `json:"conversation_id"`
@@ -69,6 +82,7 @@ type Result struct {
 	CompletedAt    string          `json:"completed_at,omitempty"`
 }
 
+// Conversation is the list-view summary of a stored transcript.
 type Conversation struct {
 	ID        string `json:"id"`
 	Title     string `json:"title"`
@@ -77,6 +91,7 @@ type Conversation struct {
 	CreatedAt string `json:"created_at"`
 }
 
+// resultOf projects an analysis row onto the API shape, formatting timestamps.
 func resultOf(a db.AnalysisResult) Result {
 	out := Result{
 		ID:             a.ID.String(),
@@ -174,6 +189,7 @@ func (s *Service) Submit(ctx context.Context, userID uuid.UUID, in SubmitInput) 
 	return resultOf(result), nil
 }
 
+// Get returns one analysis by ID, provided userID owns its conversation.
 func (s *Service) Get(ctx context.Context, analysisID, userID uuid.UUID) (Result, error) {
 	result, err := s.queries.GetAnalysisResult(ctx, analysisID)
 	if err != nil {
@@ -188,6 +204,8 @@ func (s *Service) Get(ctx context.Context, analysisID, userID uuid.UUID) (Result
 	return resultOf(result), nil
 }
 
+// LatestForConversation returns the newest analysis of a conversation, which is
+// what clients poll while a submission is still being scored.
 func (s *Service) LatestForConversation(ctx context.Context, conversationID, userID uuid.UUID) (Result, error) {
 	if _, err := s.ownedConversation(ctx, conversationID, userID); err != nil {
 		return Result{}, err
@@ -202,6 +220,7 @@ func (s *Service) LatestForConversation(ctx context.Context, conversationID, use
 	return resultOf(result), nil
 }
 
+// ListConversations returns a page of the user's submitted conversations.
 func (s *Service) ListConversations(ctx context.Context, userID uuid.UUID, limit, offset int32) ([]Conversation, error) {
 	if limit <= 0 {
 		limit = defaultListLimit
@@ -236,6 +255,8 @@ var validOutcomes = map[string]bool{
 	"date_set":         true,
 }
 
+// LabelInput is the decoded label body: how the conversation actually went, as
+// reported by the user or a coach.
 type LabelInput struct {
 	Outcome         *string         `json:"outcome"`
 	ReplyReceived   *bool           `json:"reply_received"`
@@ -286,6 +307,8 @@ func (s *Service) Label(ctx context.Context, conversationID, userID uuid.UUID, i
 	return example, nil
 }
 
+// ownedConversation loads a conversation and enforces that userID owns it, so
+// analyses cannot be read or labelled across accounts.
 func (s *Service) ownedConversation(ctx context.Context, conversationID, userID uuid.UUID) (db.Conversation, error) {
 	conversation, err := s.queries.GetConversation(ctx, conversationID)
 	if err != nil {

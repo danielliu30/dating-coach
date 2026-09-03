@@ -12,10 +12,13 @@ import (
 	"github.com/danielliu30/dating-coach/backend/internal/httpx"
 )
 
+// Handler is the HTTP layer for /api/v1/analysis: it decodes requests, resolves
+// the caller and path IDs, and delegates to Service.
 type Handler struct {
 	svc *Service
 }
 
+// NewHandler builds the analysis handler; cmd/api mounts its Routes.
 func NewHandler(svc *Service) *Handler {
 	return &Handler{svc: svc}
 }
@@ -31,6 +34,8 @@ func (h *Handler) Routes() http.Handler {
 	return r
 }
 
+// submit handles POST /conversations: stores the transcript and returns the
+// pending analysis, so clients can poll for the score.
 func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 	principal, ok := principalOf(w, r)
 	if !ok {
@@ -49,6 +54,7 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusAccepted, result)
 }
 
+// listConversations handles GET /conversations with 1-based offset paging.
 func (h *Handler) listConversations(w http.ResponseWriter, r *http.Request) {
 	principal, ok := principalOf(w, r)
 	if !ok {
@@ -65,6 +71,7 @@ func (h *Handler) listConversations(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{"conversations": conversations})
 }
 
+// result handles GET /results/{analysisID}.
 func (h *Handler) result(w http.ResponseWriter, r *http.Request) {
 	principal, ok := principalOf(w, r)
 	if !ok {
@@ -82,6 +89,7 @@ func (h *Handler) result(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, result)
 }
 
+// latestResult handles GET /conversations/{conversationID}/result.
 func (h *Handler) latestResult(w http.ResponseWriter, r *http.Request) {
 	principal, ok := principalOf(w, r)
 	if !ok {
@@ -99,6 +107,8 @@ func (h *Handler) latestResult(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, result)
 }
 
+// label handles POST /conversations/{conversationID}/label, recording the
+// real-world outcome used as training data.
 func (h *Handler) label(w http.ResponseWriter, r *http.Request) {
 	principal, ok := principalOf(w, r)
 	if !ok {
@@ -121,6 +131,8 @@ func (h *Handler) label(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusCreated, example)
 }
 
+// principalOf returns the authenticated caller, writing 401 when absent. The
+// boolean reports whether the handler should continue.
 func principalOf(w http.ResponseWriter, r *http.Request) (auth.Principal, bool) {
 	principal, ok := auth.PrincipalFrom(r.Context())
 	if !ok {
@@ -130,6 +142,7 @@ func principalOf(w http.ResponseWriter, r *http.Request) (auth.Principal, bool) 
 	return principal, true
 }
 
+// pathUUID parses a UUID path parameter, writing 400 when it is malformed.
 func pathUUID(w http.ResponseWriter, r *http.Request, param string) (uuid.UUID, bool) {
 	id, err := uuid.Parse(chi.URLParam(r, param))
 	if err != nil {
@@ -139,6 +152,8 @@ func pathUUID(w http.ResponseWriter, r *http.Request, param string) (uuid.UUID, 
 	return id, true
 }
 
+// respondErr maps the package's sentinel errors onto status codes; anything
+// else is logged and reported as a 500 with the fallback message.
 func respondErr(w http.ResponseWriter, err error, fallback string) {
 	switch {
 	case errors.Is(err, ErrNotFound):

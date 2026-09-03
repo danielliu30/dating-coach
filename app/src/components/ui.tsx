@@ -112,6 +112,70 @@ export function Badge({ text, tone = colors.muted }: { text: string; tone?: stri
   );
 }
 
+/**
+ * A banner for something the app did to the user rather than something the
+ * user did: it stands apart from field-level errors, and can be dismissed when
+ * `onDismiss` is given.
+ */
+export function Notice({
+  title,
+  text,
+  onDismiss,
+}: {
+  title: string;
+  text: string;
+  onDismiss?: () => void;
+}): React.ReactElement {
+  return (
+    <View accessibilityRole="alert" style={styles.notice}>
+      <View style={{ flex: 1, gap: 2 }}>
+        <Text style={styles.noticeTitle}>{title}</Text>
+        <Text style={styles.noticeText}>{text}</Text>
+      </View>
+      {onDismiss ? (
+        <Pressable accessibilityRole="button" accessibilityLabel="Dismiss" onPress={onDismiss} hitSlop={8}>
+          <Text style={styles.noticeDismiss}>✕</Text>
+        </Pressable>
+      ) : null}
+    </View>
+  );
+}
+
+/**
+ * Toggleable pill for multi-select lists. `tone` colours the selected state;
+ * a disabled chip renders dimmed and ignores presses.
+ */
+export function Chip({
+  label,
+  selected,
+  onPress,
+  tone = colors.primary,
+  disabled,
+}: {
+  label: string;
+  selected: boolean;
+  onPress: () => void;
+  tone?: string;
+  disabled?: boolean;
+}): React.ReactElement {
+  return (
+    <Pressable
+      accessibilityRole="checkbox"
+      accessibilityState={{ checked: selected, disabled }}
+      onPress={onPress}
+      disabled={disabled}
+      style={({ pressed }) => [
+        styles.chip,
+        { borderColor: selected ? tone : colors.border, backgroundColor: selected ? tone : colors.surface },
+        pressed && styles.buttonPressed,
+        disabled && styles.buttonDisabled,
+      ]}
+    >
+      <Text style={[styles.chipText, { color: selected ? colors.primaryText : colors.text }]}>{label}</Text>
+    </Pressable>
+  );
+}
+
 export function Loading({ label }: { label?: string }): React.ReactElement {
   return (
     <View style={styles.center}>
@@ -170,5 +234,27 @@ const styles = StyleSheet.create({
     paddingVertical: 3,
   },
   badgeText: { fontSize: 12, fontWeight: '600' },
+  chip: {
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    minHeight: 36,
+    justifyContent: 'center',
+  },
+  chipText: { fontSize: 14, fontWeight: '600' },
   center: { paddingVertical: 32, alignItems: 'center', gap: 8 },
+  notice: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+    backgroundColor: colors.noticeBg,
+    borderWidth: 1,
+    borderColor: colors.neutral,
+    borderRadius: 12,
+    padding: 14,
+  },
+  noticeTitle: { fontSize: 15, fontWeight: '600', color: colors.text },
+  noticeText: { fontSize: 14, color: colors.text, lineHeight: 20 },
+  noticeDismiss: { fontSize: 15, color: colors.muted },
 });

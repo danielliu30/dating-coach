@@ -22,10 +22,13 @@ type RateLimiter struct {
 	window time.Duration
 }
 
+// NewRateLimiter returns a limiter allowing limit requests per window per key.
 func NewRateLimiter(rdb *redis.Client, limit int, window time.Duration) *RateLimiter {
 	return &RateLimiter{rdb: rdb, limit: limit, window: window}
 }
 
+// Allow counts one request against key and reports whether it stays within the
+// current window's budget.
 func (l *RateLimiter) Allow(ctx context.Context, key string) (bool, error) {
 	redisKey := fmt.Sprintf("ratelimit:auth:%s:%d", key, time.Now().UnixNano()/int64(l.window))
 	count, err := l.rdb.Incr(ctx, redisKey).Result()
@@ -59,6 +62,8 @@ func (l *RateLimiter) Middleware(next http.Handler) http.Handler {
 	})
 }
 
+// ClientIP is the rate-limit key: the forwarded client address when the API
+// runs behind a proxy, otherwise the peer address.
 func ClientIP(r *http.Request) string {
 	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
 		return strings.TrimSpace(strings.Split(fwd, ",")[0])
