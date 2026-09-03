@@ -44,6 +44,127 @@ INSERT INTO coaching_sessions (user_id, coach_id, scheduled_time, duration_minut
 VALUES ($1, $2, $3, $4, $5, 'pending', $6, $7)
 RETURNING *;
 
+-- name: CreatePendingPaymentSession :one
+INSERT INTO coaching_sessions (user_id, coach_id, scheduled_time, duration_minutes, topic,
+                               status, payment_status, amount_cents, currency, hold_expires_at)
+VALUES ($1, $2, $3, $4, $5, 'pending_payment', 'pending', $6, $7, $8)
+RETURNING *;
+
+-- name: AttachCheckout :one
+-- Stores the provider checkout on the session. If the hold has already been
+-- released meanwhile, the checkout is recorded as owed clean-up ('expiring')
+-- so the sweeper closes it; the caller must not hand out its URL.
+UPDATE coaching_sessions
+SET payment_ref = $2,
+    payment_status = CASE WHEN status = 'pending_payment' THEN payment_status ELSE 'expiring' END,
+    updated_at = now()
+WHERE id = $1
+RETURNING *;
+
+-- name: GetSessionByPaymentRefForUpdate :one
+SELECT * FROM coaching_sessions WHERE payment_ref = $1 FOR UPDATE;
+
+-- name: AuthorizeSession :one
+-- The customer's card is held: the booking becomes a request the coach has
+-- until respond_by to answer.
+UPDATE coaching_sessions
+SET status = 'pending', payment_status = 'authorized', hold_expires_at = NULL,
+    confirmation_token = $2, respond_by = $3, updated_at = now()
+WHERE id = $1 AND status = 'pending_payment'
+RETURNING *;
+
+-- name: ReinstateAuthorizedSession :one
+-- A card hold that landed after the payment hold lapsed. Only a hold the
+-- sweeper timed out (hold_expires_at still set) is revived; one the participant
+-- cancelled (hold cleared) is left as it is.
+UPDATE coaching_sessions
+SET status = 'pending', payment_status = 'authorized', hold_expires_at = NULL,
+    confirmation_token = $2, respond_by = $3, updated_at = now()
+WHERE id = $1 AND status = 'expired' AND hold_expires_at IS NOT NULL
+  AND payment_status IN ('pending', 'expiring', 'failed')
+RETURNING *;
+
+-- name: ExpireLateAuthorizedHold :execrows
+-- A card hold whose authorisation arrived after the session had already
+-- started: the booking is over and the money is owed back.
+UPDATE coaching_sessions
+SET status = 'expired', payment_status = 'releasing', updated_at = now()
+WHERE id = $1 AND status = 'pending_payment';
+
+-- name: MarkAuthorizationToRelease :execrows
+-- A card hold on a booking that will not go ahead (declined, expired,
+-- cancelled, or authorised after the participant cancelled the request).
+UPDATE coaching_sessions
+SET payment_status = 'releasing', updated_at = now()
+WHERE id = $1 AND status <> 'pending' AND status <> 'scheduled'
+  AND payment_status IN ('pending', 'expiring', 'failed', 'authorized');
+
+-- name: MarkSessionCaptured :execrows
+UPDATE coaching_sessions
+SET payment_status = 'paid', updated_at = now()
+WHERE id = $1 AND payment_status = 'authorized';
+
+-- name: MarkAuthorizationReleased :execrows
+UPDATE coaching_sessions
+SET payment_status = 'released', updated_at = now()
+WHERE id = $1 AND payment_status = 'releasing';
+
+-- name: MarkSessionRefunded :execrows
+UPDATE coaching_sessions
+SET payment_status = 'refunded', updated_at = now()
+WHERE id = $1 AND payment_status = 'refund_due';
+
+-- name: CancelPendingPaymentSession :execrows
+-- For a hold whose checkout is already closed (provider expired it, or it
+-- was never created).
+UPDATE coaching_sessions
+SET status = 'cancelled', payment_status = 'failed', updated_at = now()
+WHERE id = $1 AND status = 'pending_payment';
+
+-- name: ReleasePendingPaymentSession :one
+-- For a hold abandoned by a participant while its checkout may still be open:
+-- the checkout becomes owed clean-up for the sweeper. Clearing hold_expires_at
+-- records that this was a deliberate cancel, not a timeout.
+UPDATE coaching_sessions
+SET status = 'cancelled',
+    payment_status = CASE WHEN payment_ref IS NULL THEN 'failed' ELSE 'expiring' END,
+    hold_expires_at = NULL,
+    updated_at = now()
+WHERE id = $1 AND status = 'pending_payment'
+RETURNING *;
+
+-- name: ExpirePaymentHolds :execrows
+UPDATE coaching_sessions
+SET status = 'expired',
+    payment_status = CASE WHEN payment_ref IS NULL THEN 'failed' ELSE 'expiring' END,
+    updated_at = now()
+WHERE status = 'pending_payment' AND hold_expires_at < $1;
+
+-- name: ListCheckoutsToExpire :many
+SELECT * FROM coaching_sessions
+WHERE payment_status = 'expiring' AND payment_ref IS NOT NULL
+ORDER BY updated_at;
+
+-- name: MarkCheckoutExpired :execrows
+UPDATE coaching_sessions
+SET payment_status = 'failed', updated_at = now()
+WHERE id = $1 AND payment_status = 'expiring';
+
+-- name: ListAuthorizationsToRelease :many
+SELECT * FROM coaching_sessions
+WHERE payment_status = 'releasing' AND payment_ref IS NOT NULL
+ORDER BY updated_at;
+
+-- name: ListRefundsDue :many
+SELECT * FROM coaching_sessions
+WHERE payment_status = 'refund_due' AND payment_ref IS NOT NULL
+ORDER BY updated_at;
+
+-- name: RecordPaymentEvent :execrows
+INSERT INTO payment_events (provider_event_id, session_id, event_type)
+VALUES ($1, $2, $3)
+ON CONFLICT (provider_event_id) DO NOTHING;
+
 -- name: GetCoachingSession :one
 SELECT * FROM coaching_sessions WHERE id = $1;
 
@@ -78,6 +199,10 @@ RETURNING *;
 -- name: DeclineSession :one
 UPDATE coaching_sessions
 SET status = 'declined',
+    payment_status = CASE payment_status
+                         WHEN 'authorized' THEN 'releasing'
+                         WHEN 'paid' THEN 'refund_due'
+                         ELSE payment_status END,
     confirmation_token = NULL,
     respond_by = NULL,
     calendar_sequence = calendar_sequence + 1,
@@ -88,6 +213,10 @@ RETURNING *;
 -- name: ExpirePendingSessions :many
 UPDATE coaching_sessions
 SET status = 'expired',
+    payment_status = CASE payment_status
+                         WHEN 'authorized' THEN 'releasing'
+                         WHEN 'paid' THEN 'refund_due'
+                         ELSE payment_status END,
     confirmation_token = NULL,
     calendar_sequence = calendar_sequence + 1,
     updated_at = now()
@@ -121,14 +250,19 @@ ORDER BY s.scheduled_time;
 SELECT id, scheduled_time, duration_minutes
 FROM coaching_sessions
 WHERE coach_id = $1
-  AND status IN ('pending', 'scheduled')
+  AND status IN ('pending_payment', 'pending', 'scheduled')
   AND scheduled_time >= $2
   AND scheduled_time < $3
 ORDER BY scheduled_time;
 
 -- name: UpdateSessionStatus :one
+-- A participant's cancel clears the hold marker so a late payment refunds
+-- rather than reinstates, even if the sweeper had already released the hold.
 UPDATE coaching_sessions
-SET status = $2, calendar_sequence = calendar_sequence + 1, updated_at = now()
+SET status = $2,
+    payment_status = CASE WHEN $2 = 'cancelled' AND payment_status = 'authorized' THEN 'releasing' ELSE payment_status END,
+    calendar_sequence = calendar_sequence + 1,
+    updated_at = now()
 WHERE id = $1 AND status = sqlc.arg('expected_status')
 RETURNING *;
 

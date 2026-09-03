@@ -83,6 +83,11 @@ type CoachingSession struct {
 	RespondBy         *time.Time `json:"respond_by"`
 	ConfirmedAt       *time.Time `json:"confirmed_at"`
 	CalendarSequence  int32      `json:"calendar_sequence"`
+	PaymentStatus     string     `json:"payment_status"`
+	AmountCents       int32      `json:"amount_cents"`
+	Currency          string     `json:"currency"`
+	PaymentRef        *string    `json:"payment_ref"`
+	HoldExpiresAt     *time.Time `json:"hold_expires_at"`
 }
 
 type Conversation struct {
@@ -123,6 +128,13 @@ type Notification struct {
 	Payload   json.RawMessage `json:"payload"`
 	SentAt    *time.Time      `json:"sent_at"`
 	CreatedAt time.Time       `json:"created_at"`
+}
+
+type PaymentEvent struct {
+	ProviderEventID string     `json:"provider_event_id"`
+	SessionID       *uuid.UUID `json:"session_id"`
+	EventType       string     `json:"event_type"`
+	ReceivedAt      time.Time  `json:"received_at"`
 }
 
 type RefreshToken struct {

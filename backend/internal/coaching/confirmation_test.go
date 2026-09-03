@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/danielliu30/dating-coach/backend/internal/payments"
 	"github.com/danielliu30/dating-coach/backend/internal/store/db"
 )
 
@@ -123,7 +124,7 @@ func testService(t *testing.T) (*Service, *pgxpool.Pool) {
 		t.Fatalf("connect postgres: %v", err)
 	}
 	t.Cleanup(pool.Close)
-	return NewService(pool, db.New(pool), "http://app.test", "no-reply@example.test"), pool
+	return NewService(pool, db.New(pool), payments.Disabled{}, 15*time.Minute, "http://app.test", "no-reply@example.test"), pool
 }
 
 // insertUser creates a user with the given role and registers its removal,

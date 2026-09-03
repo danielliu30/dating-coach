@@ -23,6 +23,7 @@ import (
 	"github.com/danielliu30/dating-coach/backend/internal/config"
 	"github.com/danielliu30/dating-coach/backend/internal/httpx"
 	"github.com/danielliu30/dating-coach/backend/internal/notify"
+	"github.com/danielliu30/dating-coach/backend/internal/payments"
 	"github.com/danielliu30/dating-coach/backend/internal/store"
 )
 
@@ -82,7 +83,11 @@ func run() error {
 		auth.NewService(pg.Pool, pg.Queries, issuer, notifier, cfg.BcryptCost, cfg.PublicAppURL, denylist, deletions, cfg.JWTTTL, cfg.VerifyTokenTTL, cfg.RefreshTokenTTL),
 		limiter,
 	)
-	coachingHandler := coaching.NewHandler(coaching.NewService(pg.Pool, pg.Queries, cfg.PublicAppURL, cfg.MailFrom))
+	provider, err := payments.New(cfg.PaymentsEnabled)
+	if err != nil {
+		return err
+	}
+	coachingHandler := coaching.NewHandler(coaching.NewService(pg.Pool, pg.Queries, provider, cfg.PaymentHoldTTL, cfg.PublicAppURL, cfg.MailFrom))
 	hub := chat.NewHub(rdb)
 	// Sockets authenticated before a deletion would otherwise keep running
 	// until their next scheduled re-check; this closes them as it happens.

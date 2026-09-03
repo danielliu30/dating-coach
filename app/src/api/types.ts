@@ -77,7 +77,32 @@ export interface Slot {
   duration_minutes: number;
 }
 
-export type SessionStatus = 'scheduled' | 'completed' | 'cancelled' | 'no_show';
+export type SessionStatus =
+  | 'pending_payment'
+  | 'pending'
+  | 'scheduled'
+  | 'declined'
+  | 'expired'
+  | 'completed'
+  | 'cancelled'
+  | 'no_show';
+
+export type PaymentStatus =
+  | 'not_required'
+  | 'pending'
+  | 'expiring'
+  | 'authorized'
+  | 'paid'
+  | 'releasing'
+  | 'released'
+  | 'refund_due'
+  | 'refunded'
+  | 'failed';
+
+/** Server-side feature switches the app must follow rather than decide itself. */
+export interface CoachingConfig {
+  payments_enabled: boolean;
+}
 
 export interface CoachingSession {
   id: string;
@@ -89,6 +114,12 @@ export interface CoachingSession {
   status: SessionStatus;
   topic: string;
   coach_notes?: string;
+  payment_status: PaymentStatus;
+  amount_cents: number;
+  currency: string;
+  hold_expires_at?: string;
+  /** Only present on a booking response that must be paid for. */
+  checkout_url?: string;
 }
 
 export interface ChatThread {

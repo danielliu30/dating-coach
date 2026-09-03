@@ -9,12 +9,14 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/danielliu30/dating-coach/backend/internal/payments"
 	"github.com/danielliu30/dating-coach/backend/internal/store/db"
 )
 
@@ -26,7 +28,12 @@ var (
 	ErrSlotTaken    = errors.New("slot is no longer available")
 	ErrUnavailable  = errors.New("coach is not available then")
 	ErrExpired      = errors.New("request has expired")
+	ErrPayment      = errors.New("payment could not be processed")
 )
+
+// maxHourlyRateCents keeps priceCents inside amount_cents (int32) for the
+// longest bookable session.
+const maxHourlyRateCents = math.MaxInt32 / (maxSessionMinutes / 60)
 
 const (
 	defaultSessionMinutes = 45
@@ -43,23 +50,27 @@ const (
 
 // Session statuses. A booking starts pending and holds its slot; the coach
 // confirms it to scheduled or declines it, or it expires unanswered. Scheduled
-// sessions end completed, cancelled or no_show.
+// sessions end completed, cancelled or no_show. With payments on, a booking
+// starts one step earlier as pending_payment: it holds its slot while the
+// client authorises their card, and only becomes pending once that succeeded.
 const (
-	StatusPending   = "pending"
-	StatusScheduled = "scheduled"
-	StatusDeclined  = "declined"
-	StatusExpired   = "expired"
-	StatusCompleted = "completed"
-	StatusCancelled = "cancelled"
-	StatusNoShow    = "no_show"
+	StatusPendingPayment = "pending_payment"
+	StatusPending        = "pending"
+	StatusScheduled      = "scheduled"
+	StatusDeclined       = "declined"
+	StatusExpired        = "expired"
+	StatusCompleted      = "completed"
+	StatusCancelled      = "cancelled"
+	StatusNoShow         = "no_show"
 )
 
 // statusTransitions lists, per current status, the statuses SetStatus may move
 // a session to. Confirmation and decline go through Respond instead, and
 // expiry through ExpirePending, so neither is reachable from here.
 var statusTransitions = map[string]map[string]bool{
-	StatusPending:   {StatusCancelled: true},
-	StatusScheduled: {StatusCompleted: true, StatusCancelled: true, StatusNoShow: true},
+	StatusPendingPayment: {StatusCancelled: true},
+	StatusPending:        {StatusCancelled: true},
+	StatusScheduled:      {StatusCompleted: true, StatusCancelled: true, StatusNoShow: true},
 }
 
 // coachOnlyStatuses are the outcomes only the coach may record.
@@ -69,16 +80,38 @@ var coachOnlyStatuses = map[string]bool{StatusCompleted: true, StatusNoShow: tru
 // each coach's weekly availability, the bookable slots derived from it, and the
 // lifecycle of a booked session (request, confirm, reschedule, status, notes).
 type Service struct {
-	pool    *pgxpool.Pool
-	queries *db.Queries
-	mail    mailer
+	pool     *pgxpool.Pool
+	queries  *db.Queries
+	mail     mailer
+	payments payments.Provider
+	// holdTTL is how long a booking keeps its slot while the client is at the
+	// payment page.
+	holdTTL time.Duration
+	// appURL is where the payment provider sends the client back to.
+	appURL string
 }
 
 // NewService wires the service dependencies; called once from cmd/api and
-// cmd/worker. appURL is the public app origin the confirmation links in coach
-// emails point at and mailFrom the organizer address on calendar invites.
-func NewService(pool *pgxpool.Pool, queries *db.Queries, appURL, mailFrom string) *Service {
-	return &Service{pool: pool, queries: queries, mail: mailer{appURL: appURL, mailFrom: mailFrom}}
+// cmd/worker. provider decides whether bookings are paid: pass
+// payments.Disabled{} to skip the card authorisation step. holdTTL is how long
+// a pending_payment booking keeps its slot. appURL is the public app origin
+// the confirmation links in coach emails and the payment return URLs point at
+// and mailFrom the organizer address on calendar invites.
+func NewService(pool *pgxpool.Pool, queries *db.Queries, provider payments.Provider, holdTTL time.Duration, appURL, mailFrom string) *Service {
+	return &Service{
+		pool:     pool,
+		queries:  queries,
+		mail:     mailer{appURL: appURL, mailFrom: mailFrom},
+		payments: provider,
+		holdTTL:  holdTTL,
+		appURL:   appURL,
+	}
+}
+
+// PaymentsEnabled reports whether booking a session requires authorising a
+// card payment first.
+func (s *Service) PaymentsEnabled() bool {
+	return s.payments.Enabled()
 }
 
 // Coach is the public directory view of a coach profile.
@@ -107,6 +140,13 @@ type Session struct {
 	Topic           string `json:"topic"`
 	CoachNotes      string `json:"coach_notes,omitempty"`
 	RespondBy       string `json:"respond_by,omitempty"`
+	PaymentStatus   string `json:"payment_status"`
+	AmountCents     int32  `json:"amount_cents"`
+	Currency        string `json:"currency"`
+	HoldExpiresAt   string `json:"hold_expires_at,omitempty"`
+	// CheckoutURL is only set on the response to a booking that must be paid
+	// for; it is where the client authorises the payment.
+	CheckoutURL string `json:"checkout_url,omitempty"`
 }
 
 // Slot is one bookable start time offered to clients.
@@ -136,6 +176,10 @@ func sessionOf(s db.CoachingSession, counterpart string) Session {
 		Topic:           s.Topic,
 		CoachNotes:      s.CoachNotes,
 		RespondBy:       rfc3339(s.RespondBy),
+		PaymentStatus:   s.PaymentStatus,
+		AmountCents:     s.AmountCents,
+		Currency:        s.Currency,
+		HoldExpiresAt:   rfc3339(s.HoldExpiresAt),
 	}
 }
 
@@ -216,6 +260,9 @@ func (s *Service) UpsertProfile(ctx context.Context, coachID uuid.UUID, in Upser
 	if _, err := time.LoadLocation(in.Timezone); err != nil {
 		return Coach{}, fmt.Errorf("%w: unknown timezone %q", ErrInvalidInput, in.Timezone)
 	}
+	if in.HourlyRateCents < 0 || (s.payments.Enabled() && in.HourlyRateCents > maxHourlyRateCents) {
+		return Coach{}, fmt.Errorf("%w: hourly_rate_cents must be between 0 and %d", ErrInvalidInput, maxHourlyRateCents)
+	}
 	if in.Specialties == nil {
 		in.Specialties = []string{}
 	}
@@ -286,7 +333,9 @@ func (s *Service) ListAvailability(ctx context.Context, coachID uuid.UUID) ([]Av
 // OpenSlots expands the coach's weekly availability into concrete slots between
 // from and to, dropping anything that overlaps an already booked session.
 // excludeSessionID ignores one of the actor's own sessions, so a reschedule can
-// offer times that overlap the slot being moved.
+// offer times that overlap the slot being moved. With payments on, slots too
+// close to start for the client to complete checkout (see minCheckoutWindow)
+// are not offered either; a reschedule takes no payment, so it keeps those.
 func (s *Service) OpenSlots(ctx context.Context, coachID, actorID uuid.UUID, from, to time.Time, durationMinutes int32, excludeSessionID *uuid.UUID) ([]Slot, error) {
 	if excludeSessionID != nil {
 		session, err := s.participant(ctx, *excludeSessionID, actorID)
@@ -333,6 +382,12 @@ func (s *Service) OpenSlots(ctx context.Context, coachID, actorID uuid.UUID, fro
 	byWeekday := map[int16][]AvailabilityWindow{}
 	for _, w := range windows {
 		byWeekday[w.Weekday] = append(byWeekday[w.Weekday], w)
+	}
+
+	if s.payments.Enabled() && excludeSessionID == nil {
+		if earliest := time.Now().Add(minCheckoutWindow); earliest.After(from) {
+			from = earliest
+		}
 	}
 
 	slots := []Slot{}
@@ -416,6 +471,9 @@ func (s *Service) BookSession(ctx context.Context, userID uuid.UUID, in BookInpu
 	}
 	if err := s.assertBookable(ctx, coachID, scheduled, duration, true, nil); err != nil {
 		return Session{}, err
+	}
+	if s.payments.Enabled() {
+		return s.bookPaid(ctx, userID, coachID, scheduled, duration, in.Topic)
 	}
 	token, err := randomToken()
 	if err != nil {
@@ -560,6 +618,12 @@ func (s *Service) respond(ctx context.Context, session db.CoachingSession, actio
 			return Session{}, s.whyNotPending(ctx, session.ID)
 		}
 		return Session{}, fmt.Errorf("%s session: %w", action, err)
+	}
+	if action == "confirm" && updated.PaymentStatus == payments.StatusAuthorized {
+		if err := s.capture(ctx, q, updated); err != nil {
+			return Session{}, err
+		}
+		updated.PaymentStatus = payments.StatusPaid
 	}
 	parties, err := q.GetSessionParties(ctx, session.ID)
 	if err != nil {
@@ -723,6 +787,10 @@ func (s *Service) ListForUser(ctx context.Context, userID uuid.UUID, status *str
 			Topic:           row.Topic,
 			CoachNotes:      row.CoachNotes,
 			RespondBy:       rfc3339(row.RespondBy),
+			PaymentStatus:   row.PaymentStatus,
+			AmountCents:     row.AmountCents,
+			Currency:        row.Currency,
+			HoldExpiresAt:   rfc3339(row.HoldExpiresAt),
 		})
 	}
 	return out, nil
@@ -752,6 +820,10 @@ func (s *Service) ListForCoach(ctx context.Context, coachID uuid.UUID, status *s
 			Topic:           row.Topic,
 			CoachNotes:      row.CoachNotes,
 			RespondBy:       rfc3339(row.RespondBy),
+			PaymentStatus:   row.PaymentStatus,
+			AmountCents:     row.AmountCents,
+			Currency:        row.Currency,
+			HoldExpiresAt:   rfc3339(row.HoldExpiresAt),
 		})
 	}
 	return out, nil
@@ -787,6 +859,20 @@ func (s *Service) SetStatus(ctx context.Context, sessionID, actorID uuid.UUID, s
 	byCoach := actorID == session.CoachID
 	if coachOnlyStatuses[status] && !byCoach {
 		return Session{}, ErrForbidden
+	}
+	if session.Status == StatusPendingPayment {
+		// Nobody has been emailed yet, so there is nothing to notify; the open
+		// checkout becomes owed clean-up for SweepPayments. If the card was
+		// authorised in the meantime the row is now pending and the ordinary
+		// cancel below releases the authorisation instead.
+		updated, err := s.queries.ReleasePendingPaymentSession(ctx, sessionID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return s.SetStatus(ctx, sessionID, actorID, status)
+		}
+		if err != nil {
+			return Session{}, fmt.Errorf("release payment hold: %w", err)
+		}
+		return sessionOf(updated, ""), nil
 	}
 
 	tx, err := s.pool.Begin(ctx)

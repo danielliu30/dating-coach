@@ -6,6 +6,7 @@ import type {
   ChatMessage,
   ChatThread,
   Coach,
+  CoachingConfig,
   CoachingSession,
   Conversation,
   DatingProfileInput,
@@ -211,6 +212,11 @@ export class ApiClient {
       `/coaching/coaches/${coachID}/slots?duration_minutes=${durationMinutes}${exclude}`,
     );
     return slots ?? [];
+  }
+
+  /** Fetches server-side coaching switches (e.g. whether booking requires payment). */
+  coachingConfig() {
+    return this.request<CoachingConfig>('GET', '/coaching/config');
   }
 
   bookSession(input: {

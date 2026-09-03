@@ -18,6 +18,7 @@ import (
 	"github.com/danielliu30/dating-coach/backend/internal/coaching"
 	"github.com/danielliu30/dating-coach/backend/internal/config"
 	"github.com/danielliu30/dating-coach/backend/internal/notify"
+	"github.com/danielliu30/dating-coach/backend/internal/payments"
 	"github.com/danielliu30/dating-coach/backend/internal/store"
 	"github.com/danielliu30/dating-coach/backend/internal/store/db"
 )
@@ -53,7 +54,11 @@ func run() error {
 		analysis.NewMLClient(cfg.MLServiceURL, cfg.MLServiceTimeout),
 		notifier,
 	)
-	bookings := coaching.NewService(pg.Pool, pg.Queries, cfg.PublicAppURL, cfg.MailFrom)
+	provider, err := payments.New(cfg.PaymentsEnabled)
+	if err != nil {
+		return err
+	}
+	bookings := coaching.NewService(pg.Pool, pg.Queries, provider, cfg.PaymentHoldTTL, cfg.PublicAppURL, cfg.MailFrom)
 	// The worker revokes the sessions of the accounts it deletes, so it needs
 	// the same denylist the API writes.
 	rdb, err := store.OpenRedis(ctx, cfg.RedisURL)
@@ -119,6 +124,15 @@ func run() error {
 			return expireBookings(ctx, bookings)
 		})
 	}()
+	if provider.Enabled() {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			consume(ctx, "payment sweep", func(ctx context.Context) error {
+				return sweepPayments(ctx, bookings)
+			})
+		}()
+	}
 	wg.Wait()
 	return nil
 }
@@ -233,6 +247,34 @@ func expireBookings(ctx context.Context, svc *coaching.Service) error {
 			}
 			if n > 0 {
 				slog.Info("expired unanswered session requests", "count", n)
+			}
+		}
+	}
+}
+
+// sweepPayments releases lapsed payment holds and retries the provider
+// clean-up owed by declined, expired and cancelled paid bookings, every
+// bookingExpiryInterval until ctx ends. A failed pass is logged and retried on
+// the next tick rather than returned.
+func sweepPayments(ctx context.Context, svc *coaching.Service) error {
+	ticker := time.NewTicker(bookingExpiryInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			res, err := svc.SweepPayments(ctx, time.Now())
+			if err != nil {
+				slog.Error("sweep payments", "error", err)
+			}
+			if res != (coaching.SweepResult{}) {
+				slog.Info("swept payments",
+					"holds_released", res.HoldsReleased,
+					"checkouts_expired", res.CheckoutsExpired,
+					"authorizations_released", res.AuthorizationsFreed,
+					"refunds_issued", res.RefundsIssued,
+				)
 			}
 		}
 	}
