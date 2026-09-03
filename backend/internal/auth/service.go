@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/mail"
+	"slices"
 	"strings"
 	"time"
 
@@ -141,23 +142,118 @@ type Session struct {
 
 // Profile is the public view of a user row, also returned by GET /auth/me.
 type Profile struct {
-	ID            string `json:"id"`
-	Email         string `json:"email"`
-	DisplayName   string `json:"display_name"`
-	Role          string `json:"role"`
-	EmailVerified bool   `json:"email_verified"`
+	ID              string   `json:"id"`
+	Email           string   `json:"email"`
+	DisplayName     string   `json:"display_name"`
+	Role            string   `json:"role"`
+	EmailVerified   bool     `json:"email_verified"`
+	DatingStyles    []string `json:"dating_styles"`
+	PhasesStrong    []string `json:"phases_strong"`
+	PhasesWorkingOn []string `json:"phases_working_on"`
+}
+
+// DatingStyles is the vocabulary of where a user meets people, as stored in
+// users.dating_styles and accepted by PATCH /auth/me.
+var DatingStyles = []string{
+	"in_person", "tinder", "hinge", "bumble", "coffee_meets_bagel",
+	"match", "okcupid", "feeld", "speed_dating", "friends_intro",
+}
+
+// DatingPhases is the vocabulary of stages in a dating flow, in the order they
+// happen; each may be listed as a strength or as being worked on, not both.
+var DatingPhases = []string{
+	"opening", "first_messages", "building_rapport", "flirting",
+	"asking_out", "first_date", "follow_up", "defining_relationship",
+}
+
+// DatingProfileInput is the decoded PATCH /auth/me body. Every list replaces the
+// stored one wholesale; a nil list is treated as empty.
+type DatingProfileInput struct {
+	DatingStyles    []string `json:"dating_styles"`
+	PhasesStrong    []string `json:"phases_strong"`
+	PhasesWorkingOn []string `json:"phases_working_on"`
 }
 
 // profileOf projects a database row onto the API shape, keeping the password
 // hash and verification token out of responses.
 func profileOf(u db.User) Profile {
 	return Profile{
-		ID:            u.ID.String(),
-		Email:         u.Email,
-		DisplayName:   u.DisplayName,
-		Role:          u.Role,
-		EmailVerified: u.EmailVerified,
+		ID:              u.ID.String(),
+		Email:           u.Email,
+		DisplayName:     u.DisplayName,
+		Role:            u.Role,
+		EmailVerified:   u.EmailVerified,
+		DatingStyles:    nonNil(u.DatingStyles),
+		PhasesStrong:    nonNil(u.PhasesStrong),
+		PhasesWorkingOn: nonNil(u.PhasesWorkingOn),
 	}
+}
+
+// nonNil returns an empty slice in place of nil so lists serialise as [] rather
+// than null.
+func nonNil(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
+}
+
+// normaliseChoices lowercases and trims values, drops blanks and duplicates,
+// and returns them in vocabulary order. It fails with ErrInvalidInput, naming
+// field, when a value is not in the vocabulary.
+func normaliseChoices(field string, values, vocabulary []string) ([]string, error) {
+	chosen := make(map[string]bool, len(values))
+	for _, v := range values {
+		v = strings.ToLower(strings.TrimSpace(v))
+		if v == "" {
+			continue
+		}
+		if !slices.Contains(vocabulary, v) {
+			return nil, fmt.Errorf("%w: %s contains unknown value %q", ErrInvalidInput, field, v)
+		}
+		chosen[v] = true
+	}
+	out := make([]string, 0, len(chosen))
+	for _, v := range vocabulary {
+		if chosen[v] {
+			out = append(out, v)
+		}
+	}
+	return out, nil
+}
+
+// UpdateDatingProfile validates in against the vocabularies and replaces the
+// caller's dating styles and phases, returning the updated profile. A phase
+// listed both as a strength and as being worked on is rejected with
+// ErrInvalidInput rather than resolved silently.
+func (s *Service) UpdateDatingProfile(ctx context.Context, principal Principal, in DatingProfileInput) (Profile, error) {
+	styles, err := normaliseChoices("dating_styles", in.DatingStyles, DatingStyles)
+	if err != nil {
+		return Profile{}, err
+	}
+	strong, err := normaliseChoices("phases_strong", in.PhasesStrong, DatingPhases)
+	if err != nil {
+		return Profile{}, err
+	}
+	working, err := normaliseChoices("phases_working_on", in.PhasesWorkingOn, DatingPhases)
+	if err != nil {
+		return Profile{}, err
+	}
+	for _, p := range strong {
+		if slices.Contains(working, p) {
+			return Profile{}, fmt.Errorf("%w: phase %q cannot be both a strength and being worked on", ErrInvalidInput, p)
+		}
+	}
+	user, err := s.queries.UpdateUserDatingProfile(ctx, db.UpdateUserDatingProfileParams{
+		ID:              principal.UserID,
+		DatingStyles:    styles,
+		PhasesStrong:    strong,
+		PhasesWorkingOn: working,
+	})
+	if err != nil {
+		return Profile{}, fmt.Errorf("update dating profile: %w", err)
+	}
+	return profileOf(user), nil
 }
 
 // SignUp creates the account and returns a verify-scoped session: the token it
