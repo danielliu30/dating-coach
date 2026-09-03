@@ -120,6 +120,16 @@ Top tab labels may be truncated ("Coac…", "Analy…") at ~1024px — cosmetic,
     passes the `'defer'` policy. If it fires twice, `refreshExpiresRef` is cleared before the reason is
     computed and every revoked session wrongly shows the "expired" copy.
 
+## Dating profile (Account tab → "How you date" / "Phases of dating")
+- Saves go through `PATCH /api/v1/auth/me`; the API log shows the request and psql
+  `select dating_styles, phases_strong, phases_working_on from users where email='…'` shows the arrays.
+- If "Save dating profile" shows "Could not save your dating profile" while the API log shows only an
+  `OPTIONS /auth/me` and no PATCH, the browser CORS preflight was rejected: check `AllowedMethods` in
+  `backend/cmd/api/main.go` includes every verb the web app uses (PATCH was missing once) and rebuild
+  the api (`docker compose up -d --build api`). Any new HTTP verb needs the same care.
+- "Refresh profile" must keep unsaved chip toggles when the server lists are unchanged; test by
+  toggling a chip, pressing Refresh, and asserting the chip stays selected with Save still enabled.
+
 ## Known/likely rough edges to check rather than debug
 - Sending into a closed thread is correctly rejected server-side (nothing persisted) but the client
   send is fire-and-forget (`ChatScreen.tsx`: "sending is fire-and-forget"), so the message silently
