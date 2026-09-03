@@ -585,26 +585,33 @@ func (s *Service) ApplyPaymentEvent(ctx context.Context, ev payments.Event) erro
 }
 
 // reinstateOrRefund handles a payment that arrived after the session's hold was
-// released. It tries to schedule the session again; if the slot has since been
-// taken (exclusion constraint) it marks the payment refund_due instead. The
-// reinstate runs in a savepoint so the conflict does not abort tx. A session
-// that is not cancelled-unpaid (already paid, refunded, ...) is left alone.
+// released. A hold the sweeper timed out is scheduled again if its slot is
+// still free; if the slot has since been taken (exclusion constraint), or the
+// participant had cancelled the hold deliberately, the payment is marked
+// refund_due instead. The reinstate runs in a savepoint so the conflict does
+// not abort tx. A session that is not cancelled-unpaid (already paid,
+// refunded, ...) is left alone.
 func reinstateOrRefund(ctx context.Context, tx pgx.Tx, q *db.Queries, sessionID uuid.UUID) error {
 	sp, err := tx.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("savepoint: %w", err)
 	}
-	if _, err := q.WithTx(sp).ReinstatePaidSession(ctx, sessionID); err != nil {
+	rows, err := q.WithTx(sp).ReinstatePaidSession(ctx, sessionID)
+	if err != nil {
 		_ = sp.Rollback(ctx)
 		if !isSlotConflict(err) {
 			return fmt.Errorf("reinstate session: %w", err)
 		}
-		if _, err := q.MarkPaymentRefundDue(ctx, sessionID); err != nil {
-			return fmt.Errorf("mark refund due: %w", err)
-		}
+	} else if err := sp.Commit(ctx); err != nil {
+		return fmt.Errorf("commit savepoint: %w", err)
+	}
+	if rows == 1 {
 		return nil
 	}
-	return sp.Commit(ctx)
+	if _, err := q.MarkPaymentRefundDue(ctx, sessionID); err != nil {
+		return fmt.Errorf("mark refund due: %w", err)
+	}
+	return nil
 }
 
 // SweepResult counts what one SweepPayments pass did.
@@ -806,10 +813,16 @@ func (s *Service) SetStatus(ctx context.Context, sessionID, actorID uuid.UUID, s
 		// is marked 'expiring' so SweepPayments closes it, and a payment that
 		// still lands is handled by ApplyPaymentEvent's reinstate-or-refund.
 		updated, err := s.queries.ReleasePendingPaymentSession(ctx, sessionID)
-		if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// The payment landed between our read and this update: the
+			// participant was cancelling an unpaid hold, so honour the cancel
+			// and refund the charge.
+			updated, err = s.queries.CancelPaidSessionForRefund(ctx, sessionID)
 			if errors.Is(err, pgx.ErrNoRows) {
 				return s.SetStatus(ctx, sessionID, actorID, status)
 			}
+		}
+		if err != nil {
 			return Session{}, fmt.Errorf("release hold: %w", err)
 		}
 		return sessionOf(updated, ""), nil

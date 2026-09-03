@@ -83,6 +83,37 @@ func (q *Queries) AttachCheckout(ctx context.Context, arg AttachCheckoutParams) 
 	return i, err
 }
 
+const cancelPaidSessionForRefund = `-- name: CancelPaidSessionForRefund :one
+UPDATE coaching_sessions
+SET status = 'cancelled', payment_status = 'refund_due', updated_at = now()
+WHERE id = $1 AND status = 'scheduled' AND payment_status = 'paid'
+RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, payment_status, amount_cents, currency, payment_ref, hold_expires_at
+`
+
+// For a payment that landed while the participant was cancelling the hold.
+func (q *Queries) CancelPaidSessionForRefund(ctx context.Context, id uuid.UUID) (CoachingSession, error) {
+	row := q.db.QueryRow(ctx, cancelPaidSessionForRefund, id)
+	var i CoachingSession
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.CoachID,
+		&i.ScheduledTime,
+		&i.DurationMinutes,
+		&i.Status,
+		&i.Topic,
+		&i.CoachNotes,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.PaymentStatus,
+		&i.AmountCents,
+		&i.Currency,
+		&i.PaymentRef,
+		&i.HoldExpiresAt,
+	)
+	return i, err
+}
+
 const cancelPendingPaymentSession = `-- name: CancelPendingPaymentSession :execrows
 UPDATE coaching_sessions
 SET status = 'cancelled', payment_status = 'failed', updated_at = now()
@@ -746,9 +777,12 @@ func (q *Queries) RecordPaymentEvent(ctx context.Context, arg RecordPaymentEvent
 const reinstatePaidSession = `-- name: ReinstatePaidSession :execrows
 UPDATE coaching_sessions
 SET status = 'scheduled', payment_status = 'paid', hold_expires_at = NULL, updated_at = now()
-WHERE id = $1 AND status = 'cancelled' AND payment_status IN ('pending', 'expiring', 'failed')
+WHERE id = $1 AND status = 'cancelled' AND hold_expires_at IS NOT NULL
+  AND payment_status IN ('pending', 'expiring', 'failed')
 `
 
+// Only a hold the sweeper timed out (hold_expires_at still set) is revived;
+// one the participant cancelled (hold cleared) is left cancelled.
 func (q *Queries) ReinstatePaidSession(ctx context.Context, id uuid.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, reinstatePaidSession, id)
 	if err != nil {
@@ -761,13 +795,15 @@ const releasePendingPaymentSession = `-- name: ReleasePendingPaymentSession :one
 UPDATE coaching_sessions
 SET status = 'cancelled',
     payment_status = CASE WHEN payment_ref IS NULL THEN 'failed' ELSE 'expiring' END,
+    hold_expires_at = NULL,
     updated_at = now()
 WHERE id = $1 AND status = 'pending_payment'
 RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, payment_status, amount_cents, currency, payment_ref, hold_expires_at
 `
 
 // For a hold abandoned by a participant while its checkout may still be open:
-// the checkout becomes owed clean-up for the sweeper.
+// the checkout becomes owed clean-up for the sweeper. Clearing hold_expires_at
+// records that this was a deliberate cancel, not a timeout.
 func (q *Queries) ReleasePendingPaymentSession(ctx context.Context, id uuid.UUID) (CoachingSession, error) {
 	row := q.db.QueryRow(ctx, releasePendingPaymentSession, id)
 	var i CoachingSession

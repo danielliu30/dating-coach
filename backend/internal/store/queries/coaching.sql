@@ -70,9 +70,12 @@ SET status = 'scheduled', payment_status = 'paid', hold_expires_at = NULL, updat
 WHERE id = $1 AND status = 'pending_payment';
 
 -- name: ReinstatePaidSession :execrows
+-- Only a hold the sweeper timed out (hold_expires_at still set) is revived;
+-- one the participant cancelled (hold cleared) is left cancelled.
 UPDATE coaching_sessions
 SET status = 'scheduled', payment_status = 'paid', hold_expires_at = NULL, updated_at = now()
-WHERE id = $1 AND status = 'cancelled' AND payment_status IN ('pending', 'expiring', 'failed');
+WHERE id = $1 AND status = 'cancelled' AND hold_expires_at IS NOT NULL
+  AND payment_status IN ('pending', 'expiring', 'failed');
 
 -- name: MarkPaymentRefundDue :execrows
 UPDATE coaching_sessions
@@ -93,12 +96,21 @@ WHERE id = $1 AND status = 'pending_payment';
 
 -- name: ReleasePendingPaymentSession :one
 -- For a hold abandoned by a participant while its checkout may still be open:
--- the checkout becomes owed clean-up for the sweeper.
+-- the checkout becomes owed clean-up for the sweeper. Clearing hold_expires_at
+-- records that this was a deliberate cancel, not a timeout.
 UPDATE coaching_sessions
 SET status = 'cancelled',
     payment_status = CASE WHEN payment_ref IS NULL THEN 'failed' ELSE 'expiring' END,
+    hold_expires_at = NULL,
     updated_at = now()
 WHERE id = $1 AND status = 'pending_payment'
+RETURNING *;
+
+-- name: CancelPaidSessionForRefund :one
+-- For a payment that landed while the participant was cancelling the hold.
+UPDATE coaching_sessions
+SET status = 'cancelled', payment_status = 'refund_due', updated_at = now()
+WHERE id = $1 AND status = 'scheduled' AND payment_status = 'paid'
 RETURNING *;
 
 -- name: ExpirePaymentHolds :execrows
