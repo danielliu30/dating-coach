@@ -811,6 +811,13 @@ func (s *Service) SetStatus(ctx context.Context, sessionID, actorID uuid.UUID, s
 		if err := s.mail.cancelled(ctx, q, parties, byCoach); err != nil {
 			return Session{}, err
 		}
+		// The coach holds an invite from the request email; the client only
+		// once the session was confirmed.
+		if byCoach || session.Status == StatusScheduled {
+			if err := s.mail.selfCalendarUpdate(ctx, q, parties, byCoach); err != nil {
+				return Session{}, err
+			}
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return Session{}, fmt.Errorf("commit status: %w", err)
@@ -887,7 +894,10 @@ func (s *Service) Reschedule(ctx context.Context, sessionID, actorID uuid.UUID, 
 		return Session{}, fmt.Errorf("load session parties: %w", err)
 	}
 	if byCoach {
-		err = s.mail.coachRescheduled(ctx, q, parties)
+		if err := s.mail.coachRescheduled(ctx, q, parties); err != nil {
+			return Session{}, err
+		}
+		err = s.mail.selfCalendarUpdate(ctx, q, parties, true)
 	} else {
 		err = s.mail.coachRequest(ctx, q, parties, token, true)
 	}

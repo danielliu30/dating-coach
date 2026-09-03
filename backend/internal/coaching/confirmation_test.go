@@ -494,8 +494,64 @@ func TestClientRescheduleNeedsReconfirmation(t *testing.T) {
 	if h := tokenHashOf(t, pool, s.ID); h == firstHash {
 		t.Fatal("client reschedule must issue a fresh token")
 	}
-	if got := outboxFor(t, pool, emailOf(t, pool, coach)); len(got) != 3 || !strings.Contains(got[2], "reconfirm") {
-		t.Fatalf("coach emails = %v, want request, confirmed invite, re-request", got)
+	if got := outboxFor(t, pool, emailOf(t, pool, coach)); len(got) != 4 || !strings.HasPrefix(got[2], "Moved:") || !strings.Contains(got[3], "reconfirm") {
+		t.Fatalf("coach emails = %v, want request, confirmed invite, own move update, re-request", got)
+	}
+	if ics := icsFor(t, pool, emailOf(t, pool, coach), "Moved:"); !strings.Contains(ics, "SEQUENCE:2\r\n") || !strings.Contains(ics, "STATUS:CONFIRMED") {
+		t.Fatalf("coach's own move update should carry the new time as sequence 2:\n%s", ics)
 	}
 	outboxFor(t, pool, emailOf(t, pool, client))
+}
+
+func TestCancellationUpdatesBothCalendars(t *testing.T) {
+	svc, pool := testService(t)
+	ctx := context.Background()
+	coach, client := insertCoach(t, pool), insertUser(t, pool, "user")
+
+	// Client cancels a pending request: only the coach ever held an invite.
+	s, err := svc.BookSession(ctx, client, BookInput{CoachID: coach.String(), ScheduledTime: nextSlot()})
+	if err != nil {
+		t.Fatalf("book: %v", err)
+	}
+	if _, err := svc.SetStatus(ctx, uuid.MustParse(s.ID), client, StatusCancelled); err != nil {
+		t.Fatalf("client cancel pending: %v", err)
+	}
+	if got := outboxFor(t, pool, emailOf(t, pool, client)); len(got) != 1 {
+		t.Fatalf("client emails after cancelling a pending request = %v, want only the request receipt", got)
+	}
+	if got := outboxFor(t, pool, emailOf(t, pool, coach)); len(got) != 2 || !strings.Contains(got[1], "cancelled their session") {
+		t.Fatalf("coach emails = %v, want request then cancellation", got)
+	}
+
+	// Client cancels a confirmed session: both held invites, both get a CANCEL.
+	s, err = svc.BookSession(ctx, client, BookInput{CoachID: coach.String(), ScheduledTime: nextSlot()})
+	if err != nil {
+		t.Fatalf("rebook: %v", err)
+	}
+	sid := uuid.MustParse(s.ID)
+	if _, err := svc.RespondAsCoach(ctx, sid, coach, "confirm"); err != nil {
+		t.Fatalf("confirm: %v", err)
+	}
+	if _, err := svc.SetStatus(ctx, sid, client, StatusCancelled); err != nil {
+		t.Fatalf("client cancel confirmed: %v", err)
+	}
+	if ics := icsFor(t, pool, emailOf(t, pool, client), "Cancelled: session with"); !strings.Contains(ics, "METHOD:CANCEL") || !strings.Contains(ics, "UID:"+s.ID+"@") {
+		t.Fatalf("client's own cancel update should cancel the confirmed event:\n%s", ics)
+	}
+
+	// Coach cancels a confirmed session: the coach's copy is cancelled too.
+	s, err = svc.BookSession(ctx, client, BookInput{CoachID: coach.String(), ScheduledTime: nextSlot()})
+	if err != nil {
+		t.Fatalf("rebook: %v", err)
+	}
+	sid = uuid.MustParse(s.ID)
+	if _, err := svc.RespondAsCoach(ctx, sid, coach, "confirm"); err != nil {
+		t.Fatalf("confirm: %v", err)
+	}
+	if _, err := svc.SetStatus(ctx, sid, coach, StatusCancelled); err != nil {
+		t.Fatalf("coach cancel: %v", err)
+	}
+	if ics := icsFor(t, pool, emailOf(t, pool, coach), "Cancelled: session with"); !strings.Contains(ics, "METHOD:CANCEL") || !strings.Contains(ics, "UID:"+s.ID+"@") {
+		t.Fatalf("coach's own cancel update should cancel their event:\n%s", ics)
+	}
 }

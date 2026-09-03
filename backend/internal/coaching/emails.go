@@ -141,6 +141,29 @@ func (m mailer) cancelled(ctx context.Context, q *db.Queries, s db.GetSessionPar
 	return m.enqueue(ctx, q, s.CoachEmail, fmt.Sprintf("%s cancelled their session", s.UserName), body, invite(s, m.mailFrom))
 }
 
+// selfCalendarUpdate sends the party who made a change (toCoach picks which)
+// the invite reflecting it, so the event they already hold in their own
+// calendar is moved or removed too: a CANCEL after they cancel, the new time
+// after a coach reschedules. It is only meant for a party who received an
+// invite before; callers skip it otherwise.
+func (m mailer) selfCalendarUpdate(ctx context.Context, q *db.Queries, s db.GetSessionPartiesRow, toCoach bool) error {
+	to, name, other, forCoach := s.UserEmail, s.UserName, s.CoachName, false
+	if toCoach {
+		to, name, other, forCoach = s.CoachEmail, s.CoachName, s.UserName, true
+	}
+	var subject, body string
+	if s.Status == StatusCancelled {
+		subject = fmt.Sprintf("Cancelled: session with %s", other)
+		body = fmt.Sprintf("Hi %s,\n\nYou cancelled your session with %s on %s. The attached update removes it from your calendar.",
+			name, other, when(s, forCoach))
+	} else {
+		subject = fmt.Sprintf("Moved: session with %s", other)
+		body = fmt.Sprintf("Hi %s,\n\nYou moved your session with %s.\n\nNew time: %s\nTopic: %s\n\nThe attached update moves the event in your calendar.",
+			name, other, when(s, forCoach), orNone(s.Topic))
+	}
+	return m.enqueue(ctx, q, to, subject, body, invite(s, m.mailFrom))
+}
+
 // coachRescheduled tells the client the coach moved the session, with an
 // updated invite. The session keeps its status, so no reconfirmation is needed.
 func (m mailer) coachRescheduled(ctx context.Context, q *db.Queries, s db.GetSessionPartiesRow) error {

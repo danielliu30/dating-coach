@@ -22,6 +22,7 @@ x-backend-env: &backend-env
   SMTP_PORT: ${SMTP_PORT:-587}
   SMTP_USERNAME: ${SMTP_USERNAME:-}
   SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+  SMTP_TIMEOUT: ${SMTP_TIMEOUT:-30s}
   MAIL_FROM: ${MAIL_FROM:-no-reply@datingcoach.local}
 
 services:
