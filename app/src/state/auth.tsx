@@ -274,9 +274,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
       // into another account) is returned but not persisted, so it cannot be
       // paired with a token that belongs to someone else.
       updateDatingProfile: async (input) => {
-        const sent = tokenRef.current;
+        const sent = principalRef.current;
         const profile = await api.updateDatingProfile(input);
-        if (tokenRef.current !== sent) return profile;
+        if (principalRef.current !== sent) return profile;
         return persistUser(profile);
       },
       // The deletion is certain once this resolves, and the token on hand can no
