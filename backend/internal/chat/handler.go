@@ -320,10 +320,10 @@ func expiryTimer(expiresAt time.Time) *time.Timer {
 	return time.NewTimer(time.Until(expiresAt))
 }
 
-// sessionStatus re-checks the account behind a socket. It is the
-// socket-lifetime counterpart of auth.RequireActive, which only runs once, at
-// the upgrade: without this a connection opened before an account was deleted
-// would keep working until its token expired on its own.
+// sessionStatus re-checks the account behind a socket, which is authenticated
+// once, at the upgrade. REST calls need no such check because their tokens
+// expire in minutes; a socket outlives its own token, so without this a
+// connection opened before an account was deleted would keep working.
 //
 // It fails closed, so a denylist it cannot read ends the connection rather than
 // serving an account whose status is unknown. That case is reported as

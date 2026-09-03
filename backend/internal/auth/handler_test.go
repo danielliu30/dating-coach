@@ -4,15 +4,13 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 
 	"github.com/danielliu30/dating-coach/backend/internal/account"
-	"github.com/danielliu30/dating-coach/backend/internal/store/db"
 )
 
 // stubPublisher records queued deletions without a broker.
@@ -24,53 +22,44 @@ func (p *stubPublisher) Publish(_ context.Context, job account.Job) error {
 	return nil
 }
 
-// blockAll is a stand-in for RequireActive against a revoked account: it
-// rejects every request that reaches it.
-func blockAll(http.Handler) http.Handler {
+// rejectAll is a stand-in for the authentication middleware against a caller
+// whose access token is gone: it rejects every request that reaches it.
+func rejectAll(http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 	})
 }
 
-// authenticateAs is a stand-in for Middleware that puts principal on the
-// request without validating a token.
-func authenticateAs(principal Principal) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			next.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), principal)))
-		})
-	}
-}
-
-// TestRoutesKeepDeletionReachableWhenRevoked guards the one exemption from the
-// denylist: deleting an already revoked account must stay possible, because a
-// deletion whose queueing failed can only be retried by its own owner.
-func TestRoutesKeepDeletionReachableWhenRevoked(t *testing.T) {
-	// Postgres and Redis clients pointed at closed ports: the deletion cannot be
-	// recorded, so the answer is the handler's own failure rather than the
-	// denylist's, which is what this is about.
-	pool, err := pgxpool.New(context.Background(), "postgres://user:pass@127.0.0.1:1/db")
-	if err != nil {
-		t.Fatalf("build pool: %v", err)
-	}
-	t.Cleanup(pool.Close)
+// TestRoutesLeaveRefreshUnauthenticated pins the point of the refresh endpoint:
+// it is reached by a client whose access token has already expired, so it must
+// sit outside the authentication middleware rather than behind it.
+func TestRoutesLeaveRefreshUnauthenticated(t *testing.T) {
+	// A Redis client pointed at a closed port: the rate limiter fails open, so
+	// the public routes stay reachable without a live Redis.
 	rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", MaxRetries: -1, DialTimeout: time.Second})
 	t.Cleanup(func() { _ = rdb.Close() })
-	svc := NewService(db.New(pool), nil, nil, 0, "", NewDenylist(rdb, time.Minute), &stubPublisher{}, time.Hour, time.Minute)
-	principal := Principal{UserID: uuid.New(), Email: "deleted@example.com", Role: "user"}
-	routes := NewHandler(svc, nil).Routes(authenticateAs(principal), blockAll)
+	svc := NewService(nil, nil, nil, nil, 0, "", nil, &stubPublisher{}, 15*time.Minute, time.Minute, time.Hour)
+	routes := NewHandler(svc, NewRateLimiter(rdb, 100, time.Minute)).Routes(rejectAll)
 
 	for _, tc := range []struct {
+		name   string
 		method string
+		path   string
+		body   string
 		want   int
 	}{
-		{http.MethodGet, http.StatusUnauthorized},           // denylist applies
-		{http.MethodDelete, http.StatusInternalServerError}, // reached the handler
+		// A body the handler rejects itself, so only the handler can answer 400.
+		{"refresh reaches the handler", http.MethodPost, "/refresh", "{", http.StatusBadRequest},
+		{"me stays authenticated", http.MethodGet, "/me", "", http.StatusUnauthorized},
+		{"delete me stays authenticated", http.MethodDelete, "/me", "", http.StatusUnauthorized},
 	} {
-		rec := httptest.NewRecorder()
-		routes.ServeHTTP(rec, httptest.NewRequest(tc.method, "/me", nil))
-		if rec.Code != tc.want {
-			t.Fatalf("%s /me = %d, want %d", tc.method, rec.Code, tc.want)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
+			rec := httptest.NewRecorder()
+			routes.ServeHTTP(rec, req)
+			if rec.Code != tc.want {
+				t.Fatalf("%s %s = %d, want %d", tc.method, tc.path, rec.Code, tc.want)
+			}
+		})
 	}
 }

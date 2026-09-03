@@ -6,8 +6,9 @@ x-backend-env: &backend-env
   REDIS_URL: redis://redis:6379/0
   RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
   JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
-  JWT_TTL: ${JWT_TTL:-24h}
+  JWT_TTL: ${JWT_TTL:-15m}
   VERIFY_TOKEN_TTL: ${VERIFY_TOKEN_TTL:-30m}
+  REFRESH_TOKEN_TTL: ${REFRESH_TOKEN_TTL:-720h}
   BCRYPT_COST: ${BCRYPT_COST:-12}
   AUTH_RATE_LIMIT: ${AUTH_RATE_LIMIT:-20}
   AUTH_RATE_WINDOW: ${AUTH_RATE_WINDOW:-1m}

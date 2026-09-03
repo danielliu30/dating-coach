@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/danielliu30/dating-coach/backend/internal/account"
@@ -39,6 +40,7 @@ const verificationTTL = 48 * time.Hour
 // passwords, mints sessions through the TokenIssuer and drives the email
 // verification flow. Handler is its only caller.
 type Service struct {
+	pool           *pgxpool.Pool
 	queries        *db.Queries
 	issuer         *TokenIssuer
 	notifier       notify.Notifier
@@ -48,6 +50,7 @@ type Service struct {
 	deletions      DeletionPublisher
 	sessionTTL     time.Duration
 	verifyTokenTTL time.Duration
+	refreshTTL     time.Duration
 }
 
 // DeletionPublisher queues the row removal that follows a revoked account.
@@ -56,11 +59,15 @@ type DeletionPublisher interface {
 	Publish(ctx context.Context, job account.Job) error
 }
 
-// NewService wires the service dependencies; called once from cmd/api. denylist
-// and deletions are the two halves of account deletion: revoke now, delete rows
-// later. sessionTTL is the lifetime of the session token issued at sign-in;
-// verifyTokenTTL that of the verify-scoped token issued at sign-up.
+// NewService wires the service dependencies; called once from cmd/api. pool is
+// needed for the one operation that spans statements, refresh-token rotation.
+// sessionTTL is the lifetime of the access token issued at sign-in and is kept
+// short, verifyTokenTTL that of the verify-scoped token issued at sign-up, and
+// refreshTTL that of the refresh token clients trade in for new access tokens.
+// denylist is the record open chat sockets re-check, which deletion writes to so
+// a live socket is closed at once rather than at its access token's expiry.
 func NewService(
+	pool *pgxpool.Pool,
 	queries *db.Queries,
 	issuer *TokenIssuer,
 	notifier notify.Notifier,
@@ -70,8 +77,10 @@ func NewService(
 	deletions DeletionPublisher,
 	sessionTTL time.Duration,
 	verifyTokenTTL time.Duration,
+	refreshTTL time.Duration,
 ) *Service {
 	return &Service{
+		pool:           pool,
 		queries:        queries,
 		issuer:         issuer,
 		notifier:       notifier,
@@ -81,6 +90,7 @@ func NewService(
 		deletions:      deletions,
 		sessionTTL:     sessionTTL,
 		verifyTokenTTL: verifyTokenTTL,
+		refreshTTL:     refreshTTL,
 	}
 }
 
@@ -97,11 +107,13 @@ func NewService(
 // Redis that is down cannot separate them, and a database that is down leaves
 // the account exactly as it was for the caller to retry.
 //
-// The two steps that follow are optimisations, so they only log: revoking ends
-// the live sessions in milliseconds rather than whenever the worker gets to the
-// job, and publishing hands the job straight to the broker instead of waiting
-// for the relay's next pass. The worker revokes before it deletes anything, so
-// a session that outlives this call still dies before its rows do.
+// The steps that follow are optimisations, so they only log. Deleting the
+// refresh tokens and revoking the sessions end the account's access in
+// milliseconds rather than whenever the worker gets to the job; the mark alone
+// already stops both, since a rotation reads the account row and a socket
+// re-checks it, and the worker revokes before it deletes anything. The access
+// token in the caller's hand keeps working until it expires, which is minutes
+// away.
 func (s *Service) DeleteAccount(ctx context.Context, userID uuid.UUID) error {
 	rows, err := s.queries.RequestUserDeletion(ctx, userID)
 	if err != nil {
@@ -110,6 +122,9 @@ func (s *Service) DeleteAccount(ctx context.Context, userID uuid.UUID) error {
 	if rows == 0 {
 		// The row is already gone, so there is nothing left to delete or revoke.
 		return nil
+	}
+	if _, err := s.queries.RevokeUserRefreshTokens(ctx, userID); err != nil {
+		slog.Error("revoke refresh tokens of a deleted account", "error", err, "user_id", userID)
 	}
 	if err := s.denylist.Revoke(ctx, userID); err != nil {
 		slog.Error("revoke sessions of a deleted account", "error", err, "user_id", userID)
@@ -134,10 +149,15 @@ type SignUpInput struct {
 
 // Session is the sign-up/sign-in response: a bearer token plus the profile the
 // clients render right away.
+//
+// RefreshToken is empty on responses that do not open a full session (sign-up,
+// and verifying an address the caller does not hold a token for): only a caller
+// given a session-scoped access token also gets the means to renew it.
 type Session struct {
-	Token     string  `json:"token"`
-	ExpiresAt string  `json:"expires_at"`
-	User      Profile `json:"user"`
+	Token        string  `json:"token"`
+	RefreshToken string  `json:"refresh_token,omitempty"`
+	ExpiresAt    string  `json:"expires_at"`
+	User         Profile `json:"user"`
 }
 
 // Profile is the public view of a user row, also returned by GET /auth/me.
@@ -320,10 +340,9 @@ func (s *Service) SignUp(ctx context.Context, in SignUpInput) (Session, error) {
 	}, nil
 }
 
-// SignIn verifies the password and issues a session-scoped token. Unknown
-// emails and wrong passwords both return ErrInvalidCredentials; an unverified
-// account returns ErrEmailNotVerified, only after the password has been
-// checked.
+// SignIn verifies the password and opens a session. Unknown emails and wrong
+// passwords both return ErrInvalidCredentials; an unverified account returns
+// ErrEmailNotVerified, only after the password has been checked.
 //
 // An account awaiting the deletion worker is indistinguishable from an unknown
 // one: the lookup skips rows marked deleted, so no session is ever minted for
@@ -343,15 +362,13 @@ func (s *Service) SignIn(ctx context.Context, email, password string) (Session, 
 		return Session{}, ErrEmailNotVerified
 	}
 
-	token, expires, err := s.issuer.Issue(user.ID, user.Email, user.Role, ScopeSession, s.sessionTTL)
+	session, err := s.openSession(ctx, s.queries, user)
 	if err != nil {
 		return Session{}, err
 	}
-	return Session{
-		Token:     token,
-		ExpiresAt: expires.UTC().Format(time.RFC3339),
-		User:      profileOf(user),
-	}, nil
+	slog.Info("session issued", "user_id", user.ID, "reason", "sign in",
+		"expires_at", session.ExpiresAt)
+	return session, nil
 }
 
 // VerifyEmail consumes a verification token, marks the address confirmed and
@@ -359,11 +376,12 @@ func (s *Service) SignIn(ctx context.Context, email, password string) (Session, 
 //
 // bearer is the caller's current JWT, or "" when the request is
 // unauthenticated. When it is the verify-scoped token this very account was
-// given at sign-up, the returned Session also carries a session-scoped token,
-// so the caller leaves verification with credentials that reach the private API
-// instead of one every private route rejects. A bearer belonging to another
-// account, an expired one, or none at all yields the profile only: verifying
-// never hands a session to whoever merely holds the emailed token.
+// given at sign-up, the returned Session also carries a session-scoped access
+// token and a refresh token, so the caller leaves verification with credentials
+// that reach the private API instead of one every private route rejects. A
+// bearer belonging to another account, an expired one, or none at all yields
+// the profile only: verifying never hands a session to whoever merely holds the
+// emailed token.
 func (s *Service) VerifyEmail(ctx context.Context, token, bearer string) (Session, error) {
 	user, err := s.queries.VerifyUserEmail(ctx, &token)
 	if err != nil {
@@ -376,15 +394,13 @@ func (s *Service) VerifyEmail(ctx context.Context, token, bearer string) (Sessio
 	if !s.ownsBearer(user.ID, bearer) {
 		return Session{User: profile}, nil
 	}
-	sessionToken, expires, err := s.issuer.Issue(user.ID, user.Email, user.Role, ScopeSession, s.sessionTTL)
+	session, err := s.openSession(ctx, s.queries, user)
 	if err != nil {
-		return Session{}, fmt.Errorf("issue session: %w", err)
+		return Session{}, err
 	}
-	return Session{
-		Token:     sessionToken,
-		ExpiresAt: expires.UTC().Format(time.RFC3339),
-		User:      profile,
-	}, nil
+	slog.Info("session issued", "user_id", user.ID, "reason", "verify email",
+		"expires_at", session.ExpiresAt)
+	return session, nil
 }
 
 // ownsBearer reports whether bearer is a currently valid token for userID.
