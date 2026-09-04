@@ -51,7 +51,7 @@ jobs:
             psql -v ON_ERROR_STOP=1 -h localhost -U datingcoach -d datingcoach -f "$f"
           done
       - name: Test
-        run: go test ./...
+        run: go test -p 1 ./...
 
   app:
     name: App (Expo/TypeScript)
@@ -67,7 +67,7 @@ jobs:
           cache: npm
           cache-dependency-path: app/package-lock.json
       - name: Install
-        run: npm install
+        run: npm ci
       - name: Typecheck
         run: npm run typecheck
       - name: Export web bundle

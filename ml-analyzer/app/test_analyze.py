@@ -8,8 +8,8 @@ from .schemas import AnalyzeResponse
 client = TestClient(app)
 
 
-def test_healthz_reports_heuristic_backend_without_llm_key():
-    """Assumes LLM_API_KEY is unset so the service falls back to the heuristic scorer."""
+def test_healthz_reports_heuristic_backend():
+    """conftest.py pins ML_BACKEND=heuristic, so no LLM key in the environment can leak in."""
     body = client.get("/healthz").json()
     assert body["status"] == "ok"
     assert body["active_backend"] == "HeuristicScorer"
