@@ -65,7 +65,8 @@ type DeletionPublisher interface {
 // short, verifyTokenTTL that of the verify-scoped token issued at sign-up, and
 // refreshTTL that of the refresh token clients trade in for new access tokens.
 // denylist is the record open chat sockets re-check, which deletion writes to so
-// a live socket is closed at once rather than at its access token's expiry.
+// a live socket is closed at once rather than at its access token's expiry; it
+// may be nil when no Redis is wired, in which case deletion skips that step.
 func NewService(
 	pool *pgxpool.Pool,
 	queries *db.Queries,
@@ -126,8 +127,10 @@ func (s *Service) DeleteAccount(ctx context.Context, userID uuid.UUID) error {
 	if _, err := s.queries.RevokeUserRefreshTokens(ctx, userID); err != nil {
 		slog.Error("revoke refresh tokens of a deleted account", "error", err, "user_id", userID)
 	}
-	if err := s.denylist.Revoke(ctx, userID); err != nil {
-		slog.Error("revoke sessions of a deleted account", "error", err, "user_id", userID)
+	if s.denylist != nil {
+		if err := s.denylist.Revoke(ctx, userID); err != nil {
+			slog.Error("revoke sessions of a deleted account", "error", err, "user_id", userID)
+		}
 	}
 	if err := s.deletions.Publish(ctx, account.Job{UserID: userID.String()}); err != nil {
 		slog.Warn("leaving a recorded deletion to the relay", "error", err, "user_id", userID)
