@@ -1,0 +1,27 @@
+name: ML analyzer (Python)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "ml-analyzer/**"
+      - ".github/workflows/ml-analyzer.yml"
+  pull_request:
+    paths:
+      - "ml-analyzer/**"
+      - ".github/workflows/ml-analyzer.yml"
+
+defaults:
+  run:
+    working-directory: ml-analyzer
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt pytest
+      - run: pytest
