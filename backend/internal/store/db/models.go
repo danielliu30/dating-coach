@@ -11,6 +11,12 @@ import (
 	"github.com/google/uuid"
 )
 
+type AccountDeletion struct {
+	UserID      uuid.UUID  `json:"user_id"`
+	RequestedAt time.Time  `json:"requested_at"`
+	PublishedAt *time.Time `json:"published_at"`
+}
+
 type AnalysisResult struct {
 	ID             uuid.UUID       `json:"id"`
 	ConversationID uuid.UUID       `json:"conversation_id"`
@@ -63,16 +69,25 @@ type CoachAvailability struct {
 }
 
 type CoachingSession struct {
-	ID              uuid.UUID `json:"id"`
-	UserID          uuid.UUID `json:"user_id"`
-	CoachID         uuid.UUID `json:"coach_id"`
-	ScheduledTime   time.Time `json:"scheduled_time"`
-	DurationMinutes int32     `json:"duration_minutes"`
-	Status          string    `json:"status"`
-	Topic           string    `json:"topic"`
-	CoachNotes      string    `json:"coach_notes"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	ID                uuid.UUID  `json:"id"`
+	UserID            uuid.UUID  `json:"user_id"`
+	CoachID           uuid.UUID  `json:"coach_id"`
+	ScheduledTime     time.Time  `json:"scheduled_time"`
+	DurationMinutes   int32      `json:"duration_minutes"`
+	Status            string     `json:"status"`
+	Topic             string     `json:"topic"`
+	CoachNotes        string     `json:"coach_notes"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
+	ConfirmationToken *string    `json:"confirmation_token"`
+	RespondBy         *time.Time `json:"respond_by"`
+	ConfirmedAt       *time.Time `json:"confirmed_at"`
+	CalendarSequence  int32      `json:"calendar_sequence"`
+	PaymentStatus     string     `json:"payment_status"`
+	AmountCents       int32      `json:"amount_cents"`
+	Currency          string     `json:"currency"`
+	PaymentRef        *string    `json:"payment_ref"`
+	HoldExpiresAt     *time.Time `json:"hold_expires_at"`
 }
 
 type Conversation struct {
@@ -82,6 +97,19 @@ type Conversation struct {
 	Platform  string    `json:"platform"`
 	MatchName string    `json:"match_name"`
 	CreatedAt time.Time `json:"created_at"`
+}
+
+type EmailOutbox struct {
+	ID            uuid.UUID  `json:"id"`
+	ToEmail       string     `json:"to_email"`
+	Subject       string     `json:"subject"`
+	Body          string     `json:"body"`
+	Ics           *string    `json:"ics"`
+	Attempts      int32      `json:"attempts"`
+	LastError     string     `json:"last_error"`
+	NextAttemptAt time.Time  `json:"next_attempt_at"`
+	CreatedAt     time.Time  `json:"created_at"`
+	SentAt        *time.Time `json:"sent_at"`
 }
 
 type Message struct {
@@ -102,6 +130,23 @@ type Notification struct {
 	CreatedAt time.Time       `json:"created_at"`
 }
 
+type PaymentEvent struct {
+	ProviderEventID string     `json:"provider_event_id"`
+	SessionID       *uuid.UUID `json:"session_id"`
+	EventType       string     `json:"event_type"`
+	ReceivedAt      time.Time  `json:"received_at"`
+}
+
+type RefreshToken struct {
+	ID        uuid.UUID  `json:"id"`
+	UserID    uuid.UUID  `json:"user_id"`
+	TokenHash string     `json:"token_hash"`
+	IssuedAt  time.Time  `json:"issued_at"`
+	ExpiresAt time.Time  `json:"expires_at"`
+	UsedAt    *time.Time `json:"used_at"`
+	FamilyID  uuid.UUID  `json:"family_id"`
+}
+
 type TrainingExample struct {
 	ID              uuid.UUID       `json:"id"`
 	ConversationID  uuid.UUID       `json:"conversation_id"`
@@ -116,15 +161,16 @@ type TrainingExample struct {
 }
 
 type User struct {
-	ID                    uuid.UUID  `json:"id"`
-	Email                 string     `json:"email"`
-	PasswordHash          string     `json:"password_hash"`
-	DisplayName           string     `json:"display_name"`
-	Role                  string     `json:"role"`
-	EmailVerified         bool       `json:"email_verified"`
-	VerificationToken     *string    `json:"verification_token"`
-	VerificationExpiresAt *time.Time `json:"verification_expires_at"`
-	CreatedAt             time.Time  `json:"created_at"`
-	UpdatedAt             time.Time  `json:"updated_at"`
-	DeletedAt             *time.Time `json:"deleted_at"`
+	ID              uuid.UUID  `json:"id"`
+	Email           string     `json:"email"`
+	PasswordHash    string     `json:"password_hash"`
+	DisplayName     string     `json:"display_name"`
+	Role            string     `json:"role"`
+	EmailVerified   bool       `json:"email_verified"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+	DeletedAt       *time.Time `json:"deleted_at"`
+	DatingStyles    []string   `json:"dating_styles"`
+	PhasesStrong    []string   `json:"phases_strong"`
+	PhasesWorkingOn []string   `json:"phases_working_on"`
 }

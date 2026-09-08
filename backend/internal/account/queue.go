@@ -1,5 +1,5 @@
 // Package account owns account lifecycle work that outlives a request:
-// deleting an account's rows after its sessions have already been revoked.
+// revoking a deleted account's sessions and removing its rows.
 package account
 
 import (
@@ -18,8 +18,10 @@ import (
 const prefetchCount = 1
 
 // maxAttempts is how many times a deletion is handed to the handler before it
-// is dead-lettered.
-const maxAttempts = 2
+// is dead-lettered. With retryDelay between attempts, a dependency outage has
+// to last upwards of maxAttempts*retryDelay before an accepted deletion is given
+// up on; the operator alert follows within a DEAD_LETTER_ALERT_PERIOD of that.
+const maxAttempts = 20
 
 // attemptsHeader carries how many times a deletion has already been handled.
 // RabbitMQ's Redelivered flag cannot serve as the counter: it is also set when
@@ -48,8 +50,8 @@ func RetryQueue(name string) string { return name + ".retry" }
 
 // Queue is a thin RabbitMQ wrapper used by the API (publish) and the worker
 // (consume). Its work queue dead-letters into DeadLetterQueue(name): a deletion
-// that keeps failing must be kept for an operator, because the account is
-// already revoked and the user cannot retry it themselves.
+// that keeps failing must be kept for an operator, because its owner has been
+// told the account is gone and cannot retry it themselves.
 type Queue struct {
 	conn    *amqp.Connection
 	channel *amqp.Channel
@@ -293,11 +295,11 @@ func (q *Queue) Consume(ctx context.Context, handle JobHandler) error {
 }
 
 // DeadLetterDepth reports how many deletions are sitting in the dead-letter
-// queue. Those accounts are revoked but still hold rows, and their revocation
-// entries expire with the JWT TTL, so a non-zero depth needs an operator before
-// then. The passive declare closes the channel if the queue is missing, which
-// makes the owning Queue unusable; callers should hold a connection of their
-// own rather than share the consumer's.
+// queue. Those accounts still hold rows, and the revocation that outlives them
+// expires with the JWT TTL, so a non-zero depth needs an operator before then.
+// The passive declare closes the channel if the queue is missing, which makes
+// the owning Queue unusable; callers should hold a connection of their own
+// rather than share the consumer's.
 func (q *Queue) DeadLetterDepth() (int, error) {
 	dlq := DeadLetterQueue(q.name)
 	state, err := q.channel.QueueDeclarePassive(dlq, true, false, false, false, nil)

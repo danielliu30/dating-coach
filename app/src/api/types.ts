@@ -8,10 +8,48 @@ export interface Profile {
   display_name: string;
   role: Role;
   email_verified: boolean;
+  dating_styles: DatingStyle[];
+  phases_strong: DatingPhase[];
+  phases_working_on: DatingPhase[];
+}
+
+// Vocabularies mirror auth.DatingStyles / auth.DatingPhases in the backend.
+export const DATING_STYLES = [
+  'in_person',
+  'tinder',
+  'hinge',
+  'bumble',
+  'coffee_meets_bagel',
+  'match',
+  'okcupid',
+  'feeld',
+  'speed_dating',
+  'friends_intro',
+] as const;
+export type DatingStyle = (typeof DATING_STYLES)[number];
+
+export const DATING_PHASES = [
+  'opening',
+  'first_messages',
+  'building_rapport',
+  'flirting',
+  'asking_out',
+  'first_date',
+  'follow_up',
+  'defining_relationship',
+] as const;
+export type DatingPhase = (typeof DATING_PHASES)[number];
+
+export interface DatingProfileInput {
+  dating_styles: DatingStyle[];
+  phases_strong: DatingPhase[];
+  phases_working_on: DatingPhase[];
 }
 
 export interface AuthSession {
   token: string;
+  /** Absent on responses that do not open a full session, e.g. sign-up. */
+  refresh_token?: string;
   expires_at: string;
   user: Profile;
 }
@@ -39,7 +77,32 @@ export interface Slot {
   duration_minutes: number;
 }
 
-export type SessionStatus = 'scheduled' | 'completed' | 'cancelled' | 'no_show';
+export type SessionStatus =
+  | 'pending_payment'
+  | 'pending'
+  | 'scheduled'
+  | 'declined'
+  | 'expired'
+  | 'completed'
+  | 'cancelled'
+  | 'no_show';
+
+export type PaymentStatus =
+  | 'not_required'
+  | 'pending'
+  | 'expiring'
+  | 'authorized'
+  | 'paid'
+  | 'releasing'
+  | 'released'
+  | 'refund_due'
+  | 'refunded'
+  | 'failed';
+
+/** Server-side feature switches the app must follow rather than decide itself. */
+export interface CoachingConfig {
+  payments_enabled: boolean;
+}
 
 export interface CoachingSession {
   id: string;
@@ -51,6 +114,12 @@ export interface CoachingSession {
   status: SessionStatus;
   topic: string;
   coach_notes?: string;
+  payment_status: PaymentStatus;
+  amount_cents: number;
+  currency: string;
+  hold_expires_at?: string;
+  /** Only present on a booking response that must be paid for. */
+  checkout_url?: string;
 }
 
 export interface ChatThread {

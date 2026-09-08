@@ -21,12 +21,13 @@ type Config struct {
 	RedisURL    string
 	RabbitMQURL string
 
-	JWTSecret      string
-	JWTTTL         time.Duration
-	VerifyTokenTTL time.Duration
-	BcryptCost     int
-	AuthRateLimit  int
-	AuthRateWindow time.Duration
+	JWTSecret       string
+	JWTTTL          time.Duration
+	VerifyTokenTTL  time.Duration
+	RefreshTokenTTL time.Duration
+	BcryptCost      int
+	AuthRateLimit   int
+	AuthRateWindow  time.Duration
 
 	MLServiceURL     string
 	MLServiceTimeout time.Duration
@@ -43,10 +44,19 @@ type Config struct {
 	SMTPPort     int
 	SMTPUsername string
 	SMTPPassword string
+	SMTPTimeout  time.Duration
 	MailFrom     string
 
 	PublicAppURL string
 	CORSOrigins  []string
+
+	// PaymentsEnabled is the switch for paid reservations. When off, booking
+	// confirms a session immediately and the Stripe settings are ignored.
+	PaymentsEnabled     bool
+	StripeSecretKey     string
+	StripeWebhookSecret string
+	// PaymentHoldTTL is how long an unpaid booking keeps its slot reserved.
+	PaymentHoldTTL time.Duration
 }
 
 // Load reads configuration from the environment, falling back to .env files.
@@ -63,6 +73,18 @@ func Load() (*Config, error) {
 		v, err := strconv.Atoi(raw)
 		if err != nil {
 			bad = append(bad, fmt.Sprintf("%s=%q is not an integer", key, raw))
+			return fallback
+		}
+		return v
+	}
+	envBool := func(key string, fallback bool) bool {
+		raw := env(key, "")
+		if raw == "" {
+			return fallback
+		}
+		v, err := strconv.ParseBool(raw)
+		if err != nil {
+			bad = append(bad, fmt.Sprintf("%s=%q is not a boolean", key, raw))
 			return fallback
 		}
 		return v
@@ -87,8 +109,9 @@ func Load() (*Config, error) {
 		RedisURL:             env("REDIS_URL", "redis://localhost:6379/0"),
 		RabbitMQURL:          env("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/"),
 		JWTSecret:            env("JWT_SECRET", ""),
-		JWTTTL:               envDuration("JWT_TTL", 24*time.Hour),
+		JWTTTL:               envDuration("JWT_TTL", 15*time.Minute),
 		VerifyTokenTTL:       envDuration("VERIFY_TOKEN_TTL", 30*time.Minute),
+		RefreshTokenTTL:      envDuration("REFRESH_TOKEN_TTL", 30*24*time.Hour),
 		BcryptCost:           envInt("BCRYPT_COST", 12),
 		AuthRateLimit:        envInt("AUTH_RATE_LIMIT", 20),
 		AuthRateWindow:       envDuration("AUTH_RATE_WINDOW", time.Minute),
@@ -103,9 +126,15 @@ func Load() (*Config, error) {
 		SMTPPort:     envInt("SMTP_PORT", 587),
 		SMTPUsername: env("SMTP_USERNAME", ""),
 		SMTPPassword: env("SMTP_PASSWORD", ""),
+		SMTPTimeout:  envDuration("SMTP_TIMEOUT", 30*time.Second),
 		MailFrom:     env("MAIL_FROM", "no-reply@datingcoach.local"),
 		PublicAppURL: env("PUBLIC_APP_URL", "http://localhost:19006"),
 		CORSOrigins:  envList("CORS_ORIGINS", []string{"http://localhost:19006", "http://localhost:8081"}),
+
+		PaymentsEnabled:     envBool("PAYMENTS_ENABLED", false),
+		StripeSecretKey:     env("STRIPE_SECRET_KEY", ""),
+		StripeWebhookSecret: env("STRIPE_WEBHOOK_SECRET", ""),
+		PaymentHoldTTL:      envDuration("PAYMENT_HOLD_TTL", 15*time.Minute),
 	}
 
 	if cfg.DatabaseURL == "" {
@@ -122,12 +151,26 @@ func Load() (*Config, error) {
 	}{
 		{"JWT_TTL", cfg.JWTTTL},
 		{"VERIFY_TOKEN_TTL", cfg.VerifyTokenTTL},
+		{"REFRESH_TOKEN_TTL", cfg.RefreshTokenTTL},
 		{"AUTH_RATE_WINDOW", cfg.AuthRateWindow},
 		{"ML_SERVICE_TIMEOUT", cfg.MLServiceTimeout},
 		{"DEAD_LETTER_ALERT_PERIOD", cfg.DeadLetterAlertPeriod},
+		{"PAYMENT_HOLD_TTL", cfg.PaymentHoldTTL},
+		{"SMTP_TIMEOUT", cfg.SMTPTimeout},
 	} {
 		if d.value <= 0 {
 			bad = append(bad, fmt.Sprintf("%s=%s must be positive", d.key, d.value))
+		}
+	}
+
+	// The switch alone is not enough to take money: refuse to start half
+	// configured rather than fail on the first booking.
+	if cfg.PaymentsEnabled {
+		if cfg.StripeSecretKey == "" {
+			bad = append(bad, "STRIPE_SECRET_KEY is required when PAYMENTS_ENABLED=true")
+		}
+		if cfg.StripeWebhookSecret == "" {
+			bad = append(bad, "STRIPE_WEBHOOK_SECRET is required when PAYMENTS_ENABLED=true")
 		}
 	}
 

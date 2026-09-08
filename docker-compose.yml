@@ -6,8 +6,9 @@ x-backend-env: &backend-env
   REDIS_URL: redis://redis:6379/0
   RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
   JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
-  JWT_TTL: ${JWT_TTL:-24h}
+  JWT_TTL: ${JWT_TTL:-15m}
   VERIFY_TOKEN_TTL: ${VERIFY_TOKEN_TTL:-30m}
+  REFRESH_TOKEN_TTL: ${REFRESH_TOKEN_TTL:-720h}
   BCRYPT_COST: ${BCRYPT_COST:-12}
   AUTH_RATE_LIMIT: ${AUTH_RATE_LIMIT:-20}
   AUTH_RATE_WINDOW: ${AUTH_RATE_WINDOW:-1m}
@@ -22,7 +23,12 @@ x-backend-env: &backend-env
   SMTP_PORT: ${SMTP_PORT:-587}
   SMTP_USERNAME: ${SMTP_USERNAME:-}
   SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+  SMTP_TIMEOUT: ${SMTP_TIMEOUT:-30s}
   MAIL_FROM: ${MAIL_FROM:-no-reply@datingcoach.local}
+  PAYMENTS_ENABLED: ${PAYMENTS_ENABLED:-false}
+  STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+  STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+  PAYMENT_HOLD_TTL: ${PAYMENT_HOLD_TTL:-15m}
 
 services:
   postgres:
@@ -70,6 +76,7 @@ services:
       - up
 
   api:
+    image: ${DOCKERHUB_NAMESPACE:-danielliu30}/dating-coach-backend:${IMAGE_TAG:-latest}
     build: ./backend
     command: ['api']
     environment:
@@ -88,6 +95,7 @@ services:
         condition: service_healthy
 
   worker:
+    image: ${DOCKERHUB_NAMESPACE:-danielliu30}/dating-coach-backend:${IMAGE_TAG:-latest}
     build: ./backend
     command: ['worker']
     environment: *backend-env
@@ -95,12 +103,15 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+      redis:
+        condition: service_healthy
       rabbitmq:
         condition: service_healthy
       ml-analyzer:
         condition: service_started
 
   ml-analyzer:
+    image: ${DOCKERHUB_NAMESPACE:-danielliu30}/dating-coach-ml-analyzer:${IMAGE_TAG:-latest}
     build: ./ml-analyzer
     environment:
       ML_BACKEND: ${ML_BACKEND:-llm}
@@ -113,22 +124,51 @@ services:
       ML_MODEL_DIR: ${ML_MODEL_DIR:-/models/segment-scorer}
     ports: ['8000:8000']
 
-  # Static Expo web bundle. Empty EXPO_PUBLIC_API_URL = same origin as the page,
-  # so REST and the chat WebSocket both route through nginx.
+  # Static Expo web bundle (`--profile gateway`). Empty EXPO_PUBLIC_API_URL =
+  # same origin as the page, so REST and the chat WebSocket both go through
+  # nginx. Published on ${WEB_PORT:-3000} only for a host-installed nginx.
   web:
+    image: ${DOCKERHUB_NAMESPACE:-danielliu30}/dating-coach-web:${IMAGE_TAG:-latest}
     build:
       context: ./app
       args:
         EXPO_PUBLIC_API_URL: ${WEB_API_URL:-}
+    profiles: ['gateway']
+    ports: ['${WEB_PORT:-3000}:80']
     restart: unless-stopped
 
-  # Single public entrypoint: / -> web, /api/ and /healthz -> api.
+  # Optional public entrypoint (`--profile gateway`): / to web, /api and
+  # /healthz to api, /ml/ to ml-analyzer. Skip it when a host nginx fronts the
+  # stack (see nginx/host-site.conf).
   nginx:
-    image: nginx:alpine
-    volumes: ['./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro']
-    ports: ['80:80']
+    image: nginx:1.27-alpine
+    profiles: ['gateway']
+    ports: ['${NGINX_PORT:-80}:80']
+    volumes: ['./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro']
     restart: unless-stopped
-    depends_on: [api, web]
+    depends_on:
+      api:
+        condition: service_started
+      web:
+        condition: service_started
+      ml-analyzer:
+        condition: service_started
+
+  # Optional Postgres UI (`--profile tools`) on :5050.
+  pgadmin:
+    image: dpage/pgadmin4:9.17
+    profiles: ['tools']
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@admin.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-admin}
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    ports: ['5050:80']
+    volumes: ['pgadmin-data:/var/lib/pgadmin']
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
 
 volumes:
   postgres-data:
+  pgadmin-data:

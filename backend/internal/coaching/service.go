@@ -4,14 +4,19 @@ package coaching
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/danielliu30/dating-coach/backend/internal/payments"
 	"github.com/danielliu30/dating-coach/backend/internal/store/db"
 )
 
@@ -22,7 +27,13 @@ var (
 	ErrInvalidInput = errors.New("invalid input")
 	ErrSlotTaken    = errors.New("slot is no longer available")
 	ErrUnavailable  = errors.New("coach is not available then")
+	ErrExpired      = errors.New("request has expired")
+	ErrPayment      = errors.New("payment could not be processed")
 )
+
+// maxHourlyRateCents keeps priceCents inside amount_cents (int32) for the
+// longest bookable session.
+const maxHourlyRateCents = math.MaxInt32 / (maxSessionMinutes / 60)
 
 const (
 	defaultSessionMinutes = 45
@@ -30,27 +41,77 @@ const (
 	minSessionMinutes     = 15
 	maxSessionMinutes     = 240
 	maxAvailabilityDays   = 30
+
+	// A coach has respondWindow to answer a request, but never later than
+	// respondLeadTime before the session starts.
+	respondWindow   = 24 * time.Hour
+	respondLeadTime = 2 * time.Hour
 )
 
-// sessionStatuses are the states a booking may be moved to.
-var sessionStatuses = map[string]bool{
-	"scheduled": true,
-	"completed": true,
-	"cancelled": true,
-	"no_show":   true,
+// Session statuses. A booking starts pending and holds its slot; the coach
+// confirms it to scheduled or declines it, or it expires unanswered. Scheduled
+// sessions end completed, cancelled or no_show. With payments on, a booking
+// starts one step earlier as pending_payment: it holds its slot while the
+// client authorises their card, and only becomes pending once that succeeded.
+const (
+	StatusPendingPayment = "pending_payment"
+	StatusPending        = "pending"
+	StatusScheduled      = "scheduled"
+	StatusDeclined       = "declined"
+	StatusExpired        = "expired"
+	StatusCompleted      = "completed"
+	StatusCancelled      = "cancelled"
+	StatusNoShow         = "no_show"
+)
+
+// statusTransitions lists, per current status, the statuses SetStatus may move
+// a session to. Confirmation and decline go through Respond instead, and
+// expiry through ExpirePending, so neither is reachable from here.
+var statusTransitions = map[string]map[string]bool{
+	StatusPendingPayment: {StatusCancelled: true},
+	StatusPending:        {StatusCancelled: true},
+	StatusScheduled:      {StatusCompleted: true, StatusCancelled: true, StatusNoShow: true},
 }
+
+// coachOnlyStatuses are the outcomes only the coach may record.
+var coachOnlyStatuses = map[string]bool{StatusCompleted: true, StatusNoShow: true}
 
 // Service owns the coaching business rules: the coach directory and profiles,
 // each coach's weekly availability, the bookable slots derived from it, and the
-// lifecycle of a booked session (book, reschedule, status, notes).
+// lifecycle of a booked session (request, confirm, reschedule, status, notes).
 type Service struct {
-	pool    *pgxpool.Pool
-	queries *db.Queries
+	pool     *pgxpool.Pool
+	queries  *db.Queries
+	mail     mailer
+	payments payments.Provider
+	// holdTTL is how long a booking keeps its slot while the client is at the
+	// payment page.
+	holdTTL time.Duration
+	// appURL is where the payment provider sends the client back to.
+	appURL string
 }
 
-// NewService wires the service dependencies; called once from cmd/api.
-func NewService(pool *pgxpool.Pool, queries *db.Queries) *Service {
-	return &Service{pool: pool, queries: queries}
+// NewService wires the service dependencies; called once from cmd/api and
+// cmd/worker. provider decides whether bookings are paid: pass
+// payments.Disabled{} to skip the card authorisation step. holdTTL is how long
+// a pending_payment booking keeps its slot. appURL is the public app origin
+// the confirmation links in coach emails and the payment return URLs point at
+// and mailFrom the organizer address on calendar invites.
+func NewService(pool *pgxpool.Pool, queries *db.Queries, provider payments.Provider, holdTTL time.Duration, appURL, mailFrom string) *Service {
+	return &Service{
+		pool:     pool,
+		queries:  queries,
+		mail:     mailer{appURL: appURL, mailFrom: mailFrom},
+		payments: provider,
+		holdTTL:  holdTTL,
+		appURL:   appURL,
+	}
+}
+
+// PaymentsEnabled reports whether booking a session requires authorising a
+// card payment first.
+func (s *Service) PaymentsEnabled() bool {
+	return s.payments.Enabled()
 }
 
 // Coach is the public directory view of a coach profile.
@@ -78,6 +139,14 @@ type Session struct {
 	Status          string `json:"status"`
 	Topic           string `json:"topic"`
 	CoachNotes      string `json:"coach_notes,omitempty"`
+	RespondBy       string `json:"respond_by,omitempty"`
+	PaymentStatus   string `json:"payment_status"`
+	AmountCents     int32  `json:"amount_cents"`
+	Currency        string `json:"currency"`
+	HoldExpiresAt   string `json:"hold_expires_at,omitempty"`
+	// CheckoutURL is only set on the response to a booking that must be paid
+	// for; it is where the client authorises the payment.
+	CheckoutURL string `json:"checkout_url,omitempty"`
 }
 
 // Slot is one bookable start time offered to clients.
@@ -106,7 +175,20 @@ func sessionOf(s db.CoachingSession, counterpart string) Session {
 		Status:          s.Status,
 		Topic:           s.Topic,
 		CoachNotes:      s.CoachNotes,
+		RespondBy:       rfc3339(s.RespondBy),
+		PaymentStatus:   s.PaymentStatus,
+		AmountCents:     s.AmountCents,
+		Currency:        s.Currency,
+		HoldExpiresAt:   rfc3339(s.HoldExpiresAt),
 	}
+}
+
+// rfc3339 formats an optional instant, empty when nil.
+func rfc3339(t *time.Time) string {
+	if t == nil {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
 }
 
 // ListCoaches returns a page of the coach directory.
@@ -178,6 +260,9 @@ func (s *Service) UpsertProfile(ctx context.Context, coachID uuid.UUID, in Upser
 	if _, err := time.LoadLocation(in.Timezone); err != nil {
 		return Coach{}, fmt.Errorf("%w: unknown timezone %q", ErrInvalidInput, in.Timezone)
 	}
+	if in.HourlyRateCents < 0 || (s.payments.Enabled() && in.HourlyRateCents > maxHourlyRateCents) {
+		return Coach{}, fmt.Errorf("%w: hourly_rate_cents must be between 0 and %d", ErrInvalidInput, maxHourlyRateCents)
+	}
 	if in.Specialties == nil {
 		in.Specialties = []string{}
 	}
@@ -248,7 +333,9 @@ func (s *Service) ListAvailability(ctx context.Context, coachID uuid.UUID) ([]Av
 // OpenSlots expands the coach's weekly availability into concrete slots between
 // from and to, dropping anything that overlaps an already booked session.
 // excludeSessionID ignores one of the actor's own sessions, so a reschedule can
-// offer times that overlap the slot being moved.
+// offer times that overlap the slot being moved. With payments on, slots too
+// close to start for the client to complete checkout (see minCheckoutWindow)
+// are not offered either; a reschedule takes no payment, so it keeps those.
 func (s *Service) OpenSlots(ctx context.Context, coachID, actorID uuid.UUID, from, to time.Time, durationMinutes int32, excludeSessionID *uuid.UUID) ([]Slot, error) {
 	if excludeSessionID != nil {
 		session, err := s.participant(ctx, *excludeSessionID, actorID)
@@ -295,6 +382,12 @@ func (s *Service) OpenSlots(ctx context.Context, coachID, actorID uuid.UUID, fro
 	byWeekday := map[int16][]AvailabilityWindow{}
 	for _, w := range windows {
 		byWeekday[w.Weekday] = append(byWeekday[w.Weekday], w)
+	}
+
+	if s.payments.Enabled() && excludeSessionID == nil {
+		if earliest := time.Now().Add(minCheckoutWindow); earliest.After(from) {
+			from = earliest
+		}
 	}
 
 	slots := []Slot{}
@@ -355,8 +448,11 @@ type BookInput struct {
 	Topic           string `json:"topic"`
 }
 
-// BookSession books a slot with a coach after checking that it is in the future,
-// inside the published availability and still free.
+// BookSession requests a slot with a coach after checking that it is in the
+// future, inside the published availability and still free. The session is
+// created pending and holds the slot; the coach is emailed a confirm/decline
+// link, and the client a receipt, both recorded in the outbox in the same
+// transaction as the session.
 func (s *Service) BookSession(ctx context.Context, userID uuid.UUID, in BookInput) (Session, error) {
 	coachID, err := uuid.Parse(in.CoachID)
 	if err != nil {
@@ -376,13 +472,31 @@ func (s *Service) BookSession(ctx context.Context, userID uuid.UUID, in BookInpu
 	if err := s.assertBookable(ctx, coachID, scheduled, duration, true, nil); err != nil {
 		return Session{}, err
 	}
+	if s.payments.Enabled() {
+		return s.bookPaid(ctx, userID, coachID, scheduled, duration, in.Topic)
+	}
+	token, err := randomToken()
+	if err != nil {
+		return Session{}, err
+	}
+	respondBy := respondDeadline(time.Now(), scheduled)
+	tokenHash := hashToken(token)
 
-	session, err := s.queries.CreateCoachingSession(ctx, db.CreateCoachingSessionParams{
-		UserID:          userID,
-		CoachID:         coachID,
-		ScheduledTime:   scheduled,
-		DurationMinutes: duration,
-		Topic:           in.Topic,
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Session{}, fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := s.queries.WithTx(tx)
+
+	session, err := q.CreateCoachingSession(ctx, db.CreateCoachingSessionParams{
+		UserID:            userID,
+		CoachID:           coachID,
+		ScheduledTime:     scheduled,
+		DurationMinutes:   duration,
+		Topic:             in.Topic,
+		ConfirmationToken: &tokenHash,
+		RespondBy:         &respondBy,
 	})
 	if err != nil {
 		if isSlotConflict(err) {
@@ -390,7 +504,215 @@ func (s *Service) BookSession(ctx context.Context, userID uuid.UUID, in BookInpu
 		}
 		return Session{}, fmt.Errorf("create session: %w", err)
 	}
+	parties, err := q.GetSessionParties(ctx, session.ID)
+	if err != nil {
+		return Session{}, fmt.Errorf("load session parties: %w", err)
+	}
+	if err := s.mail.coachRequest(ctx, q, parties, token, false); err != nil {
+		return Session{}, err
+	}
+	if err := s.mail.clientRequested(ctx, q, parties); err != nil {
+		return Session{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Session{}, fmt.Errorf("commit booking: %w", err)
+	}
 	return sessionOf(session, ""), nil
+}
+
+// respondDeadline is when a request made at now for a session at start expires
+// unanswered: respondWindow from now, but no later than respondLeadTime before
+// the session. A request made inside that lead time may be answered right up
+// to the start.
+func respondDeadline(now, start time.Time) time.Time {
+	deadline := now.Add(respondWindow)
+	if latest := start.Add(-respondLeadTime); latest.Before(deadline) {
+		deadline = latest
+	}
+	if deadline.Before(now) {
+		deadline = start
+	}
+	return deadline
+}
+
+// randomToken returns a 256-bit hex string used as a confirmation token. Only
+// its hashToken digest is stored, so a database read cannot answer requests.
+func randomToken() (string, error) {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("generate token: %w", err)
+	}
+	return hex.EncodeToString(buf), nil
+}
+
+// hashToken is the at-rest form of a confirmation token: hex SHA-256, the same
+// scheme refresh tokens use.
+func hashToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
+}
+
+// RespondWithToken answers a pending request using the token from the coach's
+// email, so no sign-in is needed. action is "confirm" or "decline". A token
+// that matches no session yields ErrNotFound; one whose deadline has passed
+// ErrExpired; a request already answered ErrInvalidInput.
+func (s *Service) RespondWithToken(ctx context.Context, sessionID uuid.UUID, token, action string) (Session, error) {
+	if token == "" {
+		return Session{}, fmt.Errorf("%w: token is required", ErrInvalidInput)
+	}
+	tokenHash := hashToken(token)
+	session, err := s.queries.GetSessionByConfirmationToken(ctx, db.GetSessionByConfirmationTokenParams{ID: sessionID, ConfirmationToken: &tokenHash})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Session{}, ErrNotFound
+		}
+		return Session{}, fmt.Errorf("get session by token: %w", err)
+	}
+	return s.respond(ctx, session, action)
+}
+
+// RespondAsCoach answers a pending request from the coach dashboard; only the
+// session's coach may. action is "confirm" or "decline".
+func (s *Service) RespondAsCoach(ctx context.Context, sessionID, coachID uuid.UUID, action string) (Session, error) {
+	session, err := s.participant(ctx, sessionID, coachID)
+	if err != nil {
+		return Session{}, err
+	}
+	if session.CoachID != coachID {
+		return Session{}, ErrForbidden
+	}
+	return s.respond(ctx, session, action)
+}
+
+// respond applies a confirm or decline to a pending session and queues the
+// client's notification and the coach's calendar update in the same
+// transaction. The UPDATE is conditional on the session still being pending and
+// inside its deadline (by database time), so two concurrent answers cannot both
+// win and an answer racing the expiry sweep cannot land after it.
+func (s *Service) respond(ctx context.Context, session db.CoachingSession, action string) (Session, error) {
+	if action != "confirm" && action != "decline" {
+		return Session{}, fmt.Errorf("%w: action must be confirm or decline", ErrInvalidInput)
+	}
+	if session.Status != StatusPending {
+		return Session{}, fmt.Errorf("%w: request is already %s", ErrInvalidInput, session.Status)
+	}
+	if session.RespondBy != nil && session.RespondBy.Before(time.Now()) {
+		return Session{}, ErrExpired
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Session{}, fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := s.queries.WithTx(tx)
+
+	var updated db.CoachingSession
+	if action == "confirm" {
+		updated, err = q.ConfirmSession(ctx, session.ID)
+	} else {
+		updated, err = q.DeclineSession(ctx, session.ID)
+	}
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Session{}, s.whyNotPending(ctx, session.ID)
+		}
+		return Session{}, fmt.Errorf("%s session: %w", action, err)
+	}
+	if action == "confirm" && updated.PaymentStatus == payments.StatusAuthorized {
+		if err := s.capture(ctx, q, updated); err != nil {
+			return Session{}, err
+		}
+		updated.PaymentStatus = payments.StatusPaid
+	}
+	parties, err := q.GetSessionParties(ctx, session.ID)
+	if err != nil {
+		return Session{}, fmt.Errorf("load session parties: %w", err)
+	}
+	if action == "confirm" {
+		err = s.mail.clientConfirmed(ctx, q, parties)
+	} else {
+		err = s.mail.clientDeclined(ctx, q, parties)
+	}
+	if err != nil {
+		return Session{}, err
+	}
+	if err := s.mail.coachCalendarUpdate(ctx, q, parties); err != nil {
+		return Session{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Session{}, fmt.Errorf("commit response: %w", err)
+	}
+	return sessionOf(updated, ""), nil
+}
+
+// whyNotPending explains a conditional confirm/decline UPDATE that matched no
+// row: ErrExpired when the request is still pending but past its deadline,
+// otherwise ErrInvalidInput naming the status it has reached.
+func (s *Service) whyNotPending(ctx context.Context, sessionID uuid.UUID) error {
+	current, err := s.queries.GetCoachingSession(ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("%w: request is no longer pending", ErrInvalidInput)
+	}
+	if current.Status == StatusPending {
+		return ErrExpired
+	}
+	return fmt.Errorf("%w: request is already %s", ErrInvalidInput, current.Status)
+}
+
+// expireBatchSize bounds how many overdue requests one transaction expires, so
+// a backlog is worked through in short transactions instead of one long one.
+const expireBatchSize = 100
+
+// ExpirePending moves every pending request whose deadline has passed to
+// expired, releasing its slot, and queues an email to each client and a
+// calendar cancellation to each coach. Work is committed in batches of
+// expireBatchSize; rows another sweep already holds are skipped. It returns how
+// many expired in total; cmd/worker calls it periodically.
+func (s *Service) ExpirePending(ctx context.Context) (int, error) {
+	total := 0
+	for {
+		n, err := s.expireBatch(ctx)
+		total += n
+		if err != nil {
+			return total, err
+		}
+		if n < expireBatchSize {
+			return total, nil
+		}
+	}
+}
+
+// expireBatch expires up to expireBatchSize overdue requests in one transaction
+// together with their notification emails, returning how many it expired.
+func (s *Service) expireBatch(ctx context.Context) (int, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := s.queries.WithTx(tx)
+
+	expired, err := q.ExpirePendingSessions(ctx, expireBatchSize)
+	if err != nil {
+		return 0, fmt.Errorf("expire pending sessions: %w", err)
+	}
+	for _, session := range expired {
+		parties, err := q.GetSessionParties(ctx, session.ID)
+		if err != nil {
+			return 0, fmt.Errorf("load session parties: %w", err)
+		}
+		if err := s.mail.clientExpired(ctx, q, parties); err != nil {
+			return 0, err
+		}
+		if err := s.mail.coachCalendarUpdate(ctx, q, parties); err != nil {
+			return 0, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("commit expiry: %w", err)
+	}
+	return len(expired), nil
 }
 
 // assertBookable rejects a requested interval that the coach has not published
@@ -464,6 +786,11 @@ func (s *Service) ListForUser(ctx context.Context, userID uuid.UUID, status *str
 			Status:          row.Status,
 			Topic:           row.Topic,
 			CoachNotes:      row.CoachNotes,
+			RespondBy:       rfc3339(row.RespondBy),
+			PaymentStatus:   row.PaymentStatus,
+			AmountCents:     row.AmountCents,
+			Currency:        row.Currency,
+			HoldExpiresAt:   rfc3339(row.HoldExpiresAt),
 		})
 	}
 	return out, nil
@@ -492,6 +819,11 @@ func (s *Service) ListForCoach(ctx context.Context, coachID uuid.UUID, status *s
 			Status:          row.Status,
 			Topic:           row.Topic,
 			CoachNotes:      row.CoachNotes,
+			RespondBy:       rfc3339(row.RespondBy),
+			PaymentStatus:   row.PaymentStatus,
+			AmountCents:     row.AmountCents,
+			Currency:        row.Currency,
+			HoldExpiresAt:   rfc3339(row.HoldExpiresAt),
 		})
 	}
 	return out, nil
@@ -512,25 +844,79 @@ func (s *Service) participant(ctx context.Context, sessionID, userID uuid.UUID) 
 	return session, nil
 }
 
-// SetStatus moves a session to another status; either participant may call it,
-// which is how client-side cancellation is implemented.
+// SetStatus moves a session along statusTransitions; either participant may
+// cancel, which is how client-side cancellation is implemented, while completed
+// and no_show are the coach's to record. A cancellation queues an email to the
+// other party in the same transaction.
 func (s *Service) SetStatus(ctx context.Context, sessionID, actorID uuid.UUID, status string) (Session, error) {
-	if !sessionStatuses[status] {
-		return Session{}, fmt.Errorf("%w: unknown status %q", ErrInvalidInput, status)
-	}
-	if _, err := s.participant(ctx, sessionID, actorID); err != nil {
+	session, err := s.participant(ctx, sessionID, actorID)
+	if err != nil {
 		return Session{}, err
 	}
-	updated, err := s.queries.UpdateSessionStatus(ctx, db.UpdateSessionStatusParams{ID: sessionID, Status: status})
+	if !statusTransitions[session.Status][status] {
+		return Session{}, fmt.Errorf("%w: a %s session cannot be marked %s", ErrInvalidInput, session.Status, status)
+	}
+	byCoach := actorID == session.CoachID
+	if coachOnlyStatuses[status] && !byCoach {
+		return Session{}, ErrForbidden
+	}
+	if session.Status == StatusPendingPayment {
+		// Nobody has been emailed yet, so there is nothing to notify; the open
+		// checkout becomes owed clean-up for SweepPayments. If the card was
+		// authorised in the meantime the row is now pending and the ordinary
+		// cancel below releases the authorisation instead.
+		updated, err := s.queries.ReleasePendingPaymentSession(ctx, sessionID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return s.SetStatus(ctx, sessionID, actorID, status)
+		}
+		if err != nil {
+			return Session{}, fmt.Errorf("release payment hold: %w", err)
+		}
+		return sessionOf(updated, ""), nil
+	}
+
+	tx, err := s.pool.Begin(ctx)
 	if err != nil {
+		return Session{}, fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := s.queries.WithTx(tx)
+
+	updated, err := q.UpdateSessionStatus(ctx, db.UpdateSessionStatusParams{ID: sessionID, Status: status, ExpectedStatus: session.Status})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Session{}, fmt.Errorf("%w: session is no longer %s", ErrInvalidInput, session.Status)
+		}
 		return Session{}, fmt.Errorf("update session status: %w", err)
+	}
+	if status == StatusCancelled {
+		parties, err := q.GetSessionParties(ctx, sessionID)
+		if err != nil {
+			return Session{}, fmt.Errorf("load session parties: %w", err)
+		}
+		if err := s.mail.cancelled(ctx, q, parties, byCoach); err != nil {
+			return Session{}, err
+		}
+		// The coach holds an invite from the request email; the client only
+		// once the session was confirmed.
+		if byCoach || session.Status == StatusScheduled {
+			if err := s.mail.selfCalendarUpdate(ctx, q, parties, byCoach); err != nil {
+				return Session{}, err
+			}
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Session{}, fmt.Errorf("commit status: %w", err)
 	}
 	return sessionOf(updated, ""), nil
 }
 
-// Reschedule moves a session to a new start time, keeping its duration. The
-// session being moved is excluded from the conflict check, and the coach need
-// not still be accepting new clients.
+// Reschedule moves a pending or scheduled session to a new start time, keeping
+// its duration. The session being moved is excluded from the conflict check,
+// and the coach need not still be accepting new clients. A client-initiated
+// move returns the session to pending with a fresh token and asks the coach to
+// reconfirm; a coach-initiated move keeps the status and sends the client an
+// updated invite.
 func (s *Service) Reschedule(ctx context.Context, sessionID, actorID uuid.UUID, scheduledTime string) (Session, error) {
 	scheduled, err := time.Parse(time.RFC3339, scheduledTime)
 	if err != nil {
@@ -543,18 +929,69 @@ func (s *Service) Reschedule(ctx context.Context, sessionID, actorID uuid.UUID, 
 	if err != nil {
 		return Session{}, err
 	}
+	if session.Status != StatusPending && session.Status != StatusScheduled {
+		return Session{}, fmt.Errorf("%w: a %s session cannot be rescheduled", ErrInvalidInput, session.Status)
+	}
 	if err := s.assertBookable(ctx, session.CoachID, scheduled, session.DurationMinutes, false, &sessionID); err != nil {
 		return Session{}, err
 	}
-	updated, err := s.queries.RescheduleSession(ctx, db.RescheduleSessionParams{ID: sessionID, ScheduledTime: scheduled})
+
+	byCoach := actorID == session.CoachID
+	params := db.RescheduleSessionParams{
+		ID:                sessionID,
+		ScheduledTime:     scheduled,
+		ExpectedStatus:    session.Status,
+		Status:            session.Status,
+		ConfirmationToken: session.ConfirmationToken,
+		RespondBy:         session.RespondBy,
+	}
+	var token string
+	if !byCoach {
+		token, err = randomToken()
+		if err != nil {
+			return Session{}, err
+		}
+		respondBy := respondDeadline(time.Now(), scheduled)
+		tokenHash := hashToken(token)
+		params.Status = StatusPending
+		params.ConfirmationToken = &tokenHash
+		params.RespondBy = &respondBy
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Session{}, fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := s.queries.WithTx(tx)
+
+	updated, err := q.RescheduleSession(ctx, params)
 	if err != nil {
 		if isSlotConflict(err) {
 			return Session{}, ErrSlotTaken
 		}
 		if errors.Is(err, pgx.ErrNoRows) {
-			return Session{}, ErrNotFound
+			return Session{}, fmt.Errorf("%w: session is no longer %s", ErrInvalidInput, session.Status)
 		}
 		return Session{}, fmt.Errorf("reschedule session: %w", err)
+	}
+	parties, err := q.GetSessionParties(ctx, sessionID)
+	if err != nil {
+		return Session{}, fmt.Errorf("load session parties: %w", err)
+	}
+	if byCoach {
+		if err := s.mail.coachRescheduled(ctx, q, parties); err != nil {
+			return Session{}, err
+		}
+		err = s.mail.selfCalendarUpdate(ctx, q, parties, true)
+	} else {
+		err = s.mail.coachRequest(ctx, q, parties, token, true)
+	}
+	if err != nil {
+		return Session{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Session{}, fmt.Errorf("commit reschedule: %w", err)
 	}
 	return sessionOf(updated, ""), nil
 }

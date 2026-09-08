@@ -6,8 +6,10 @@ import type {
   ChatMessage,
   ChatThread,
   Coach,
+  CoachingConfig,
   CoachingSession,
   Conversation,
+  DatingProfileInput,
   Outcome,
   Profile,
   Role,
@@ -24,22 +26,104 @@ export class ApiError extends Error {
 
 type TokenProvider = () => string | null;
 
+/**
+ * Outcome of a renewal attempt. `unavailable` covers everything that is not a
+ * verdict on the refresh token — a network failure, or a renewal superseded by
+ * a sign-out or a different sign-in — and leaves the session alone; only
+ * `rejected` means the refresh token itself is no good.
+ */
+export type RenewalResult = 'renewed' | 'rejected' | 'unavailable';
+
+/**
+ * Why a session ended without the user asking. `revoked` is claimed only where
+ * the API said so; a refused renewal on its own cannot tell a token that aged
+ * out from one that was withdrawn, and is reported as `expired`.
+ */
+export type SessionEndReason = 'expired' | 'revoked';
+
+type SessionRenewer = () => Promise<RenewalResult>;
+
 /** Typed client for the Go API. One instance per app, token injected lazily. */
 export class ApiClient {
   private token: TokenProvider = () => null;
-  private onUnauthorized: () => void = () => undefined;
+  private onUnauthorized: (reason: SessionEndReason) => void = () => undefined;
+  private renew: SessionRenewer = async () => 'rejected';
+  private renewal: Promise<{ result: RenewalResult; reason: SessionEndReason }> | null = null;
+  // Strongest reason any caller of the renewal in flight gave for a refusal.
+  private pendingReason: SessionEndReason = 'expired';
+  private principal: () => number = () => 0;
 
   useToken(provider: TokenProvider): void {
     this.token = provider;
   }
 
-  /** Called once per rejected authenticated request so the app can sign out. */
-  onSessionRejected(handler: () => void): void {
+  /**
+   * Registers a counter identifying who the app is acting for. It must change
+   * when a session starts, ends or changes hands and stay put when a renewal
+   * swaps the access token, which is what lets a rejected request tell "my
+   * token was renewed" from "someone else is signed in now". Without it every
+   * token change looks like a renewal.
+   */
+  usePrincipal(provider: () => number): void {
+    this.principal = provider;
+  }
+
+  /**
+   * Registers how to trade the refresh token in for a new access token. It is
+   * called at most once per rejected request, and concurrent requests share the
+   * one renewal in flight.
+   */
+  useRenewal(renew: SessionRenewer): void {
+    this.renew = renew;
+  }
+
+  /**
+   * Called once per rejected authenticated request so the app can sign out.
+   * The handler is told why the session ended so a screen can say so.
+   */
+  onSessionRejected(handler: (reason: SessionEndReason) => void): void {
     this.onUnauthorized = handler;
   }
 
-  private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  /**
+   * Trades the refresh token in for a new access token, collapsing concurrent
+   * callers onto the one renewal in flight. A `rejected` refresh token is
+   * unrecoverable, so the app is signed out before the caller sees the answer;
+   * an `unavailable` one leaves the session in place to be retried. Callers
+   * outside the HTTP path use this too: the chat socket has no 401 to react to.
+   *
+   * reason is what the app is told when the renewal is refused. Callers that
+   * already know the session was withdrawn pass `revoked`; the default suits
+   * everyone else, for whom a refusal is indistinguishable from an expiry. It
+   * applies to the shared renewal rather than to the caller, so one caller that
+   * knows better speaks for all of them, whoever started the renewal.
+   */
+  async renewSession(reason: SessionEndReason = 'expired'): Promise<RenewalResult> {
+    if (reason === 'revoked') this.pendingReason = 'revoked';
+    this.renewal ??= this.runRenewal();
+    const { result, reason: ended } = await this.renewal;
+    if (result === 'rejected') this.onUnauthorized(ended);
+    return result;
+  }
+
+  /**
+   * Runs the one renewal the concurrent callers share and pairs its verdict
+   * with the reason they collectively gave, read at the moment it settles so a
+   * caller joining while it is in flight is still accounted for. Clears both
+   * afterwards, leaving the next renewal to be asked about from scratch.
+   */
+  private async runRenewal(): Promise<{ result: RenewalResult; reason: SessionEndReason }> {
+    try {
+      return { result: await this.renew(), reason: this.pendingReason };
+    } finally {
+      this.renewal = null;
+      this.pendingReason = 'expired';
+    }
+  }
+
+  private async request<T>(method: string, path: string, body?: unknown, renewed = false): Promise<T> {
     const token = this.token();
+    const principal = this.principal();
     const response = await fetch(`${API_BASE_URL}${API_PREFIX}${path}`, {
       method,
       headers: {
@@ -54,8 +138,18 @@ export class ApiClient {
     const payload = text ? (JSON.parse(text) as unknown) : null;
 
     if (!response.ok) {
-      if (response.status === 401 && token && token === this.token()) {
-        this.onUnauthorized();
+      if (response.status === 401 && token && !renewed && principal === this.principal()) {
+        // Access tokens expire within minutes, so a 401 on a request that
+        // carried one usually means "renew", not "signed out". A request that
+        // was already in flight when someone else renewed is retried with the
+        // token it missed instead of rotating the fresh one away. A request
+        // whose principal is gone is never retried: its operation belongs to
+        // the account that issued it, not to whoever is signed in now.
+        const current = this.token();
+        if (current && current !== token) return this.request<T>(method, path, body, true);
+        if ((await this.renewSession()) === 'renewed' && principal === this.principal()) {
+          return this.request<T>(method, path, body, true);
+        }
       }
       const message =
         payload && typeof payload === 'object' && 'error' in payload
@@ -77,12 +171,21 @@ export class ApiClient {
   }
 
   /**
-   * Confirms an email address. The session's token is filled in when the
-   * caller is authenticated as the account being verified, and empty otherwise
-   * (e.g. verifying from a signed-out browser).
+   * Rotates a refresh token into a new session. Rejects with 401 once the token
+   * is spent or expired. It never triggers a renewal of its own: it *is* the
+   * renewal, so a 401 here is final.
    */
-  verifyEmail(token: string) {
-    return this.request<AuthSession>('POST', '/auth/verify', { token });
+  refreshSession(refreshToken: string) {
+    return this.request<AuthSession>('POST', '/auth/refresh', { refresh_token: refreshToken }, true);
+  }
+
+  /**
+   * Confirms an email address with the 6-digit code it was sent. The session's
+   * token is filled in when the caller is authenticated as the account being
+   * verified, and empty otherwise (e.g. verifying from a signed-out browser).
+   */
+  verifyEmail(email: string, code: string) {
+    return this.request<AuthSession>('POST', '/auth/verify', { email, code });
   }
 
   resendVerification(email: string) {
@@ -91,6 +194,15 @@ export class ApiClient {
 
   me() {
     return this.request<Profile>('GET', '/auth/me');
+  }
+
+  /**
+   * Replaces the authenticated account's dating styles and phases wholesale
+   * and resolves with the updated profile. Rejects with a 400 ApiError when a
+   * value is outside the vocabulary or a phase is listed on both sides.
+   */
+  updateDatingProfile(input: DatingProfileInput) {
+    return this.request<Profile>('PATCH', '/auth/me', input);
   }
 
   /**
@@ -132,6 +244,11 @@ export class ApiClient {
       `/coaching/coaches/${coachID}/slots?duration_minutes=${durationMinutes}${exclude}`,
     );
     return slots ?? [];
+  }
+
+  /** Fetches server-side coaching switches (e.g. whether booking requires payment). */
+  coachingConfig() {
+    return this.request<CoachingConfig>('GET', '/coaching/config');
   }
 
   bookSession(input: {
