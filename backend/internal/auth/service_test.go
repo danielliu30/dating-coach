@@ -177,6 +177,52 @@ func TestRefreshRotatesAndDetectsReuse(t *testing.T) {
 	}
 }
 
+// TestRotationKeepsTheFamilyAndSignInStartsANewOne covers what the family is
+// for: every token a session rotates through belongs to one chain, so a later
+// reuse can be scoped to it, while a second sign-in is a chain of its own and
+// stays outside the first one.
+func TestRotationKeepsTheFamilyAndSignInStartsANewOne(t *testing.T) {
+	svc, _, pool := newTestService(t)
+	ctx := context.Background()
+
+	user := verifiedUser(t, svc, pool)
+	first, err := svc.SignIn(ctx, user.email, user.password)
+	if err != nil {
+		t.Fatalf("sign in: %v", err)
+	}
+	rotated, err := svc.Refresh(ctx, first.RefreshToken)
+	if err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	other, err := svc.SignIn(ctx, user.email, user.password)
+	if err != nil {
+		t.Fatalf("second sign in: %v", err)
+	}
+
+	firstFamily := familyOf(t, pool, first.RefreshToken)
+	if got := familyOf(t, pool, rotated.RefreshToken); got != firstFamily {
+		t.Fatalf("rotated into family %s, want the presented token's %s", got, firstFamily)
+	}
+	if got := familyOf(t, pool, other.RefreshToken); got == firstFamily {
+		t.Fatalf("signing in joined family %s, want a new one", got)
+	}
+}
+
+// familyOf reads the stored family of a plain refresh token, which is the only
+// way to observe it: the family is deliberately absent from the API response.
+func familyOf(t *testing.T, pool *pgxpool.Pool, token string) uuid.UUID {
+	t.Helper()
+
+	var family uuid.UUID
+	err := pool.QueryRow(context.Background(),
+		"SELECT family_id FROM refresh_tokens WHERE token_hash = $1", hashRefreshToken(token),
+	).Scan(&family)
+	if err != nil {
+		t.Fatalf("read refresh token family: %v", err)
+	}
+	return family
+}
+
 // TestDeleteAccountEndsRefreshing covers the replacement for the denylist:
 // deleting an account leaves its refresh tokens unusable, so the sessions it
 // holds cannot outlive their own access tokens.

@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/danielliu30/dating-coach/backend/internal/store/db"
@@ -26,12 +27,15 @@ var ErrInvalidRefreshToken = errors.New("invalid or expired refresh token")
 //
 // q is the handle the refresh token is written through, so a caller rotating
 // one can pass a transaction and have the new token share its fate.
-func (s *Service) openSession(ctx context.Context, q *db.Queries, user db.User) (Session, error) {
+//
+// familyID is the rotation chain the refresh token joins; uuid.Nil starts a new
+// one, which is what signing in does.
+func (s *Service) openSession(ctx context.Context, q *db.Queries, user db.User, familyID uuid.UUID) (Session, error) {
 	token, expires, err := s.issuer.Issue(user.ID, user.Email, user.Role, ScopeSession, s.sessionTTL)
 	if err != nil {
 		return Session{}, err
 	}
-	refresh, err := s.issueRefreshToken(ctx, q, user)
+	refresh, err := s.issueRefreshToken(ctx, q, user, familyID)
 	if err != nil {
 		return Session{}, err
 	}
@@ -46,15 +50,24 @@ func (s *Service) openSession(ctx context.Context, q *db.Queries, user db.User) 
 // issueRefreshToken stores a new refresh token for user and returns its plain
 // text, which is the only moment that value exists outside the client: the row
 // holds nothing but its hash, so the table cannot be replayed against the API.
-func (s *Service) issueRefreshToken(ctx context.Context, q *db.Queries, user db.User) (string, error) {
+//
+// The token joins familyID, or starts a family of its own when familyID is
+// uuid.Nil. A rotation passes the presented token's family so the whole chain
+// stays identifiable; a fresh sign-in must not, or an old chain would be
+// extended by a session that has nothing to do with it.
+func (s *Service) issueRefreshToken(ctx context.Context, q *db.Queries, user db.User, familyID uuid.UUID) (string, error) {
 	token, err := randomToken()
 	if err != nil {
 		return "", err
+	}
+	if familyID == uuid.Nil {
+		familyID = uuid.New()
 	}
 	if _, err := q.CreateRefreshToken(ctx, db.CreateRefreshTokenParams{
 		UserID:    user.ID,
 		TokenHash: hashRefreshToken(token),
 		ExpiresAt: time.Now().Add(s.refreshTTL),
+		FamilyID:  familyID,
 	}); err != nil {
 		return "", fmt.Errorf("create refresh token: %w", err)
 	}
@@ -62,7 +75,9 @@ func (s *Service) issueRefreshToken(ctx context.Context, q *db.Queries, user db.
 }
 
 // Refresh exchanges a refresh token for a new session, rotating the token: the
-// presented one is spent and can never be exchanged again.
+// presented one is spent and can never be exchanged again, and its replacement
+// stays in the same family, so the chain of rotations behind a session remains
+// identifiable from any link in it.
 //
 // Presenting a spent token is treated as theft rather than as a mistake, since
 // the legitimate client has already moved on to the token it was given back:
@@ -119,7 +134,7 @@ func (s *Service) Refresh(ctx context.Context, raw string) (Session, error) {
 		}
 		return Session{}, fmt.Errorf("get user: %w", err)
 	}
-	session, err := s.openSession(ctx, q, user)
+	session, err := s.openSession(ctx, q, user, row.FamilyID)
 	if err != nil {
 		return Session{}, err
 	}
