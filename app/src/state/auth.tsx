@@ -2,17 +2,17 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
 import { ApiError, api } from '../api/client';
-import type { RenewalResult } from '../api/client';
+import type { RenewalResult, SessionEndReason } from '../api/client';
 import type { AuthSession, DatingProfileInput, Profile, Role } from '../api/types';
 
 const STORAGE_KEY = 'dating-coach.session';
 
 /**
  * Why the app signed the user out without being asked to. `expired` is the
- * only involuntary case: the refresh token was refused, either because it aged
- * out or because a replay revoked the account's tokens.
+ * default reading of a refused refresh token; `revoked` is used only where the
+ * API withdrew the session outright, which the user cannot fix by waiting.
  */
-export type SignedOutReason = 'expired';
+export type SignedOutReason = SessionEndReason;
 
 interface AuthState {
   ready: boolean;
@@ -92,7 +92,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
     api.usePrincipal(() => principalRef.current);
     // A token can also expire while the app is open; drop it centrally so the
     // UI leaves the authenticated tabs instead of failing every request.
-    api.onSessionRejected(() => {
+    api.onSessionRejected((reason) => {
       // A request already in flight when the user signed out lands here with
       // nothing left to reject: dropping an absent session is a no-op, and
       // blaming an expiry for a sign-out the user asked for is a lie.
@@ -105,7 +105,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
       expiresRef.current = '';
       setToken(null);
       setUser(null);
-      setSignedOutReason('expired');
+      setSignedOutReason(reason);
       void AsyncStorage.removeItem(STORAGE_KEY).catch(() => undefined);
     });
   }, []);

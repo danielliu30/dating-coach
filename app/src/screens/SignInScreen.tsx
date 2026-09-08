@@ -43,8 +43,12 @@ export default function SignInScreen({
       </View>
       {signedOutReason ? (
         <Notice
-          title="You were signed out"
-          text="Your session expired, so we signed you out to keep your account safe. Sign in to pick up where you left off."
+          title={signedOutReason === 'revoked' ? 'Your session was ended' : 'You were signed out'}
+          text={
+            signedOutReason === 'revoked'
+              ? 'We ended this session to keep your account safe. Sign in again, and change your password if you did not expect this.'
+              : 'Your session expired, so we signed you out to keep your account safe. Sign in to pick up where you left off.'
+          }
           onDismiss={dismissSignedOutReason}
         />
       ) : null}
