@@ -39,7 +39,7 @@ cp .env.example .env      # set JWT_SECRET, and LLM_API_KEY for real LLM scoring
 docker compose up -d --build # postgres, redis, rabbitmq, migrations, api, worker, ml-analyzer
 
 # Optional profiles
-# docker compose --profile gateway up -d   # nginx reverse proxy on :80
+# docker compose --profile gateway up -d   # web app + nginx reverse proxy on :80
 # docker compose --profile tools up -d     # pgAdmin on :5050
 ```
 
@@ -59,14 +59,14 @@ To publish a new version: `docker compose build && docker compose push api ml-an
 
 ### Exposing the stack through nginx
 
-`nginx/` holds one route table in two flavours — `/api/*` and `/healthz` go to the API (WebSocket upgrades included), `/ml/*` goes to the ML service:
+`nginx/` holds one route table in two flavours — `/api/*` and `/healthz` go to the API (WebSocket upgrades included), `/ml/*` goes to the ML service, and everything else goes to the `web` image (the exported Expo web bundle built by `app/Dockerfile`, with an SPA fallback):
 
-- Containerised: `docker compose --profile gateway up -d` adds an `nginx` service on `:${NGINX_PORT:-80}`.
-- Host-installed nginx: install `nginx/host-site.conf` as a site (instructions in the file); it proxies to the ports compose publishes on `localhost`.
+- Containerised: `docker compose --profile gateway up -d` adds the `web` and `nginx` services; open `http://localhost:${NGINX_PORT:-80}/`.
+- Host-installed nginx: install `nginx/host-site.conf` as a site (instructions in the file); it proxies to the ports compose publishes on `localhost` (`web` on `${WEB_PORT:-3000}`).
 
-Point the app at the gateway with `EXPO_PUBLIC_API_URL=http://<host>`. The full workflow is written up in `.agents/skills/running-dating-coach-in-docker/SKILL.md`.
+The web bundle is built with an empty `EXPO_PUBLIC_API_URL` (`WEB_API_URL` in `.env`), which means same-origin: REST and the chat WebSocket use the page's origin, so no CORS is involved. Keep `PUBLIC_APP_URL` on the nginx origin so the `/verify?token=...` deep links resolve through the proxy. The full workflow is written up in `.agents/skills/running-dating-coach-in-docker/SKILL.md`.
 
-The Expo app is not containerised — run it on the host:
+For native targets or hot reload, run the Expo dev server on the host instead:
 
 ```bash
 cd app

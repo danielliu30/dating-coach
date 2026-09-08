@@ -9,7 +9,20 @@ const fallback = Platform.select({
   default: 'http://localhost:8080',
 }) as string;
 
-export const API_BASE_URL = (process.env.EXPO_PUBLIC_API_URL ?? fallback).replace(/\/+$/, '');
+/**
+ * An empty EXPO_PUBLIC_API_URL means "same origin" (the web bundle is served
+ * behind the same reverse proxy as the API), so resolve it from the page URL.
+ */
+function resolveBase(): string {
+  const configured = process.env.EXPO_PUBLIC_API_URL;
+  if (configured === undefined) return fallback;
+  const trimmed = configured.replace(/\/+$/, '');
+  if (trimmed !== '') return trimmed;
+  if (Platform.OS === 'web' && typeof window !== 'undefined') return window.location.origin;
+  return fallback;
+}
+
+export const API_BASE_URL = resolveBase();
 
 export const API_PREFIX = '/api/v1';
 

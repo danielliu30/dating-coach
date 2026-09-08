@@ -17,7 +17,7 @@ x-backend-env: &backend-env
   ANALYSIS_QUEUE: ${ANALYSIS_QUEUE:-conversation.analysis}
   ACCOUNT_DELETION_QUEUE: ${ACCOUNT_DELETION_QUEUE:-account.deletion}
   DEAD_LETTER_ALERT_PERIOD: ${DEAD_LETTER_ALERT_PERIOD:-1m}
-  PUBLIC_APP_URL: ${PUBLIC_APP_URL:-http://localhost:8081}
+  PUBLIC_APP_URL: ${PUBLIC_APP_URL:-http://localhost}
   CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost,http://localhost:8081,http://localhost:19006}
   SMTP_HOST: ${SMTP_HOST:-}
   SMTP_PORT: ${SMTP_PORT:-587}
@@ -82,6 +82,8 @@ services:
     environment:
       <<: *backend-env
       HTTP_ADDR: ':8080'
+    # Public traffic goes through nginx; this host mapping is only for local
+    # tooling (Expo dev server, curl) that talks to the API directly.
     ports: ['8080:8080']
     restart: unless-stopped
     depends_on:
@@ -122,9 +124,22 @@ services:
       ML_MODEL_DIR: ${ML_MODEL_DIR:-/models/segment-scorer}
     ports: ['8000:8000']
 
-  # Optional public entrypoint (`--profile gateway`): proxies /api and /healthz
-  # to api, /ml/ to ml-analyzer. Skip it when a host nginx fronts the stack
-  # (see nginx/host-site.conf).
+  # Static Expo web bundle (`--profile gateway`). Empty EXPO_PUBLIC_API_URL =
+  # same origin as the page, so REST and the chat WebSocket both go through
+  # nginx. Published on ${WEB_PORT:-3000} only for a host-installed nginx.
+  web:
+    image: ${DOCKERHUB_NAMESPACE:-danielliu30}/dating-coach-web:${IMAGE_TAG:-latest}
+    build:
+      context: ./app
+      args:
+        EXPO_PUBLIC_API_URL: ${WEB_API_URL:-}
+    profiles: ['gateway']
+    ports: ['${WEB_PORT:-3000}:80']
+    restart: unless-stopped
+
+  # Optional public entrypoint (`--profile gateway`): / to web, /api and
+  # /healthz to api, /ml/ to ml-analyzer. Skip it when a host nginx fronts the
+  # stack (see nginx/host-site.conf).
   nginx:
     image: nginx:1.27-alpine
     profiles: ['gateway']
@@ -133,6 +148,8 @@ services:
     restart: unless-stopped
     depends_on:
       api:
+        condition: service_started
+      web:
         condition: service_started
       ml-analyzer:
         condition: service_started
