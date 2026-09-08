@@ -1,4 +1,5 @@
 import { api } from './client';
+import type { SessionEndReason } from './client';
 import { wsURL } from '../config';
 import type { ChatEvent } from './types';
 
@@ -15,6 +16,9 @@ const attemptsPerRenewal = 6;
 // Close code the API uses when it drops a socket whose session it will not serve
 // any more, whether the account was revoked or the token behind it expired.
 const POLICY_VIOLATION = 1008;
+// The close reason the API sends when it withdrew the session rather than
+// merely rejecting an expired access token, which it closes with too.
+const SESSION_REVOKED = 'session revoked';
 
 interface Handlers {
   onEvent: (event: ChatEvent) => void;
@@ -74,7 +78,11 @@ export class ChatSocket {
       const unopened = !this.opened;
       this.opened = false;
       this.handlers.onStatus?.('closed');
-      void this.scheduleReconnect(unopened, event.code === POLICY_VIOLATION);
+      void this.scheduleReconnect(
+        unopened,
+        event.code === POLICY_VIOLATION,
+        event.reason === SESSION_REVOKED ? 'revoked' : 'expired',
+      );
     };
     socket.onerror = () => socket.close();
   }
@@ -92,13 +100,21 @@ export class ChatSocket {
    * itself because it will not serve the session again, which is either an
    * expired token, renewable straight away, or a revoked account, whose renewal
    * is refused and signs the user out rather than reconnecting forever.
+   *
+   * ended is what the sign-out is blamed on if the renewal is refused. The API
+   * says which of the two it closed for, and this is the only place the app
+   * hears it: a refused renewal alone cannot tell an expiry from a withdrawal.
    */
-  private async scheduleReconnect(unopened: boolean, refused: boolean): Promise<void> {
+  private async scheduleReconnect(
+    unopened: boolean,
+    refused: boolean,
+    ended: SessionEndReason = 'expired',
+  ): Promise<void> {
     if (this.closed) return;
     if (unopened || refused) {
       const due = refused || this.failures % attemptsPerRenewal === 0;
       if (!refused) this.failures += 1;
-      if (due && (await api.renewSession()) === 'rejected') {
+      if (due && (await api.renewSession(ended)) === 'rejected') {
         this.close();
         return;
       }
