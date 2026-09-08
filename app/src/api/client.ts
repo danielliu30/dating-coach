@@ -48,7 +48,9 @@ export class ApiClient {
   private token: TokenProvider = () => null;
   private onUnauthorized: (reason: SessionEndReason) => void = () => undefined;
   private renew: SessionRenewer = async () => 'rejected';
-  private renewal: Promise<RenewalResult> | null = null;
+  private renewal: Promise<{ result: RenewalResult; reason: SessionEndReason }> | null = null;
+  // Strongest reason any caller of the renewal in flight gave for a refusal.
+  private pendingReason: SessionEndReason = 'expired';
   private principal: () => number = () => 0;
 
   useToken(provider: TokenProvider): void {
@@ -92,15 +94,31 @@ export class ApiClient {
    *
    * reason is what the app is told when the renewal is refused. Callers that
    * already know the session was withdrawn pass `revoked`; the default suits
-   * everyone else, for whom a refusal is indistinguishable from an expiry.
+   * everyone else, for whom a refusal is indistinguishable from an expiry. It
+   * applies to the shared renewal rather than to the caller, so one caller that
+   * knows better speaks for all of them, whoever started the renewal.
    */
   async renewSession(reason: SessionEndReason = 'expired'): Promise<RenewalResult> {
-    this.renewal ??= this.renew().finally(() => {
-      this.renewal = null;
-    });
-    const result = await this.renewal;
-    if (result === 'rejected') this.onUnauthorized(reason);
+    if (reason === 'revoked') this.pendingReason = 'revoked';
+    this.renewal ??= this.runRenewal();
+    const { result, reason: ended } = await this.renewal;
+    if (result === 'rejected') this.onUnauthorized(ended);
     return result;
+  }
+
+  /**
+   * Runs the one renewal the concurrent callers share and pairs its verdict
+   * with the reason they collectively gave, read at the moment it settles so a
+   * caller joining while it is in flight is still accounted for. Clears both
+   * afterwards, leaving the next renewal to be asked about from scratch.
+   */
+  private async runRenewal(): Promise<{ result: RenewalResult; reason: SessionEndReason }> {
+    try {
+      return { result: await this.renew(), reason: this.pendingReason };
+    } finally {
+      this.renewal = null;
+      this.pendingReason = 'expired';
+    }
   }
 
   private async request<T>(method: string, path: string, body?: unknown, renewed = false): Promise<T> {
