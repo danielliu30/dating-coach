@@ -81,9 +81,10 @@ func (s *Service) issueRefreshToken(ctx context.Context, q *db.Queries, user db.
 //
 // Presenting a spent token is treated as theft rather than as a mistake, since
 // the legitimate client has already moved on to the token it was given back:
-// every refresh token of that account is deleted, which ends the sessions of
-// both the attacker and the victim, and the account has to sign in again. The
-// access tokens already minted survive until they expire, which is minutes.
+// every token in that one's family is deleted, which ends the session of both
+// the attacker and the victim, and it has to sign in again. The account's other
+// sessions are untouched — nothing about them was exposed — and the access
+// tokens already minted survive until they expire, which is minutes.
 //
 // Spending the presented token and storing its replacement share a
 // transaction, so a failure half way through cannot leave the caller holding a
@@ -103,10 +104,12 @@ func (s *Service) Refresh(ctx context.Context, raw string) (Session, error) {
 		return Session{}, fmt.Errorf("lookup refresh token: %w", err)
 	}
 	if row.UsedAt != nil {
-		slog.Warn("refresh token reused", "user_id", row.UserID)
-		if _, err := s.queries.RevokeUserRefreshTokens(ctx, row.UserID); err != nil {
-			return Session{}, fmt.Errorf("revoke reused refresh tokens: %w", err)
+		rows, err := s.queries.RevokeRefreshTokenFamily(ctx, row.FamilyID)
+		if err != nil {
+			return Session{}, fmt.Errorf("revoke reused refresh token family: %w", err)
 		}
+		slog.Warn("refresh token reused",
+			"user_id", row.UserID, "family_id", row.FamilyID, "revoked", rows)
 		return Session{}, ErrInvalidRefreshToken
 	}
 

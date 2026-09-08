@@ -148,8 +148,8 @@ func TestSignUpMintsVerifyScopedToken(t *testing.T) {
 
 // TestRefreshRotatesAndDetectsReuse covers the whole rotation contract against
 // the real queries: an exchange yields a new pair, the token it consumed is
-// dead, and presenting that dead token takes the account's other refresh tokens
-// down with it.
+// dead, and presenting that dead token takes the rest of its own chain down
+// with it.
 func TestRefreshRotatesAndDetectsReuse(t *testing.T) {
 	svc, issuer, pool := newTestService(t)
 	ctx := context.Background()
@@ -205,6 +205,38 @@ func TestRotationKeepsTheFamilyAndSignInStartsANewOne(t *testing.T) {
 	}
 	if got := familyOf(t, pool, other.RefreshToken); got == firstFamily {
 		t.Fatalf("signing in joined family %s, want a new one", got)
+	}
+}
+
+// TestReuseSparesTheAccountsOtherSessions covers the blast radius of a replay:
+// the compromised chain is ended, but a session signed in separately keeps
+// refreshing, since nothing about it was exposed.
+func TestReuseSparesTheAccountsOtherSessions(t *testing.T) {
+	svc, _, pool := newTestService(t)
+	ctx := context.Background()
+
+	user := verifiedUser(t, svc, pool)
+	compromised, err := svc.SignIn(ctx, user.email, user.password)
+	if err != nil {
+		t.Fatalf("sign in: %v", err)
+	}
+	bystander, err := svc.SignIn(ctx, user.email, user.password)
+	if err != nil {
+		t.Fatalf("second sign in: %v", err)
+	}
+	rotated, err := svc.Refresh(ctx, compromised.RefreshToken)
+	if err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+
+	if _, err := svc.Refresh(ctx, compromised.RefreshToken); !errors.Is(err, ErrInvalidRefreshToken) {
+		t.Fatalf("replaying a spent token: error = %v, want %v", err, ErrInvalidRefreshToken)
+	}
+	if _, err := svc.Refresh(ctx, rotated.RefreshToken); !errors.Is(err, ErrInvalidRefreshToken) {
+		t.Fatalf("replacement of a replayed token: error = %v, want %v", err, ErrInvalidRefreshToken)
+	}
+	if _, err := svc.Refresh(ctx, bystander.RefreshToken); err != nil {
+		t.Fatalf("refreshing the account's other session: %v", err)
 	}
 }
 
