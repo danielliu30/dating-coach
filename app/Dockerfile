@@ -3,7 +3,7 @@
 FROM node:20-alpine AS build
 WORKDIR /src
 COPY package.json package-lock.json ./
-RUN npm install --no-audit --no-fund
+RUN npm ci --no-audit --no-fund
 COPY . .
 # Baked into the bundle at export time. Empty means same-origin, i.e. REST and
 # the chat WebSocket both go through whatever origin served the page.

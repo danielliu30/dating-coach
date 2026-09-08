@@ -10,6 +10,7 @@ description: Build the dating-coach backend and ml-analyzer images, publish them
 |---|---|---|
 | `api`, `worker` | `danielliu30/dating-coach-backend` | one image, two binaries; compose picks with `command: [api]` / `[worker]` |
 | `ml-analyzer` | `danielliu30/dating-coach-ml-analyzer` | torch-free; heuristic scorer when no `LLM_API_KEY` |
+| `web` (`--profile gateway`) | `danielliu30/dating-coach-web` | static Expo web export served by nginx:alpine; `WEB_API_URL` build arg (empty = same-origin) |
 
 Tags default to `latest`; override with `DOCKERHUB_NAMESPACE` / `IMAGE_TAG` env vars (they feed the `image:` fields in `docker-compose.yml`).
 
@@ -17,8 +18,8 @@ Tags default to `latest`; override with `DOCKERHUB_NAMESPACE` / `IMAGE_TAG` env 
 ```bash
 cd <repo>
 echo "$DOCKERHUB_TOKEN" | docker login -u danielliu30 --password-stdin   # PAT from session secrets
-docker compose build                       # tags images with the Hub names above
-docker compose push api ml-analyzer        # `worker` shares the api image
+docker compose --profile gateway build     # tags images with the Hub names above
+docker compose --profile gateway push api ml-analyzer web   # `worker` shares the api image
 ```
 Verify with the Docker Hub MCP server (`mcp_tool server=dockerhub`):
 `listRepositoriesByNamespace {"namespace":"danielliu30"}` or `listRepositoryTags {"namespace":"danielliu30","repository":"dating-coach-backend"}`.
@@ -27,7 +28,7 @@ Repository descriptions can be set with `updateRepositoryInfo`.
 ## Run from the published images
 ```bash
 cp .env.example .env                       # only if .env missing; set JWT_SECRET for anything non-local
-docker compose pull api ml-analyzer
+docker compose --profile gateway pull api ml-analyzer web   # drop `--profile gateway`/`web` for API-only
 docker compose up -d --no-build            # postgres, redis, rabbitmq, migrate (one-shot), api:8080, worker, ml-analyzer:8000
 docker compose ps
 curl localhost:8080/healthz                # {"env":"development","status":"ok"}
@@ -40,15 +41,16 @@ Drop `--no-build` to build locally instead of pulling.
 Routes (identical in both variants):
 - `/api/*` and `/healthz` -> api (`Upgrade`/`Connection` headers forwarded, `proxy_read_timeout 1h` for chat sockets)
 - `/ml/*` -> ml-analyzer with the `/ml` prefix stripped (`/ml/healthz` -> `:8000/healthz`)
-- `/` -> plain-text banner listing the routes
+- `/` -> `web` (static Expo bundle; SPA fallback to index.html so `/verify?token=…` deep links work)
+- `Host` is forwarded as `$http_host` (with port): the API's WebSocket same-origin check compares `Origin` to `Host`, so a gateway on a non-80 port still accepts chat sockets
 
 ### A. Containerised gateway (no nginx on the host)
 ```bash
-docker compose --profile gateway up -d     # adds `nginx` (nginx:1.27-alpine) on ${NGINX_PORT:-80}
-curl localhost/healthz && curl localhost/ml/healthz
+docker compose --profile gateway up -d     # adds `web` and `nginx` (nginx:1.27-alpine) on ${NGINX_PORT:-80}
+curl localhost/healthz && curl localhost/ml/healthz && curl -sI localhost/ | head -1
 ```
-Config: `nginx/default.conf`, mounted read-only; upstreams are the compose service names `api:8080` / `ml-analyzer:8000`.
-Use `NGINX_PORT=8088 docker compose --profile gateway up -d` if :80 is taken (e.g. by a host nginx).
+Config: `nginx/default.conf`, mounted read-only; upstreams are the compose service names `api:8080` / `ml-analyzer:8000` / `web:80`.
+If :80 is taken (e.g. by a host nginx) set `NGINX_PORT=8088` **and** `PUBLIC_APP_URL=http://localhost:8088` (add it to `CORS_ORIGINS` too) in `.env`; verification/payment links are built from `PUBLIC_APP_URL`.
 
 ### B. Host-installed nginx
 ```bash
@@ -58,7 +60,7 @@ sudo rm -f /etc/nginx/sites-enabled/default
 sudo nginx -t && sudo systemctl reload nginx
 curl localhost/healthz && curl localhost/ml/healthz
 ```
-Upstreams are `127.0.0.1:8080` / `127.0.0.1:8000`, i.e. the ports compose publishes. Do not also start the `gateway` profile on :80.
+Upstreams are `127.0.0.1:8080` / `127.0.0.1:8000` / `127.0.0.1:3000` (`web`, published on `WEB_PORT`), i.e. the ports compose publishes. The `web` container still needs `--profile gateway`, so run it with `NGINX_PORT` moved off :80; if you change `WEB_PORT`, edit the `location /` upstream in host-site.conf to match.
 
 ### Smoke-test the proxy
 ```bash
