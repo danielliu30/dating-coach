@@ -7,24 +7,21 @@ package db
 
 import (
 	"context"
-	"time"
 
 	"github.com/google/uuid"
 )
 
 const createUser = `-- name: CreateUser :one
-INSERT INTO users (email, password_hash, display_name, role, verification_token, verification_expires_at)
-VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, email, password_hash, display_name, role, email_verified, verification_token, verification_expires_at, created_at, updated_at, deleted_at, dating_styles, phases_strong, phases_working_on
+INSERT INTO users (email, password_hash, display_name, role)
+VALUES ($1, $2, $3, $4)
+RETURNING id, email, password_hash, display_name, role, email_verified, created_at, updated_at, deleted_at, dating_styles, phases_strong, phases_working_on
 `
 
 type CreateUserParams struct {
-	Email                 string     `json:"email"`
-	PasswordHash          string     `json:"password_hash"`
-	DisplayName           string     `json:"display_name"`
-	Role                  string     `json:"role"`
-	VerificationToken     *string    `json:"verification_token"`
-	VerificationExpiresAt *time.Time `json:"verification_expires_at"`
+	Email        string `json:"email"`
+	PasswordHash string `json:"password_hash"`
+	DisplayName  string `json:"display_name"`
+	Role         string `json:"role"`
 }
 
 func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, error) {
@@ -33,8 +30,6 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		arg.PasswordHash,
 		arg.DisplayName,
 		arg.Role,
-		arg.VerificationToken,
-		arg.VerificationExpiresAt,
 	)
 	var i User
 	err := row.Scan(
@@ -44,8 +39,6 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.DisplayName,
 		&i.Role,
 		&i.EmailVerified,
-		&i.VerificationToken,
-		&i.VerificationExpiresAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
@@ -69,7 +62,7 @@ func (q *Queries) DeleteUser(ctx context.Context, id uuid.UUID) (int64, error) {
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, email, password_hash, display_name, role, email_verified, verification_token, verification_expires_at, created_at, updated_at, deleted_at, dating_styles, phases_strong, phases_working_on FROM users WHERE email = $1 AND deleted_at IS NULL
+SELECT id, email, password_hash, display_name, role, email_verified, created_at, updated_at, deleted_at, dating_styles, phases_strong, phases_working_on FROM users WHERE email = $1 AND deleted_at IS NULL
 `
 
 func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error) {
@@ -82,8 +75,6 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 		&i.DisplayName,
 		&i.Role,
 		&i.EmailVerified,
-		&i.VerificationToken,
-		&i.VerificationExpiresAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
@@ -95,7 +86,7 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, email, password_hash, display_name, role, email_verified, verification_token, verification_expires_at, created_at, updated_at, deleted_at, dating_styles, phases_strong, phases_working_on FROM users WHERE id = $1 AND deleted_at IS NULL
+SELECT id, email, password_hash, display_name, role, email_verified, created_at, updated_at, deleted_at, dating_styles, phases_strong, phases_working_on FROM users WHERE id = $1 AND deleted_at IS NULL
 `
 
 func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (User, error) {
@@ -108,8 +99,6 @@ func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (User, error) {
 		&i.DisplayName,
 		&i.Role,
 		&i.EmailVerified,
-		&i.VerificationToken,
-		&i.VerificationExpiresAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
@@ -120,25 +109,6 @@ func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (User, error) {
 	return i, err
 }
 
-const setVerificationToken = `-- name: SetVerificationToken :exec
-UPDATE users
-SET verification_token = $2,
-    verification_expires_at = $3,
-    updated_at = now()
-WHERE id = $1
-`
-
-type SetVerificationTokenParams struct {
-	ID                    uuid.UUID  `json:"id"`
-	VerificationToken     *string    `json:"verification_token"`
-	VerificationExpiresAt *time.Time `json:"verification_expires_at"`
-}
-
-func (q *Queries) SetVerificationToken(ctx context.Context, arg SetVerificationTokenParams) error {
-	_, err := q.db.Exec(ctx, setVerificationToken, arg.ID, arg.VerificationToken, arg.VerificationExpiresAt)
-	return err
-}
-
 const updateUserDatingProfile = `-- name: UpdateUserDatingProfile :one
 UPDATE users
 SET dating_styles = $2,
@@ -146,7 +116,7 @@ SET dating_styles = $2,
     phases_working_on = $4,
     updated_at = now()
 WHERE id = $1 AND deleted_at IS NULL
-RETURNING id, email, password_hash, display_name, role, email_verified, verification_token, verification_expires_at, created_at, updated_at, deleted_at, dating_styles, phases_strong, phases_working_on
+RETURNING id, email, password_hash, display_name, role, email_verified, created_at, updated_at, deleted_at, dating_styles, phases_strong, phases_working_on
 `
 
 type UpdateUserDatingProfileParams struct {
@@ -171,8 +141,6 @@ func (q *Queries) UpdateUserDatingProfile(ctx context.Context, arg UpdateUserDat
 		&i.DisplayName,
 		&i.Role,
 		&i.EmailVerified,
-		&i.VerificationToken,
-		&i.VerificationExpiresAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
@@ -197,17 +165,14 @@ func (q *Queries) UserRowExists(ctx context.Context, id uuid.UUID) (bool, error)
 const verifyUserEmail = `-- name: VerifyUserEmail :one
 UPDATE users
 SET email_verified = true,
-    verification_token = NULL,
-    verification_expires_at = NULL,
     updated_at = now()
-WHERE verification_token = $1
-  AND verification_expires_at > now()
+WHERE id = $1
   AND deleted_at IS NULL
-RETURNING id, email, password_hash, display_name, role, email_verified, verification_token, verification_expires_at, created_at, updated_at, deleted_at, dating_styles, phases_strong, phases_working_on
+RETURNING id, email, password_hash, display_name, role, email_verified, created_at, updated_at, deleted_at, dating_styles, phases_strong, phases_working_on
 `
 
-func (q *Queries) VerifyUserEmail(ctx context.Context, verificationToken *string) (User, error) {
-	row := q.db.QueryRow(ctx, verifyUserEmail, verificationToken)
+func (q *Queries) VerifyUserEmail(ctx context.Context, id uuid.UUID) (User, error) {
+	row := q.db.QueryRow(ctx, verifyUserEmail, id)
 	var i User
 	err := row.Scan(
 		&i.ID,
@@ -216,8 +181,6 @@ func (q *Queries) VerifyUserEmail(ctx context.Context, verificationToken *string
 		&i.DisplayName,
 		&i.Role,
 		&i.EmailVerified,
-		&i.VerificationToken,
-		&i.VerificationExpiresAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,

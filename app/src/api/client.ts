@@ -148,12 +148,12 @@ export class ApiClient {
   }
 
   /**
-   * Confirms an email address. The session's token is filled in when the
-   * caller is authenticated as the account being verified, and empty otherwise
-   * (e.g. verifying from a signed-out browser).
+   * Confirms an email address with the 6-digit code it was sent. The session's
+   * token is filled in when the caller is authenticated as the account being
+   * verified, and empty otherwise (e.g. verifying from a signed-out browser).
    */
-  verifyEmail(token: string) {
-    return this.request<AuthSession>('POST', '/auth/verify', { token });
+  verifyEmail(email: string, code: string) {
+    return this.request<AuthSession>('POST', '/auth/verify', { email, code });
   }
 
   resendVerification(email: string) {

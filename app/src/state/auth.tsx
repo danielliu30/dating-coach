@@ -23,7 +23,7 @@ interface AuthState {
   dismissSignedOutReason: () => void;
   signIn: (email: string, password: string) => Promise<Profile>;
   signUp: (input: { email: string; password: string; displayName: string; role: Role }) => Promise<Profile>;
-  verify: (token: string) => Promise<Profile>;
+  verify: (email: string, code: string) => Promise<Profile>;
   resendVerification: (email: string) => Promise<void>;
   refresh: () => Promise<void>;
   updateDatingProfile: (input: DatingProfileInput) => Promise<Profile>;
@@ -250,7 +250,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
       signIn: async (email, password) => persist(await api.signIn({ email, password })),
       signUp: async ({ email, password, displayName, role }) =>
         persist(await api.signUp({ email, password, display_name: displayName, role })),
-      verify: async (verificationToken) => {
+      verify: async (email, code) => {
         // Verifying as the account being verified swaps the sign-up token for a
         // session one; the sign-up token cannot reach the private API the app is
         // about to show. An empty token means the backend did not recognise the
@@ -258,7 +258,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
         // so any session on hand is dropped rather than paired with the
         // verified profile.
         const sent = tokenRef.current;
-        const session = await api.verifyEmail(verificationToken);
+        const session = await api.verifyEmail(email, code);
         if (session.token) return persist(session);
         if (tokenRef.current === sent) await clearSession();
         return session.user;

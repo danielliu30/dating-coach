@@ -78,9 +78,10 @@ func run() error {
 	// the denylist is only read by open chat sockets, which outlive the token
 	// that opened them.
 	denylist := auth.NewDenylist(rdb, cfg.JWTTTL)
+	verificationCodes := auth.NewVerificationCache(rdb, auth.VerificationCodeTTL)
 
 	authHandler := auth.NewHandler(
-		auth.NewService(pg.Pool, pg.Queries, issuer, notifier, cfg.BcryptCost, cfg.PublicAppURL, denylist, deletions, cfg.JWTTTL, cfg.VerifyTokenTTL, cfg.RefreshTokenTTL),
+		auth.NewService(pg.Pool, pg.Queries, issuer, notifier, cfg.BcryptCost, cfg.PublicAppURL, verificationCodes, denylist, deletions, cfg.JWTTTL, cfg.VerifyTokenTTL, cfg.RefreshTokenTTL),
 		limiter,
 	)
 	provider, err := payments.New(cfg.PaymentsEnabled)

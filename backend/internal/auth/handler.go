@@ -118,20 +118,22 @@ func (h *Handler) refresh(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// verify handles POST /verify, consuming the token from the verification
-// email. The response carries a session token when the caller is authenticated
-// as the account being verified, so the app does not have to sign in again.
+// verify handles POST /verify, checking the code from the verification email
+// against the address. The response carries a session token when the caller is
+// authenticated as the account being verified, so the app does not have to sign
+// in again.
 func (h *Handler) verify(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Token string `json:"token"`
+		Email string `json:"email"`
+		Code  string `json:"code"`
 	}
 	if err := httpx.Decode(r, &in); err != nil {
 		httpx.Error(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	session, err := h.svc.VerifyEmail(r.Context(), in.Token, bearerToken(r))
+	session, err := h.svc.VerifyEmail(r.Context(), in.Email, in.Code, bearerToken(r))
 	switch {
-	case errors.Is(err, ErrInvalidToken):
+	case errors.Is(err, ErrInvalidCode):
 		httpx.Error(w, http.StatusBadRequest, err.Error())
 	case err != nil:
 		slog.Error("verify email", "error", err)

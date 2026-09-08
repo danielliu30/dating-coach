@@ -37,7 +37,7 @@ func TestDeleteAccountFailsWhenNothingWasRecorded(t *testing.T) {
 	}
 	t.Cleanup(pool.Close)
 
-	svc := NewService(pool, db.New(pool), nil, nil, 0, "", NewDenylist(nil, time.Minute), failingPublisher{}, time.Hour, time.Minute, 24*time.Hour)
+	svc := NewService(pool, db.New(pool), nil, nil, 0, "", nil, NewDenylist(nil, time.Minute), failingPublisher{}, time.Hour, time.Minute, 24*time.Hour)
 	if err := svc.DeleteAccount(context.Background(), uuid.New()); err == nil {
 		t.Fatal("DeleteAccount succeeded although the deletion was never recorded")
 	}
@@ -57,9 +57,10 @@ func (silentNotifier) Send(context.Context, notify.Message) error { return nil }
 func (silentNotifier) Push(context.Context, string, string, string) error { return nil }
 
 // newTestService connects to the database named by TEST_DATABASE_URL and returns
-// a Service wired to it, skipping the test when the variable is unset so the
-// suite still runs without Postgres. TTLs are distinct so a test can tell which
-// one a token was minted with.
+// a Service wired to it and to an in-process Redis for verification codes,
+// skipping the test when the variable is unset so the suite still runs without
+// Postgres. TTLs are distinct so a test can tell which one a token was minted
+// with.
 func newTestService(t *testing.T) (*Service, *TokenIssuer, *pgxpool.Pool) {
 	t.Helper()
 
@@ -78,15 +79,19 @@ func newTestService(t *testing.T) (*Service, *TokenIssuer, *pgxpool.Pool) {
 		t.Fatalf("ping postgres: %v", err)
 	}
 
+	codes, mr := newTestCache(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
 	issuer := NewTokenIssuer("test-secret")
-	svc := NewService(pool, db.New(pool), issuer, silentNotifier{}, bcrypt.MinCost, "http://app.test", nil, nil, 15*time.Minute, 30*time.Minute, 24*time.Hour)
+	svc := NewService(pool, db.New(pool), issuer, silentNotifier{}, bcrypt.MinCost, "http://app.test", codes, NewDenylist(rdb, 15*time.Minute), nil, 15*time.Minute, 30*time.Minute, 24*time.Hour)
 	return svc, issuer, pool
 }
 
 // TestSignUpMintsVerifyScopedToken covers the scope split end to end, through
 // the real queries: the new account exists but its token is verify-scoped and
 // short-lived, and only confirming the address — by verifying with that token,
-// or by signing in afterwards — yields a session-scoped one.
+// or by signing in afterwards — yields a session-scoped one. Along the way a
+// wrong code is refused and leaves the right one usable.
 func TestSignUpMintsVerifyScopedToken(t *testing.T) {
 	svc, issuer, pool := newTestService(t)
 	ctx := context.Background()
@@ -108,13 +113,23 @@ func TestSignUpMintsVerifyScopedToken(t *testing.T) {
 	}
 	assertTokenScope(t, issuer, signUp.Token, ScopeVerify, 30*time.Minute)
 
-	var verificationToken string
-	if err := pool.QueryRow(ctx, "SELECT verification_token FROM users WHERE email = $1", email).Scan(&verificationToken); err != nil {
-		t.Fatalf("read verification token: %v", err)
+	code, _, err := svc.codes.Get(ctx, signUp.User.ID)
+	if err != nil || code == "" {
+		t.Fatalf("read verification code: code=%q err=%v", code, err)
 	}
-	verified, err := svc.VerifyEmail(ctx, verificationToken, signUp.Token)
+	wrong := "000000"
+	if wrong == code {
+		wrong = "000001"
+	}
+	if _, err := svc.VerifyEmail(ctx, email, wrong, signUp.Token); !errors.Is(err, ErrInvalidCode) {
+		t.Fatalf("wrong code: error = %v, want %v", err, ErrInvalidCode)
+	}
+	verified, err := svc.VerifyEmail(ctx, email, code, signUp.Token)
 	if err != nil {
 		t.Fatalf("verify email: %v", err)
+	}
+	if !verified.User.EmailVerified {
+		t.Fatal("verifying with the right code must mark the address verified")
 	}
 	assertTokenScope(t, issuer, verified.Token, ScopeSession, 15*time.Minute)
 	if verified.RefreshToken == "" {

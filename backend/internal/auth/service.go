@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/big"
 	"net/mail"
 	"slices"
 	"strings"
@@ -30,11 +31,18 @@ var (
 	ErrEmailTaken         = errors.New("email already registered")
 	ErrInvalidCredentials = errors.New("invalid email or password")
 	ErrInvalidInput       = errors.New("invalid input")
-	ErrInvalidToken       = errors.New("invalid or expired verification token")
+	ErrInvalidCode        = errors.New("invalid or expired verification code")
 	ErrEmailNotVerified   = errors.New("email address is not verified")
 )
 
-const verificationTTL = 48 * time.Hour
+const (
+	// VerificationCodeTTL is how long an emailed verification code stays valid.
+	VerificationCodeTTL = 3 * time.Minute
+	// maxVerificationAttempts is the number of wrong codes accepted before the
+	// code is discarded and a new one has to be requested.
+	maxVerificationAttempts = 3
+	codeSpace               = 1000000 // 6-digit numeric codes
+)
 
 // Service holds the account business rules: it validates credentials, hashes
 // passwords, mints sessions through the TokenIssuer and drives the email
@@ -46,6 +54,7 @@ type Service struct {
 	notifier       notify.Notifier
 	bcryptCost     int
 	appURL         string
+	codes          *VerificationCache
 	denylist       *Denylist
 	deletions      DeletionPublisher
 	sessionTTL     time.Duration
@@ -64,6 +73,7 @@ type DeletionPublisher interface {
 // sessionTTL is the lifetime of the access token issued at sign-in and is kept
 // short, verifyTokenTTL that of the verify-scoped token issued at sign-up, and
 // refreshTTL that of the refresh token clients trade in for new access tokens.
+// codes holds the emailed verification codes and their failed-attempt counters.
 // denylist is the record open chat sockets re-check, which deletion writes to so
 // a live socket is closed at once rather than at its access token's expiry; it
 // may be nil when no Redis is wired, in which case deletion skips that step.
@@ -74,6 +84,7 @@ func NewService(
 	notifier notify.Notifier,
 	bcryptCost int,
 	appURL string,
+	codes *VerificationCache,
 	denylist *Denylist,
 	deletions DeletionPublisher,
 	sessionTTL time.Duration,
@@ -87,6 +98,7 @@ func NewService(
 		notifier:       notifier,
 		bcryptCost:     bcryptCost,
 		appURL:         appURL,
+		codes:          codes,
 		denylist:       denylist,
 		deletions:      deletions,
 		sessionTTL:     sessionTTL,
@@ -308,19 +320,16 @@ func (s *Service) SignUp(ctx context.Context, in SignUpInput) (Session, error) {
 		return Session{}, fmt.Errorf("hash password: %w", err)
 	}
 
-	token, err := randomToken()
+	code, err := randomCode()
 	if err != nil {
 		return Session{}, err
 	}
-	expires := time.Now().Add(verificationTTL)
 
 	user, err := s.queries.CreateUser(ctx, db.CreateUserParams{
-		Email:                 email,
-		PasswordHash:          string(hash),
-		DisplayName:           displayName,
-		Role:                  role,
-		VerificationToken:     &token,
-		VerificationExpiresAt: &expires,
+		Email:        email,
+		PasswordHash: string(hash),
+		DisplayName:  displayName,
+		Role:         role,
 	})
 	if err != nil {
 		var pgErr *pgconn.PgError
@@ -330,7 +339,16 @@ func (s *Service) SignUp(ctx context.Context, in SignUpInput) (Session, error) {
 		return Session{}, fmt.Errorf("create user: %w", err)
 	}
 
-	s.sendVerificationEmail(ctx, user.Email, token)
+	// The row and the code have to exist together: a registered address with no
+	// code cannot be verified and blocks every retry with ErrEmailTaken, so a
+	// failed store takes the row back out and lets the caller sign up again.
+	if err := s.codes.Store(ctx, user.ID.String(), code); err != nil {
+		if _, delErr := s.queries.DeleteUser(ctx, user.ID); delErr != nil {
+			slog.Error("roll back sign-up after failed code store", "error", delErr, "user_id", user.ID)
+		}
+		return Session{}, fmt.Errorf("store verification code: %w", err)
+	}
+	s.sendVerificationEmail(ctx, user.Email, code)
 
 	jwtToken, expiresAt, err := s.issuer.Issue(user.ID, user.Email, user.Role, ScopeVerify, s.verifyTokenTTL)
 	if err != nil {
@@ -374,8 +392,14 @@ func (s *Service) SignIn(ctx context.Context, email, password string) (Session, 
 	return session, nil
 }
 
-// VerifyEmail consumes a verification token, marks the address confirmed and
-// returns the updated profile.
+// VerifyEmail checks the emailed code for email, marks the address confirmed
+// and returns the updated profile. A wrong code counts as a failed attempt and
+// the code is discarded after maxVerificationAttempts of them; an unknown
+// address, a missing or expired code and a wrong code all return
+// ErrInvalidCode. An already verified address succeeds without a code.
+//
+// The code is only removed once the account row has been updated, so a database
+// failure leaves it in place for the caller to retry with the same code.
 //
 // bearer is the caller's current JWT, or "" when the request is
 // unauthenticated. When it is the verify-scoped token this very account was
@@ -384,14 +408,34 @@ func (s *Service) SignIn(ctx context.Context, email, password string) (Session, 
 // that reach the private API instead of one every private route rejects. A
 // bearer belonging to another account, an expired one, or none at all yields
 // the profile only: verifying never hands a session to whoever merely holds the
-// emailed token.
-func (s *Service) VerifyEmail(ctx context.Context, token, bearer string) (Session, error) {
-	user, err := s.queries.VerifyUserEmail(ctx, &token)
+// emailed code.
+func (s *Service) VerifyEmail(ctx context.Context, email, code, bearer string) (Session, error) {
+	user, err := s.queries.GetUserByEmail(ctx, strings.ToLower(strings.TrimSpace(email)))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return Session{}, ErrInvalidToken
+			return Session{}, ErrInvalidCode
 		}
-		return Session{}, fmt.Errorf("verify email: %w", err)
+		return Session{}, fmt.Errorf("lookup user: %w", err)
+	}
+	if !user.EmailVerified {
+		userID := user.ID.String()
+		stored, _, err := s.codes.Get(ctx, userID)
+		if err != nil {
+			return Session{}, fmt.Errorf("read verification code: %w", err)
+		}
+		if stored == "" || stored != strings.TrimSpace(code) {
+			if err := s.recordFailedAttempt(ctx, userID); err != nil {
+				return Session{}, err
+			}
+			return Session{}, ErrInvalidCode
+		}
+		user, err = s.queries.VerifyUserEmail(ctx, user.ID)
+		if err != nil {
+			return Session{}, fmt.Errorf("verify email: %w", err)
+		}
+		if err := s.codes.Invalidate(ctx, userID); err != nil {
+			slog.Error("discard consumed verification code", "error", err, "user_id", user.ID)
+		}
 	}
 	profile := profileOf(user)
 	if !s.ownsBearer(user.ID, bearer) {
@@ -404,6 +448,22 @@ func (s *Service) VerifyEmail(ctx context.Context, token, bearer string) (Sessio
 	slog.Info("session issued", "user_id", user.ID, "reason", "verify email",
 		"expires_at", session.ExpiresAt)
 	return session, nil
+}
+
+// recordFailedAttempt counts one wrong code for userID and discards the code
+// once maxVerificationAttempts is reached, so the caller has to request a new
+// one. The returned error is a Redis failure, not a verdict on the code.
+func (s *Service) recordFailedAttempt(ctx context.Context, userID string) error {
+	count, err := s.codes.IncrementAttempts(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("increment verification attempts: %w", err)
+	}
+	if count >= maxVerificationAttempts {
+		if err := s.codes.Invalidate(ctx, userID); err != nil {
+			return fmt.Errorf("invalidate verification code after %d attempts: %w", count, err)
+		}
+	}
+	return nil
 }
 
 // ownsBearer reports whether bearer is a currently valid token for userID.
@@ -419,8 +479,9 @@ func (s *Service) ownsBearer(userID uuid.UUID, bearer string) bool {
 	return err == nil && subject == userID
 }
 
-// ResendVerification issues a fresh token and re-sends the email. It succeeds
-// for unknown or already verified addresses so callers cannot enumerate users.
+// ResendVerification issues a fresh code, replacing any outstanding one, and
+// re-sends the email. It succeeds for unknown or already verified addresses so
+// callers cannot enumerate users.
 func (s *Service) ResendVerification(ctx context.Context, email string) error {
 	user, err := s.queries.GetUserByEmail(ctx, strings.ToLower(strings.TrimSpace(email)))
 	if err != nil {
@@ -432,19 +493,14 @@ func (s *Service) ResendVerification(ctx context.Context, email string) error {
 	if user.EmailVerified {
 		return nil
 	}
-	token, err := randomToken()
+	code, err := randomCode()
 	if err != nil {
 		return err
 	}
-	expires := time.Now().Add(verificationTTL)
-	if err := s.queries.SetVerificationToken(ctx, db.SetVerificationTokenParams{
-		ID:                    user.ID,
-		VerificationToken:     &token,
-		VerificationExpiresAt: &expires,
-	}); err != nil {
-		return fmt.Errorf("set verification token: %w", err)
+	if err := s.codes.Store(ctx, user.ID.String(), code); err != nil {
+		return fmt.Errorf("store verification code: %w", err)
 	}
-	s.sendVerificationEmail(ctx, user.Email, token)
+	s.sendVerificationEmail(ctx, user.Email, code)
 	return nil
 }
 
@@ -458,21 +514,30 @@ func (s *Service) Profile(ctx context.Context, principal Principal) (Profile, er
 	return profileOf(user), nil
 }
 
-// sendVerificationEmail builds the deep link into the app and delivers it. A
-// delivery failure is logged, not returned: sign-up itself already succeeded.
-func (s *Service) sendVerificationEmail(ctx context.Context, email, token string) {
-	link := fmt.Sprintf("%s/verify?token=%s", strings.TrimRight(s.appURL, "/"), token)
-	body := fmt.Sprintf("Welcome to Dating Coach!\n\nVerify your email address: %s\n\nThis link expires in 48 hours.", link)
+// sendVerificationEmail delivers the code to the address. A delivery failure is
+// logged, not returned: sign-up itself already succeeded.
+func (s *Service) sendVerificationEmail(ctx context.Context, email, code string) {
+	body := fmt.Sprintf("Welcome to Dating Coach!\n\nYour verification code is: %s\n\nThis code expires in %d minutes and is discarded after %d wrong attempts.",
+		code, int(VerificationCodeTTL.Minutes()), maxVerificationAttempts)
 	if err := s.notifier.Email(ctx, email, "Verify your Dating Coach email", body); err != nil {
 		slog.Error("send verification email", "error", err, "email", email)
 	}
 }
 
-// randomToken returns a 256-bit hex string used as an email verification token.
+// randomToken returns a 256-bit hex string used as a refresh token.
 func randomToken() (string, error) {
 	buf := make([]byte, 32)
 	if _, err := rand.Read(buf); err != nil {
 		return "", fmt.Errorf("generate token: %w", err)
 	}
 	return hex.EncodeToString(buf), nil
+}
+
+// randomCode returns a uniformly random, zero-padded 6-digit verification code.
+func randomCode() (string, error) {
+	n, err := rand.Int(rand.Reader, big.NewInt(codeSpace))
+	if err != nil {
+		return "", fmt.Errorf("generate code: %w", err)
+	}
+	return fmt.Sprintf("%06d", n.Int64()), nil
 }

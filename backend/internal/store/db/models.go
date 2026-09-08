@@ -160,18 +160,16 @@ type TrainingExample struct {
 }
 
 type User struct {
-	ID                    uuid.UUID  `json:"id"`
-	Email                 string     `json:"email"`
-	PasswordHash          string     `json:"password_hash"`
-	DisplayName           string     `json:"display_name"`
-	Role                  string     `json:"role"`
-	EmailVerified         bool       `json:"email_verified"`
-	VerificationToken     *string    `json:"verification_token"`
-	VerificationExpiresAt *time.Time `json:"verification_expires_at"`
-	CreatedAt             time.Time  `json:"created_at"`
-	UpdatedAt             time.Time  `json:"updated_at"`
-	DeletedAt             *time.Time `json:"deleted_at"`
-	DatingStyles          []string   `json:"dating_styles"`
-	PhasesStrong          []string   `json:"phases_strong"`
-	PhasesWorkingOn       []string   `json:"phases_working_on"`
+	ID              uuid.UUID  `json:"id"`
+	Email           string     `json:"email"`
+	PasswordHash    string     `json:"password_hash"`
+	DisplayName     string     `json:"display_name"`
+	Role            string     `json:"role"`
+	EmailVerified   bool       `json:"email_verified"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+	DeletedAt       *time.Time `json:"deleted_at"`
+	DatingStyles    []string   `json:"dating_styles"`
+	PhasesStrong    []string   `json:"phases_strong"`
+	PhasesWorkingOn []string   `json:"phases_working_on"`
 }

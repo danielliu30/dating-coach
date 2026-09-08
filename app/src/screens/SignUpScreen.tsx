@@ -2,11 +2,12 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import React, { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { Button, Field, Screen } from '../components/ui';
+import { AuthLayout } from '../components/AuthLayout';
+import { Button, Field } from '../components/ui';
 import type { Role } from '../api/types';
 import type { AuthStackParams } from '../navigation/types';
 import { useAuth } from '../state/auth';
-import { colors, shared } from '../theme';
+import { colors } from '../theme';
 
 export default function SignUpScreen({
   navigation,
@@ -33,12 +34,12 @@ export default function SignUpScreen({
   };
 
   return (
-    <Screen>
-      <View style={{ gap: 4, paddingTop: 24, paddingBottom: 8 }}>
-        <Text style={shared.title}>Create your account</Text>
-        <Text style={shared.muted}>We email a verification code right after sign-up.</Text>
+    <AuthLayout>
+      <View style={{ gap: 4 }}>
+        <Text style={styles.title}>Create your account</Text>
+        <Text style={styles.subtitle}>We email a verification code right after sign-up.</Text>
       </View>
-      <View style={shared.card}>
+      <View style={styles.card}>
         <Field label="Name" value={displayName} onChangeText={setDisplayName} placeholder="Alex" />
         <Field
           label="Email"
@@ -55,8 +56,8 @@ export default function SignUpScreen({
           secureTextEntry
           placeholder="at least 8 characters"
         />
-        <Text style={shared.muted}>I am signing up as</Text>
-        <View style={shared.row}>
+        <Text style={styles.subtitle}>I am signing up as</Text>
+        <View style={styles.row}>
           {(['user', 'coach'] as const).map((option) => (
             <Pressable
               key={option}
@@ -71,15 +72,30 @@ export default function SignUpScreen({
             </Pressable>
           ))}
         </View>
-        {error ? <Text style={shared.error}>{error}</Text> : null}
+        {error ? <Text style={styles.error}>{error}</Text> : null}
         <Button label="Sign up" onPress={submit} loading={busy} />
       </View>
-      <Button label="I already have an account" variant="secondary" onPress={() => navigation.navigate('SignIn')} />
-    </Screen>
+      <Button
+        label="I already have an account"
+        variant="secondary"
+        onPress={() => navigation.navigate('SignIn')}
+      />
+    </AuthLayout>
   );
 }
 
 const styles = StyleSheet.create({
+  title: { fontSize: 28, fontWeight: '700', color: colors.text },
+  subtitle: { fontSize: 14, color: colors.muted, lineHeight: 20 },
+  card: {
+    backgroundColor: colors.surface,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: 16,
+    gap: 10,
+  },
+  row: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   option: {
     flex: 1,
     borderWidth: 1,
@@ -92,4 +108,5 @@ const styles = StyleSheet.create({
   optionActive: { borderColor: colors.primary, backgroundColor: '#fdf0f4' },
   optionLabel: { color: colors.muted, fontWeight: '600' },
   optionActiveLabel: { color: colors.primary, fontWeight: '700' },
+  error: { color: colors.flat, fontSize: 14 },
 });
