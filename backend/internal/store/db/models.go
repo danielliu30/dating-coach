@@ -144,6 +144,7 @@ type RefreshToken struct {
 	IssuedAt  time.Time  `json:"issued_at"`
 	ExpiresAt time.Time  `json:"expires_at"`
 	UsedAt    *time.Time `json:"used_at"`
+	FamilyID  uuid.UUID  `json:"family_id"`
 }
 
 type TrainingExample struct {

@@ -383,7 +383,7 @@ func (s *Service) SignIn(ctx context.Context, email, password string) (Session, 
 		return Session{}, ErrEmailNotVerified
 	}
 
-	session, err := s.openSession(ctx, s.queries, user)
+	session, err := s.openSession(ctx, s.queries, user, uuid.Nil)
 	if err != nil {
 		return Session{}, err
 	}
@@ -441,7 +441,7 @@ func (s *Service) VerifyEmail(ctx context.Context, email, code, bearer string) (
 	if !s.ownsBearer(user.ID, bearer) {
 		return Session{User: profile}, nil
 	}
-	session, err := s.openSession(ctx, s.queries, user)
+	session, err := s.openSession(ctx, s.queries, user, uuid.Nil)
 	if err != nil {
 		return Session{}, err
 	}

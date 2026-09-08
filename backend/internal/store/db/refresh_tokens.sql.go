@@ -13,19 +13,25 @@ import (
 )
 
 const createRefreshToken = `-- name: CreateRefreshToken :one
-INSERT INTO refresh_tokens (user_id, token_hash, expires_at)
-VALUES ($1, $2, $3)
-RETURNING id, user_id, token_hash, issued_at, expires_at, used_at
+INSERT INTO refresh_tokens (user_id, token_hash, expires_at, family_id)
+VALUES ($1, $2, $3, $4)
+RETURNING id, user_id, token_hash, issued_at, expires_at, used_at, family_id
 `
 
 type CreateRefreshTokenParams struct {
 	UserID    uuid.UUID `json:"user_id"`
 	TokenHash string    `json:"token_hash"`
 	ExpiresAt time.Time `json:"expires_at"`
+	FamilyID  uuid.UUID `json:"family_id"`
 }
 
 func (q *Queries) CreateRefreshToken(ctx context.Context, arg CreateRefreshTokenParams) (RefreshToken, error) {
-	row := q.db.QueryRow(ctx, createRefreshToken, arg.UserID, arg.TokenHash, arg.ExpiresAt)
+	row := q.db.QueryRow(ctx, createRefreshToken,
+		arg.UserID,
+		arg.TokenHash,
+		arg.ExpiresAt,
+		arg.FamilyID,
+	)
 	var i RefreshToken
 	err := row.Scan(
 		&i.ID,
@@ -34,6 +40,7 @@ func (q *Queries) CreateRefreshToken(ctx context.Context, arg CreateRefreshToken
 		&i.IssuedAt,
 		&i.ExpiresAt,
 		&i.UsedAt,
+		&i.FamilyID,
 	)
 	return i, err
 }
@@ -51,7 +58,7 @@ func (q *Queries) DeleteExpiredRefreshTokens(ctx context.Context) (int64, error)
 }
 
 const getRefreshToken = `-- name: GetRefreshToken :one
-SELECT id, user_id, token_hash, issued_at, expires_at, used_at FROM refresh_tokens WHERE token_hash = $1
+SELECT id, user_id, token_hash, issued_at, expires_at, used_at, family_id FROM refresh_tokens WHERE token_hash = $1
 `
 
 func (q *Queries) GetRefreshToken(ctx context.Context, tokenHash string) (RefreshToken, error) {
@@ -64,6 +71,7 @@ func (q *Queries) GetRefreshToken(ctx context.Context, tokenHash string) (Refres
 		&i.IssuedAt,
 		&i.ExpiresAt,
 		&i.UsedAt,
+		&i.FamilyID,
 	)
 	return i, err
 }
