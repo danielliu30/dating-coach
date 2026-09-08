@@ -34,12 +34,19 @@ type TokenProvider = () => string | null;
  */
 export type RenewalResult = 'renewed' | 'rejected' | 'unavailable';
 
+/**
+ * Why a session ended without the user asking. `revoked` is claimed only where
+ * the API said so; a refused renewal on its own cannot tell a token that aged
+ * out from one that was withdrawn, and is reported as `expired`.
+ */
+export type SessionEndReason = 'expired' | 'revoked';
+
 type SessionRenewer = () => Promise<RenewalResult>;
 
 /** Typed client for the Go API. One instance per app, token injected lazily. */
 export class ApiClient {
   private token: TokenProvider = () => null;
-  private onUnauthorized: () => void = () => undefined;
+  private onUnauthorized: (reason: SessionEndReason) => void = () => undefined;
   private renew: SessionRenewer = async () => 'rejected';
   private renewal: Promise<RenewalResult> | null = null;
   private principal: () => number = () => 0;
@@ -68,8 +75,11 @@ export class ApiClient {
     this.renew = renew;
   }
 
-  /** Called once per rejected authenticated request so the app can sign out. */
-  onSessionRejected(handler: () => void): void {
+  /**
+   * Called once per rejected authenticated request so the app can sign out.
+   * The handler is told why the session ended so a screen can say so.
+   */
+  onSessionRejected(handler: (reason: SessionEndReason) => void): void {
     this.onUnauthorized = handler;
   }
 
@@ -79,13 +89,17 @@ export class ApiClient {
    * unrecoverable, so the app is signed out before the caller sees the answer;
    * an `unavailable` one leaves the session in place to be retried. Callers
    * outside the HTTP path use this too: the chat socket has no 401 to react to.
+   *
+   * reason is what the app is told when the renewal is refused. Callers that
+   * already know the session was withdrawn pass `revoked`; the default suits
+   * everyone else, for whom a refusal is indistinguishable from an expiry.
    */
-  async renewSession(): Promise<RenewalResult> {
+  async renewSession(reason: SessionEndReason = 'expired'): Promise<RenewalResult> {
     this.renewal ??= this.renew().finally(() => {
       this.renewal = null;
     });
     const result = await this.renewal;
-    if (result === 'rejected') this.onUnauthorized();
+    if (result === 'rejected') this.onUnauthorized(reason);
     return result;
   }
 
