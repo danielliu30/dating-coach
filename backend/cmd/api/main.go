@@ -74,9 +74,10 @@ func run() error {
 	notifier := notify.New(cfg)
 	issuer := auth.NewTokenIssuer(cfg.JWTSecret)
 	limiter := auth.NewRateLimiter(rdb, cfg.AuthRateLimit, cfg.AuthRateWindow)
-	// Authenticated requests are answered from the token's signature alone, so
-	// the denylist is only read by open chat sockets, which outlive the token
-	// that opened them.
+	// Nothing reads the denylist any more: requests are answered from the
+	// token's signature alone, and open sockets re-read the account row. It is
+	// kept for the revocation it announces, which closes those sockets at once
+	// rather than at their next re-check.
 	denylist := auth.NewDenylist(rdb, cfg.JWTTTL)
 	verificationCodes := auth.NewVerificationCache(rdb, auth.VerificationCodeTTL)
 
@@ -93,7 +94,7 @@ func run() error {
 	// Sockets authenticated before a deletion would otherwise keep running
 	// until their next scheduled re-check; this closes them as it happens.
 	go auth.WatchRevocations(ctx, rdb, hub.EndSessions)
-	chatHandler := chat.NewHandler(chat.NewService(pg.Queries, hub), hub, denylist, cfg.CORSOrigins)
+	chatHandler := chat.NewHandler(chat.NewService(pg.Queries, hub), hub, pg.Queries, cfg.CORSOrigins)
 	analysisHandler := analysis.NewHandler(analysis.NewService(pg.Pool, pg.Queries, queue))
 
 	router := newRouter(cfg, auth.Middleware(issuer), handlers{
