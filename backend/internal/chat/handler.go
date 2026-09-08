@@ -19,10 +19,10 @@ import (
 )
 
 const (
-	presenceRefresh   = 20 * time.Second
-	revocationRefresh = 15 * time.Second
-	writeTimeout      = 10 * time.Second
-	historyOnJoin     = 50
+	presenceRefresh = 20 * time.Second
+	accountRefresh  = 15 * time.Second
+	writeTimeout    = 10 * time.Second
+	historyOnJoin   = 50
 )
 
 // Handler is the HTTP layer for /api/v1/chat: the REST endpoints plus the
@@ -30,17 +30,24 @@ const (
 type Handler struct {
 	svc            *Service
 	hub            *Hub
-	revocations    auth.Revocations
+	accounts       AccountStatus
 	originPatterns []string
 }
 
+// AccountStatus answers whether an account may still act, from wherever that is
+// recorded durably. Sockets depend on the interface rather than on *db.Queries
+// so they can be exercised without a database.
+type AccountStatus interface {
+	// UserActive reports whether the account exists and is not marked deleted.
+	UserActive(ctx context.Context, id uuid.UUID) (bool, error)
+}
+
 // NewHandler builds the chat handler. originPatterns are the origins allowed to
-// open a socket, and mirror the API's CORS configuration. revocations is the
-// same denylist the REST middleware consults, re-checked for the lifetime of a
-// socket because a connection authenticated once outlives the token that opened
-// it.
-func NewHandler(svc *Service, hub *Hub, revocations auth.Revocations, originPatterns []string) *Handler {
-	return &Handler{svc: svc, hub: hub, revocations: revocations, originPatterns: originPatterns}
+// open a socket, and mirror the API's CORS configuration. accounts is re-read
+// for the lifetime of a socket, because a connection authenticated once
+// outlives the token that opened it.
+func NewHandler(svc *Service, hub *Hub, accounts AccountStatus, originPatterns []string) *Handler {
+	return &Handler{svc: svc, hub: hub, accounts: accounts, originPatterns: originPatterns}
 }
 
 // Routes mounts the chat endpoints. All of them require authentication; the
@@ -255,8 +262,8 @@ func (h *Handler) websocket(w http.ResponseWriter, r *http.Request) {
 	ticker := time.NewTicker(presenceRefresh)
 	defer ticker.Stop()
 
-	revocationTicker := time.NewTicker(revocationRefresh)
-	defer revocationTicker.Stop()
+	accountTicker := time.NewTicker(accountRefresh)
+	defer accountTicker.Stop()
 
 	// Nothing announces an expiry, so the socket holds its own deadline: it was
 	// authenticated once, at the upgrade, and would otherwise keep acting on a
@@ -274,7 +281,7 @@ func (h *Handler) websocket(w http.ResponseWriter, r *http.Request) {
 		case <-expiry.C:
 			closeSocket(conn, socketExpired, principal.UserID, connID, "expiry")
 			return
-		case <-revocationTicker.C:
+		case <-accountTicker.C:
 			if verdict := h.sessionStatus(ctx, principal.UserID); verdict != socketActive {
 				closeSocket(conn, verdict, principal.UserID, connID, "heartbeat")
 				return
@@ -325,17 +332,21 @@ func expiryTimer(expiresAt time.Time) *time.Timer {
 // expire in minutes; a socket outlives its own token, so without this a
 // connection opened before an account was deleted would keep working.
 //
-// It fails closed, so a denylist it cannot read ends the connection rather than
-// serving an account whose status is unknown. That case is reported as
-// socketUnverifiable rather than socketRevoked, so a Redis outage does not tell
-// clients their session is gone for good.
+// The account row is the authority: deletion marks it before anything is
+// announced, so a socket's fate does not depend on a cache that can be lost or
+// an announcement that can be missed.
+//
+// It fails closed, so a status it cannot read ends the connection rather than
+// serving an account whose standing is unknown. That case is reported as
+// socketUnverifiable rather than socketRevoked, so a database blip does not
+// tell clients their session is gone for good.
 func (h *Handler) sessionStatus(ctx context.Context, userID uuid.UUID) socketVerdict {
-	revoked, err := h.revocations.Revoked(ctx, userID)
+	active, err := h.accounts.UserActive(ctx, userID)
 	switch {
 	case err != nil:
-		slog.Error("check socket revocation", "error", err, "user_id", userID)
+		slog.Error("check socket account status", "error", err, "user_id", userID)
 		return socketUnverifiable
-	case revoked:
+	case !active:
 		return socketRevoked
 	}
 	return socketActive

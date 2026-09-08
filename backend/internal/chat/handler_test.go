@@ -5,39 +5,42 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/coder/websocket"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/danielliu30/dating-coach/backend/internal/auth"
+	"github.com/danielliu30/dating-coach/backend/internal/store/db"
 )
 
-// stubRevocations answers Revoked from fixed values, standing in for Redis.
-type stubRevocations struct {
-	revoked bool
-	err     error
+// stubAccounts answers UserActive from fixed values, standing in for Postgres.
+type stubAccounts struct {
+	active bool
+	err    error
 }
 
-// Revoked satisfies auth.Revocations.
-func (s stubRevocations) Revoked(context.Context, uuid.UUID) (bool, error) {
-	return s.revoked, s.err
+// UserActive satisfies AccountStatus.
+func (s stubAccounts) UserActive(context.Context, uuid.UUID) (bool, error) {
+	return s.active, s.err
 }
 
 func TestSessionStatus(t *testing.T) {
 	tests := []struct {
-		name        string
-		revocations stubRevocations
-		want        socketVerdict
+		name     string
+		accounts stubAccounts
+		want     socketVerdict
 	}{
-		{"active account keeps its socket", stubRevocations{}, socketActive},
-		{"revoked account loses its socket", stubRevocations{revoked: true}, socketRevoked},
-		{"unreachable redis fails closed but stays retryable", stubRevocations{err: errors.New("dial redis: connection refused")}, socketUnverifiable},
+		{"active account keeps its socket", stubAccounts{active: true}, socketActive},
+		{"deleted account loses its socket", stubAccounts{}, socketRevoked},
+		{"unreachable database fails closed but stays retryable", stubAccounts{err: errors.New("dial postgres: connection refused")}, socketUnverifiable},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			h := NewHandler(nil, nil, tc.revocations, nil)
+			h := NewHandler(nil, nil, tc.accounts, nil)
 			if got := h.sessionStatus(context.Background(), uuid.New()); got != tc.want {
 				t.Fatalf("sessionStatus = %d, want %d", got, tc.want)
 			}
@@ -51,18 +54,18 @@ func TestSessionStatus(t *testing.T) {
 // and that the client can tell a revoked session from an unverifiable one.
 func TestHandleIncomingClosesInactiveSocket(t *testing.T) {
 	tests := []struct {
-		name        string
-		revocations stubRevocations
-		expiresAt   time.Time
-		want        websocket.StatusCode
+		name      string
+		accounts  stubAccounts
+		expiresAt time.Time
+		want      websocket.StatusCode
 	}{
-		{"revoked account is told to stop reconnecting", stubRevocations{revoked: true}, time.Time{}, websocket.StatusPolicyViolation},
-		{"unverifiable account may reconnect", stubRevocations{err: errors.New("dial redis: connection refused")}, time.Time{}, websocket.StatusTryAgainLater},
-		{"expired token stops acting", stubRevocations{}, time.Now().Add(-time.Minute), websocket.StatusPolicyViolation},
+		{"deleted account is told to stop reconnecting", stubAccounts{}, time.Time{}, websocket.StatusPolicyViolation},
+		{"unverifiable account may reconnect", stubAccounts{err: errors.New("dial postgres: connection refused")}, time.Time{}, websocket.StatusTryAgainLater},
+		{"expired token stops acting", stubAccounts{active: true}, time.Now().Add(-time.Minute), websocket.StatusPolicyViolation},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assertSocketClosed(t, tc.revocations, tc.expiresAt, tc.want)
+			assertSocketClosed(t, tc.accounts, tc.expiresAt, tc.want)
 		})
 	}
 }
@@ -87,13 +90,13 @@ func TestExpiryTimer(t *testing.T) {
 	}
 }
 
-// assertSocketClosed serves one socket with a handler backed by revocations and
-// a caller whose token expires at expiresAt, feeds it a message event and fails
+// assertSocketClosed serves one socket with a handler backed by accounts and a
+// caller whose token expires at expiresAt, feeds it a message event and fails
 // the test unless the socket was closed with want and the event went
 // undispatched.
-func assertSocketClosed(t *testing.T, revocations stubRevocations, expiresAt time.Time, want websocket.StatusCode) {
+func assertSocketClosed(t *testing.T, accounts stubAccounts, expiresAt time.Time, want websocket.StatusCode) {
 	t.Helper()
-	h := NewHandler(nil, nil, revocations, nil)
+	h := NewHandler(nil, nil, accounts, nil)
 
 	dispatched := make(chan bool, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -123,5 +126,46 @@ func assertSocketClosed(t *testing.T, revocations stubRevocations, expiresAt tim
 	}
 	if <-dispatched {
 		t.Fatal("handleIncoming kept the socket open for an inactive account")
+	}
+}
+
+// TestSessionStatusReadsTheAccountRow runs the check against Postgres, which is
+// the point of it: deletion marks the row before anything is announced, so a
+// socket's verdict follows the mark with no cache in between.
+func TestSessionStatusReadsTheAccountRow(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect postgres: %v", err)
+	}
+	t.Cleanup(pool.Close)
+
+	var userID uuid.UUID
+	if err := pool.QueryRow(
+		ctx,
+		`INSERT INTO users (email, password_hash, display_name) VALUES ($1, 'hash', 'Live') RETURNING id`,
+		uuid.NewString()+"@example.test",
+	).Scan(&userID); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), "DELETE FROM users WHERE id = $1", userID)
+	})
+
+	h := NewHandler(nil, nil, db.New(pool), nil)
+	if got := h.sessionStatus(ctx, userID); got != socketActive {
+		t.Fatalf("sessionStatus of a live account = %d, want %d", got, socketActive)
+	}
+
+	if _, err := pool.Exec(ctx, "UPDATE users SET deleted_at = now() WHERE id = $1", userID); err != nil {
+		t.Fatalf("mark user deleted: %v", err)
+	}
+	if got := h.sessionStatus(ctx, userID); got != socketRevoked {
+		t.Fatalf("sessionStatus of a deleted account = %d, want %d", got, socketRevoked)
 	}
 }

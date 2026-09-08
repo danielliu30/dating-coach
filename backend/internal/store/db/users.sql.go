@@ -151,6 +151,17 @@ func (q *Queries) UpdateUserDatingProfile(ctx context.Context, arg UpdateUserDat
 	return i, err
 }
 
+const userActive = `-- name: UserActive :one
+SELECT EXISTS (SELECT 1 FROM users WHERE id = $1 AND deleted_at IS NULL)
+`
+
+func (q *Queries) UserActive(ctx context.Context, id uuid.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, userActive, id)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const userRowExists = `-- name: UserRowExists :one
 SELECT EXISTS (SELECT 1 FROM users WHERE id = $1)
 `
