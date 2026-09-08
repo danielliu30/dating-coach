@@ -76,6 +76,18 @@ func (q *Queries) GetRefreshToken(ctx context.Context, tokenHash string) (Refres
 	return i, err
 }
 
+const revokeRefreshTokenFamily = `-- name: RevokeRefreshTokenFamily :execrows
+DELETE FROM refresh_tokens WHERE family_id = $1
+`
+
+func (q *Queries) RevokeRefreshTokenFamily(ctx context.Context, familyID uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, revokeRefreshTokenFamily, familyID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const revokeUserRefreshTokens = `-- name: RevokeUserRefreshTokens :execrows
 DELETE FROM refresh_tokens WHERE user_id = $1
 `

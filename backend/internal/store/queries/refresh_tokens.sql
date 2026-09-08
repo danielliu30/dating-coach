@@ -13,6 +13,9 @@ WHERE id = $1
   AND used_at IS NULL
   AND expires_at > now();
 
+-- name: RevokeRefreshTokenFamily :execrows
+DELETE FROM refresh_tokens WHERE family_id = $1;
+
 -- name: RevokeUserRefreshTokens :execrows
 DELETE FROM refresh_tokens WHERE user_id = $1;
 
