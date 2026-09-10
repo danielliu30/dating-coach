@@ -1,5 +1,7 @@
 import asyncio
+import json
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -207,3 +209,25 @@ def test_llm_prompt_reviews_only_self_messages_and_never_drafts() -> None:
 
     assert 'Evaluate ONLY messages from "self"' in SYSTEM_PROMPT
     assert "NEVER suggest, draft or rewrite what the customer should say" in SYSTEM_PROMPT
+
+
+def test_llm_parse_rejects_drafted_replies() -> None:
+    """A completion that drafts what the customer should say is a failed completion (triggers the fallback)."""
+    from app.config import Settings
+    from app.scoring.llm import LLMScorer
+
+    settings = Settings(
+        backend="llm", llm_provider="openai", llm_api_key="k", llm_model="m", llm_base_url="http://x",
+        llm_timeout=1.0, model_dir="", segment_size=2,
+    )
+    scorer = LLMScorer(settings)
+    boundaries = [(0, 1)]
+    good = {
+        "segments": [{"start_position": 0, "end_position": 1, "engagement_score": 0.7, "comment": "Message 1 drew a detailed reply."}],
+        "overall": {"engagement_score": 0.7, "summary": "Landing well.", "strengths": ["Message 1 landed."], "improvements": []},
+    }
+    assert scorer._parse(json.dumps(good), boundaries).overall.strengths == ["Message 1 landed."]
+
+    bad = dict(good, overall=dict(good["overall"], improvements=["Try asking: What are you passionate about?"]))
+    with pytest.raises(ValueError, match="drafted a reply"):
+        scorer._parse(json.dumps(bad), boundaries)

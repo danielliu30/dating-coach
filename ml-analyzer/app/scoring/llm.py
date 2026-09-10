@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any, Dict, List, Sequence
 
 import httpx
@@ -14,6 +15,14 @@ from .base import Scorer, align_segments, chunk, clamp, transcript
 from .heuristic import HeuristicScorer, review_self_messages
 
 logger = logging.getLogger(__name__)
+
+# Phrases that mean the model drafted a reply for the customer instead of hinting.
+DRAFTING = re.compile(
+    r"\b(try (asking|saying|something like)|you could (say|ask|write|reply|respond)|"
+    r"(you )?should have (said|asked|written)|say something like|for example[,:]? ask|"
+    r"ask (her|him|them) (something like|about)|next time,? (say|ask)|instead,? (say|ask))\b",
+    re.IGNORECASE,
+)
 
 SYSTEM_PROMPT = """You are a dating-conversation coach reviewing ONLY the messages \
 written by the customer you are coaching. You judge how each of their messages \
@@ -46,7 +55,9 @@ detailed replies; 0.0 = they went unanswered or were met with one-word replies.
 - "improvements" point out potential flaws, phrased as hints to reflect on: a \
 message that got no reply, a message that only got a short reply, a message \
 that closed the topic. Name the message by its 1-based number (position + 1) \
-and quote it briefly. Explain what may have made it hard to answer.
+and quote it briefly. Explain what may have made it hard to answer. If the \
+customer's final message has no reply recorded, the match may simply not have \
+answered yet: mention it neutrally, do not count it as a flaw.
 - "strengths" acknowledge the customer's messages that produced a good or \
 successful response, again naming and quoting the message.
 - NEVER suggest, draft or rewrite what the customer should say or should have \
@@ -153,6 +164,9 @@ class LLMScorer(Scorer):
         segments: List[Segment] = [by_boundary[b] for b in boundaries]
 
         overall = payload.get("overall", {})
+        prose = [s.comment for s in segments] + [str(overall.get("summary", ""))]
+        prose += [str(x) for x in overall.get("strengths", [])] + [str(x) for x in overall.get("improvements", [])]
+        _reject_drafting(prose)
         scores = [s.engagement_score for s in segments]
         return AnalyzeResponse(
             model_version=self.version,
@@ -168,18 +182,31 @@ class LLMScorer(Scorer):
         )
 
 
+def _reject_drafting(texts: Sequence[str]) -> None:
+    """Raise ``ValueError`` if any feedback text drafts a reply for the customer.
+
+    A prompt cannot enforce the no-drafting rule, so completions that still
+    contain "try asking ..."-style suggestions are treated as failed and the
+    caller falls back to the heuristic scorer, which never drafts.
+    """
+    for text in texts:
+        if DRAFTING.search(text):
+            raise ValueError(f"llm drafted a reply for the customer: {text[:80]!r}")
+
+
 def self_message_digest(messages: Sequence[Message]) -> str:
     """List the customer's messages, each with the outcome the match's next message shows.
 
-    One line per ``self`` message: 1-based number, body, then either ``no reply``
-    or the reply's outcome bucket and text. Match messages never get their own
+    One line per ``self`` message: 1-based number, body, then either ``no reply
+    recorded`` (the transcript may simply end there) or the reply's outcome
+    bucket and text. Consecutive match bubbles are already merged into one reply. Match messages never get their own
     line, which is how the prompt keeps the model from reviewing them.
     """
     lines = []
     for review in review_self_messages(messages):
         label = f"#{review.message.position + 1} self: {review.message.body}"
         if review.reply is None:
-            lines.append(f"{label}\n    -> no reply")
+            lines.append(f"{label}\n    -> no reply recorded in this transcript")
         else:
             lines.append(f"{label}\n    -> {review.outcome.replace('_', ' ')}: {review.reply.body}")
     return "\n".join(lines) or "(none of the messages are from the customer)"
