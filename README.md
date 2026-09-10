@@ -6,12 +6,12 @@ A dating-coach platform in three independent components:
 | -------------- | --------------------------------------- | -------------------------------------------------------------------- |
 | `backend/`     | Go 1.25, chi, pgx + sqlc, Redis, RabbitMQ | REST + WebSocket API, auth, coaching, live chat, analysis worker      |
 | `app/`         | Expo SDK 57, TypeScript, react-native-web | One codebase for iOS, Android and web                                |
-| `ml-analyzer/` | Python 3.12, FastAPI                      | `/analyze` engagement scoring (LLM prompt v1, trained model later)   |
+| `ml-analyzer/` | Python 3.12, FastAPI                      | Two tracks: `/analyze` critiques the customer's messages, `/analyze/images` checks profile photos; both tailored to the customer's stated preferences |
 
 Two product surfaces:
 
 1. **Human coaching** — clients browse coaches, book a session against real availability, or open a live chat. Coaches (users with role `coach`) get a dashboard of upcoming sessions and active chats.
-2. **Conversation analysis** — a client pastes a dating-app conversation and gets per-stretch engagement scores plus overall feedback, produced by the ML service.
+2. **Conversation and photo analysis** — a client pastes a dating-app conversation and gets per-stretch scores plus hints on how their own messages landed, or submits profile photos and gets a clarity / focal-point verdict per photo. Both are produced by the ML service and tailored to the client's stated dating preferences.
 
 ## Architecture
 
@@ -21,9 +21,10 @@ Expo app (iOS / Android / web)
    ▼
 Go API ──── PostgreSQL (users, coaches, sessions, chat, conversations, analysis_results)
    ├─────── Redis        (auth rate limits, chat pub/sub, presence, typing)
-   └─────── RabbitMQ ──► Go worker ──HTTP──► ml-analyzer /analyze
-                              │
-                              └─ writes analysis_results + "analysis ready" notification
+   ├─────── RabbitMQ ──► Go worker ──HTTP──► ml-analyzer /analyze         (messages, async)
+   │                            │
+   │                            └─ writes analysis_results + "analysis ready" notification
+   └───────────────────────────HTTP──► ml-analyzer /analyze/images  (photos, sync, nothing stored)
 ```
 
 - Analysis is asynchronous: `POST /api/v1/analysis/conversations` stores the transcript, creates a `pending` result and publishes a job. The worker calls the ML service, stores per-segment scores as JSONB and notifies the user. The app polls the result endpoint.
@@ -110,7 +111,14 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
 ```
 
-Without `LLM_API_KEY` the service falls back to a dependency-free heuristic scorer, so the whole stack works offline. See <ml-analyzer/README.md> for the training path, the labelled-data schema and how to switch `/analyze` to a fine-tuned model behind the same contract.
+Without `LLM_API_KEY` both tracks fall back to dependency-free heuristic scorers, so the whole stack works offline. See <ml-analyzer/README.md> for the two contracts, the training path, the labelled-data schema and how to switch `/analyze` to a fine-tuned model behind the same contract.
+
+### The two analysis tracks
+
+- **Messages** (`POST /analysis/conversations`, async via the worker). Only the customer's own messages are evaluated; the match's replies are evidence of how each one landed (no reply, short reply, engaged reply). The analyzer hints at what to reconsider and never drafts a message — the customer always writes their own.
+- **Photos** (`POST /analysis/images`, synchronous). 1–10 photos as URLs or raw base64; each is scored for clarity and for whether the customer is the clear focal point, with tailored feedback. Photos are not stored.
+
+Both are tailored to `users.dating_preferences`: free text the customer edits on the Account screen (`PATCH /auth/me`), which the backend attaches to every ML request — the worker reads it for messages, the API reads it for photos. The app never sends preferences with the analysis request itself, so they cannot go stale.
 
 **Expo app checks:**
 
@@ -124,11 +132,11 @@ npx expo export --platform web    # production web bundle
 
 | Area     | Endpoints                                                                                                                                                              |
 | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Auth     | `POST /api/v1/auth/signup` · `signin` · `refresh` · `verify` · `resend-verification` · `GET /me` · `DELETE /me` (rate limited per IP)                                  |
+| Auth     | `POST /api/v1/auth/signup` · `signin` · `refresh` · `verify` · `resend-verification` · `GET /me` · `PATCH /me` (`dating_preferences`) · `DELETE /me` (rate limited per IP) |
 | Coaching | `GET /coaching/coaches` · `/coaches/{id}` · `/coaches/{id}/availability` · `/coaches/{id}/slots` · `POST /coaching/sessions` · `.../cancel` · `.../reschedule`           |
 | Coach    | `PUT /coach/profile` · `PUT /coach/availability` · `GET /coach/sessions` · `POST /coach/sessions/{id}/status` · `.../notes` · `GET /chat/coach/threads`                  |
 | Chat     | `POST /chat/threads` · `GET /chat/threads` · `GET/POST /chat/threads/{id}/messages` · `POST /chat/threads/{id}/close` · `GET /chat/threads/{id}/ws`                      |
-| Analysis | `POST /analysis/conversations` · `GET /analysis/conversations` · `GET /analysis/conversations/{id}/result` · `POST /analysis/conversations/{id}/reanalyze` · `POST /analysis/conversations/{id}/label` · `GET /analysis/results/{id}` |
+| Analysis | `POST /analysis/conversations` · `GET /analysis/conversations` · `GET /analysis/conversations/{id}/result` · `POST /analysis/conversations/{id}/reanalyze` · `POST /analysis/conversations/{id}/label` · `GET /analysis/results/{id}` · `POST /analysis/images` |
 
 All endpoints except the auth ones require `Authorization: Bearer <jwt>`; the WebSocket accepts `?token=<jwt>`.
 
