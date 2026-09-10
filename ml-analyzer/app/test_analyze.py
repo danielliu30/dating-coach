@@ -127,3 +127,20 @@ def test_analyze_request_preferences_are_optional() -> None:
     tailored = AnalyzeRequest(**base, preferences="Looking for something long-term, loves hiking")
     assert tailored.preferences == "Looking for something long-term, loves hiking"
     assert client.post("/analyze", json=tailored.model_dump()).status_code == 200
+
+
+def test_heuristic_wording_follows_outcomes_not_scores() -> None:
+    """A plain reply lifted above 0.66 by wording bonuses is still not described as detailed/landing."""
+    request = AnalyzeRequest(
+        conversation_id="conv-7",
+        messages=[
+            Message(position=0, sender="self", body="What are your favorite ways to spend a free weekend?"),
+            Message(position=1, sender="match", body="I usually go hiking with friends."),
+        ],
+    )
+    response = asyncio.run(HeuristicScorer(segment_size=2).analyze(request))
+
+    assert response.segments[0].engagement_score >= 0.66
+    assert response.segments[0].comment == "Your messages here got replies, but none of them detailed ones."
+    assert response.overall.summary.startswith("Mixed results: 0 of your 1 messages drew a detailed reply")
+    assert response.overall.strengths == []

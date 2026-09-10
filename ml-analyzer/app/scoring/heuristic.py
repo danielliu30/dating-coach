@@ -136,7 +136,7 @@ class HeuristicScorer(Scorer):
                     end_position=end,
                     engagement_score=score,
                     label=label_for(score),
-                    comment=_comment(score, window_reviews),
+                    comment=_comment(window_reviews),
                 )
             )
 
@@ -147,7 +147,7 @@ class HeuristicScorer(Scorer):
             segments=align_segments(segments),
             overall=Overall(
                 engagement_score=overall_score,
-                summary=_summary(overall_score, reviews, request.preferences),
+                summary=_summary(reviews, request.preferences),
                 strengths=_strengths(reviews),
                 improvements=_improvements(reviews),
             ),
@@ -188,35 +188,45 @@ def _improvements(reviews: Sequence[SelfMessageReview]) -> List[str]:
     return hints[:5]
 
 
-def _comment(score: float, reviews: Sequence[SelfMessageReview]) -> str:
+def _outcome_counts(reviews: Sequence[SelfMessageReview]) -> Dict[Outcome, int]:
+    return {outcome: sum(1 for r in reviews if r.outcome == outcome) for outcome in OUTCOME_SCORE}
+
+
+def _comment(reviews: Sequence[SelfMessageReview]) -> str:
+    """Describe a window from the recorded reply outcomes, so wording never contradicts the counts."""
     if not reviews:
         return "No messages from you in this stretch; the match was carrying it."
     unanswered = [r for r in reviews if r.outcome == "no_reply"]
     short = [r for r in reviews if r.outcome == "short_reply"]
-    if score >= 0.66:
+    counts = _outcome_counts(reviews)
+    if counts["good_reply"] == len(reviews):
         return "Your messages here drew substantive replies; this stretch worked."
     if unanswered:
         return f"{_label(unanswered[0].message)} went unanswered here."
     if short:
         return f"{_label(short[0].message)} only got a short reply ({_excerpt(short[0].reply)})."  # type: ignore[arg-type]
-    return "Your messages kept the thread alive, but the replies stayed brief."
+    if counts["good_reply"]:
+        return f"{counts['good_reply']} of your {len(reviews)} messages here drew a detailed reply; the rest got plain answers."
+    return "Your messages here got replies, but none of them detailed ones."
 
 
-def _summary(score: float, reviews: Sequence[SelfMessageReview], preferences: Optional[str]) -> str:
+def _summary(reviews: Sequence[SelfMessageReview], preferences: Optional[str]) -> str:
+    """Overall verdict built from outcome counts; the preferences nudge is appended when given."""
     if not reviews:
         return "None of these messages are yours, so there is nothing to review yet."
-    counts = {outcome: sum(1 for r in reviews if r.outcome == outcome) for outcome in OUTCOME_SCORE}
-    if score >= 0.66:
+    counts = _outcome_counts(reviews)
+    flat = counts["no_reply"] + counts["short_reply"]
+    if counts["good_reply"] * 2 >= len(reviews) and counts["good_reply"] > flat:
         verdict = f"Your messages are landing: {counts['good_reply']} of {len(reviews)} drew a detailed reply."
-    elif score >= 0.4:
-        verdict = (
-            f"Mixed results: {counts['good_reply']} of your {len(reviews)} messages drew a detailed reply, "
-            f"{counts['short_reply']} only a short one."
-        )
-    else:
+    elif flat * 2 > len(reviews):
         verdict = (
             f"Your messages are not getting traction: {counts['no_reply']} went unanswered and "
             f"{counts['short_reply']} drew only a short reply."
+        )
+    else:
+        verdict = (
+            f"Mixed results: {counts['good_reply']} of your {len(reviews)} messages drew a detailed reply, "
+            f"{counts['short_reply']} only a short one and {counts['no_reply']} none."
         )
     if preferences:
         verdict += f" You said you are looking for: {preferences.strip()[:200]} — check whether your messages reflect that."
