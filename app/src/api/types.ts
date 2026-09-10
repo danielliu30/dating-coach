@@ -201,6 +201,50 @@ export interface AnalysisResult {
   completed_at?: string;
 }
 
+/** Media types the image track accepts. */
+export type ImageMediaType = 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif';
+
+/**
+ * One profile photo for POST /analysis/images. Exactly one of url/base64 must
+ * be set; base64 is the raw payload with no data: prefix, at most 5 MiB decoded.
+ */
+export interface ImageRef {
+  url?: string;
+  base64?: string;
+  /** Defaults to image/jpeg server-side. */
+  media_type?: ImageMediaType;
+}
+
+/** Body of POST /analysis/images: 1-10 photos. Preferences come from the profile, not the request. */
+export interface ImageAnalyzeInput {
+  images: ImageRef[];
+}
+
+export const MAX_ANALYSIS_IMAGES = 10;
+
+/** Verdict for one photo, in request order (index). Scores are 0-1. */
+export interface ImageAssessment {
+  index: number;
+  clarity_score: number;
+  is_clear: boolean;
+  subject_focus_score: number;
+  is_customer_focal_point: boolean;
+  feedback: string;
+}
+
+export interface ImageOverall {
+  summary: string;
+  strengths: string[];
+  improvements: string[];
+}
+
+/** Synchronous response of POST /analysis/images; nothing is stored server-side. */
+export interface ImageAnalysis {
+  model_version: string;
+  images: ImageAssessment[];
+  overall: ImageOverall;
+}
+
 export interface SubmitMessage {
   sender: 'self' | 'match';
   body: string;
