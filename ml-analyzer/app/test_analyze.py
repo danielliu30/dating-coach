@@ -60,3 +60,12 @@ def test_heuristic_feedback_numbers_messages_from_one() -> None:
     assert "Messages 1-2 stalled — ask an open question there." in prose
     # The wire contract stays 0-based whatever the prose says.
     assert [(s.start_position, s.end_position) for s in response.segments] == [(0, 1), (2, 3)]
+
+
+def test_analyze_request_preferences_are_optional() -> None:
+    """``preferences`` is accepted when present and defaults to None so existing callers keep working."""
+    base = {"conversation_id": "conv-3", "messages": [{"position": 0, "sender": "self", "body": "Hey"}]}
+    assert AnalyzeRequest(**base).preferences is None
+    tailored = AnalyzeRequest(**base, preferences="Looking for something long-term, loves hiking")
+    assert tailored.preferences == "Looking for something long-term, loves hiking"
+    assert client.post("/analyze", json=tailored.model_dump()).status_code == 200

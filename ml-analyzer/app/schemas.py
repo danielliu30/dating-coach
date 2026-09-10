@@ -27,6 +27,11 @@ class AnalyzeRequest(BaseModel):
     platform: str = "unknown"
     match_name: Optional[str] = None
     messages: List[Message] = Field(min_length=1, max_length=500)
+    preferences: Optional[str] = Field(
+        default=None,
+        max_length=2000,
+        description="Free text: what the customer is looking for, so feedback can be tailored to it",
+    )
 
 
 class Segment(BaseModel):
