@@ -15,13 +15,18 @@ import (
 // Handler is the HTTP layer for /api/v1/analysis: it decodes requests, resolves
 // the caller and path IDs, and delegates to Service.
 type Handler struct {
-	svc *Service
+	svc    *Service
+	images *ImageService
 }
 
 // NewHandler builds the analysis handler; cmd/api mounts its Routes.
-func NewHandler(svc *Service) *Handler {
-	return &Handler{svc: svc}
+func NewHandler(svc *Service, images *ImageService) *Handler {
+	return &Handler{svc: svc, images: images}
 }
+
+// maxImageBodyBytes bounds a POST /images body: ten maxImageBytes photos, plus
+// the ~33% base64 overhead and headroom for the JSON envelope.
+const maxImageBodyBytes = int64(maxImages*maxImageBytes)*4/3 + 64<<10
 
 // Routes mounts the conversation-analysis endpoints (requires auth).
 func (h *Handler) Routes() http.Handler {
@@ -32,7 +37,35 @@ func (h *Handler) Routes() http.Handler {
 	r.Post("/conversations/{conversationID}/reanalyze", h.reanalyze)
 	r.Post("/conversations/{conversationID}/label", h.label)
 	r.Get("/results/{analysisID}", h.result)
+	r.Post("/images", h.analyzeImages)
 	return r
+}
+
+// analyzeImages handles POST /images: assesses the submitted profile photos
+// synchronously and returns the analyzer's verdict. Nothing is stored, so there
+// is no ID to poll; an oversized body is a 413 before any decoding happens.
+func (h *Handler) analyzeImages(w http.ResponseWriter, r *http.Request) {
+	principal, ok := principalOf(w, r)
+	if !ok {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxImageBodyBytes)
+	var in ImageInput
+	if err := httpx.Decode(r, &in); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			httpx.Error(w, http.StatusRequestEntityTooLarge, "request body is too large")
+			return
+		}
+		httpx.Error(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	result, err := h.images.Analyze(r.Context(), principal.UserID, in)
+	if err != nil {
+		respondErr(w, err, "could not analyze images")
+		return
+	}
+	httpx.JSON(w, http.StatusOK, result)
 }
 
 // submit handles POST /conversations: stores the transcript and returns the
