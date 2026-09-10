@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.schemas import AnalyzeRequest, Message, Segment
 from app.scoring.base import message_range
-from app.scoring.heuristic import HeuristicScorer
+from app.scoring.heuristic import HeuristicScorer, review_self_messages
 
 client = TestClient(app)
 
@@ -55,11 +55,69 @@ def test_heuristic_feedback_numbers_messages_from_one() -> None:
     )
     response = asyncio.run(HeuristicScorer(segment_size=2).analyze(request))
 
-    prose = response.overall.strengths + response.overall.improvements
-    assert "Messages 3-4 carried the conversation best." in prose
-    assert "Messages 1-2 stalled — ask an open question there." in prose
+    prose = "\n".join(response.overall.strengths + response.overall.improvements)
+    assert "Message 3 landed" in prose
+    assert "Message 1 ('Hey') only drew a short reply ('hi')" in prose
     # The wire contract stays 0-based whatever the prose says.
     assert [(s.start_position, s.end_position) for s in response.segments] == [(0, 1), (2, 3)]
+
+
+def test_heuristic_reviews_only_self_messages() -> None:
+    """Only the customer's messages are reviewed; the match's replies are evidence, never the subject."""
+    messages = [
+        Message(position=0, sender="self", body="What made you pick that hiking trail?"),
+        Message(position=1, sender="match", body="My sister said the ridge views are worth it, have you been?"),
+        Message(position=2, sender="self", body="Nice"),
+        Message(position=3, sender="match", body="ok"),
+        Message(position=4, sender="self", body="So what are you up to this weekend?"),
+        Message(position=5, sender="self", body="Hello?"),
+    ]
+    reviews = review_self_messages(messages)
+
+    assert [r.message.position for r in reviews] == [0, 2, 4, 5]
+    assert [r.outcome for r in reviews] == ["good_reply", "short_reply", "no_reply", "no_reply"]
+    assert reviews[0].score > reviews[1].score > reviews[2].score
+
+
+def test_heuristic_feedback_hints_without_drafting_replies() -> None:
+    """Improvements flag no-reply / short-reply messages as hints and never tell the customer what to say."""
+    request = AnalyzeRequest(
+        conversation_id="conv-4",
+        preferences="something serious, ideally with a fellow climber",
+        messages=[
+            Message(position=0, sender="self", body="What made you pick that hiking trail?"),
+            Message(position=1, sender="match", body="My sister said the ridge views are worth it, have you been?"),
+            Message(position=2, sender="self", body="Nice"),
+            Message(position=3, sender="match", body="ok"),
+            Message(position=4, sender="self", body="So what are you up to this weekend?"),
+        ],
+    )
+    response = asyncio.run(HeuristicScorer(segment_size=2).analyze(request))
+
+    assert response.overall.strengths == ["Message 1 landed: it drew a detailed reply ('My sister said the ridge views are wort…')."]
+    assert response.overall.improvements == [
+        "Message 3 ('Nice') only drew a short reply ('ok') — it may not have given them much to engage with.",
+        "Message 5 ('So what are you up to this weekend?') got no reply — worth a look at what made it hard to answer.",
+    ]
+    for hint in response.overall.improvements:
+        assert "ask" not in hint.lower() and "say" not in hint.lower()
+    assert "fellow climber" in response.overall.summary
+
+
+def test_heuristic_match_only_stretch_is_neutral() -> None:
+    """A window with none of the customer's messages is reported as neutral context, not scored."""
+    request = AnalyzeRequest(
+        conversation_id="conv-5",
+        messages=[
+            Message(position=0, sender="match", body="Hey there, how was the concert last night?"),
+            Message(position=1, sender="match", body="I heard the opener was great"),
+        ],
+    )
+    response = asyncio.run(HeuristicScorer(segment_size=2).analyze(request))
+
+    assert response.segments[0].engagement_score == 0.5
+    assert response.segments[0].comment == "No messages from you in this stretch; the match was carrying it."
+    assert response.overall.strengths == [] and response.overall.improvements == []
 
 
 def test_analyze_request_preferences_are_optional() -> None:
