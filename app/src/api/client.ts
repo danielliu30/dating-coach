@@ -375,6 +375,18 @@ export class ApiClient {
     return conversations ?? [];
   }
 
+  /**
+   * Queues a stored conversation for scoring again and resolves with the new
+   * pending analysis to poll. A run that is still pending or running is
+   * returned unchanged, so calling this twice does not double-queue.
+   */
+  reanalyzeConversation(conversationID: string) {
+    return this.request<AnalysisResult>(
+      'POST',
+      `/analysis/conversations/${conversationID}/reanalyze`,
+    );
+  }
+
   analysisResult(analysisID: string) {
     return this.request<AnalysisResult>('GET', `/analysis/results/${analysisID}`);
   }

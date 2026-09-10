@@ -21,9 +21,13 @@ const MAX_POLL_FAILURES = 5;
 export default function AnalysisResultScreen({
   route,
 }: NativeStackScreenProps<AnalysisStackParams, 'Result'>): React.ReactElement {
-  const { analysisID, conversationID } = route.params;
+  const { conversationID } = route.params;
+  // A retry scores the conversation under a new analysis id, so the id being
+  // polled outlives the one this screen was opened with.
+  const [analysisID, setAnalysisID] = useState(route.params.analysisID);
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [retrying, setRetrying] = useState(false);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [labelStatus, setLabelStatus] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -56,6 +60,25 @@ export default function AnalysisResultScreen({
       if (timer.current) clearTimeout(timer.current);
     };
   }, [poll]);
+
+  // A failed analysis keeps the transcript, so the analyzer can score it again
+  // once whatever broke it is back: queue a new run and follow that one.
+  const retryAnalysis = async () => {
+    setRetrying(true);
+    try {
+      const next = await api.reanalyzeConversation(conversationID);
+      failures.current = 0;
+      setResult(next);
+      setAnalysisID(next.id);
+      // An unfinished run is returned as-is, leaving the polled id unchanged,
+      // so nothing would restart the poll loop that the failure ended.
+      if (next.id === analysisID) void poll();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'could not queue the analysis again');
+    } finally {
+      setRetrying(false);
+    }
+  };
 
   const saveLabel = async (value: Outcome) => {
     setOutcome(value);
@@ -102,6 +125,11 @@ export default function AnalysisResultScreen({
         <View style={shared.card}>
           <Text style={shared.heading}>Analysis failed</Text>
           <Text style={shared.body}>{result.error || 'The analyzer could not score this conversation.'}</Text>
+          <Button
+            label="Try again"
+            loading={retrying}
+            onPress={() => void retryAnalysis()}
+          />
         </View>
       </Screen>
     );
