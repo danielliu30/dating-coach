@@ -68,6 +68,16 @@ SET status = 'failed',
 WHERE id = $1
 RETURNING *;
 
+-- Fails a run only while it is still waiting for a worker, so a publish whose
+-- confirmation was lost cannot overwrite a row the worker already claimed.
+-- name: FailPendingAnalysis :one
+UPDATE analysis_results
+SET status = 'failed',
+    error = $2,
+    completed_at = now()
+WHERE id = $1 AND status = 'pending'
+RETURNING *;
+
 -- name: UpsertTrainingExample :one
 INSERT INTO training_examples (conversation_id, label_source, outcome, reply_received, engagement_score, segment_labels, notes, consented)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)

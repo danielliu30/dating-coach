@@ -237,10 +237,15 @@ func (s *Service) Reanalyze(ctx context.Context, conversationID, userID uuid.UUI
 	}
 	if err := s.publisher.Publish(ctx, job); err != nil {
 		// The pending row is already committed, so a caller that walked away
-		// mid-publish must not leave it waiting on a job nobody will send.
+		// mid-publish must not leave it waiting on a job nobody will send. A
+		// lost confirmation is not a lost message though, so the row is only
+		// failed while no worker has claimed it.
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), enqueueCleanupTimeout)
 		defer cancel()
-		failed, failErr := s.queries.FailAnalysis(cleanupCtx, db.FailAnalysisParams{ID: result.ID, Error: "could not enqueue analysis"})
+		failed, failErr := s.queries.FailPendingAnalysis(cleanupCtx, db.FailPendingAnalysisParams{ID: result.ID, Error: "could not enqueue analysis"})
+		if errors.Is(failErr, pgx.ErrNoRows) {
+			return resultOf(result), fmt.Errorf("publish job: %w", err)
+		}
 		if failErr != nil {
 			return Result{}, fmt.Errorf("publish job: %w (and mark failed: %v)", err, failErr)
 		}

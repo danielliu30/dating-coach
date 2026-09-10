@@ -226,6 +226,39 @@ func (q *Queries) FailAnalysis(ctx context.Context, arg FailAnalysisParams) (Ana
 	return i, err
 }
 
+const failPendingAnalysis = `-- name: FailPendingAnalysis :one
+UPDATE analysis_results
+SET status = 'failed',
+    error = $2,
+    completed_at = now()
+WHERE id = $1 AND status = 'pending'
+RETURNING id, conversation_id, status, model_version, segments, overall, error, created_at, completed_at
+`
+
+type FailPendingAnalysisParams struct {
+	ID    uuid.UUID `json:"id"`
+	Error string    `json:"error"`
+}
+
+// Fails a run only while it is still waiting for a worker, so a publish whose
+// confirmation was lost cannot overwrite a row the worker already claimed.
+func (q *Queries) FailPendingAnalysis(ctx context.Context, arg FailPendingAnalysisParams) (AnalysisResult, error) {
+	row := q.db.QueryRow(ctx, failPendingAnalysis, arg.ID, arg.Error)
+	var i AnalysisResult
+	err := row.Scan(
+		&i.ID,
+		&i.ConversationID,
+		&i.Status,
+		&i.ModelVersion,
+		&i.Segments,
+		&i.Overall,
+		&i.Error,
+		&i.CreatedAt,
+		&i.CompletedAt,
+	)
+	return i, err
+}
+
 const getAnalysisResult = `-- name: GetAnalysisResult :one
 SELECT id, conversation_id, status, model_version, segments, overall, error, created_at, completed_at FROM analysis_results WHERE id = $1
 `
