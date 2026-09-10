@@ -11,13 +11,14 @@ const SAMPLE = `https://images.example.com/me/hiking.jpg
 https://images.example.com/me/dinner-with-friends.jpg`;
 
 /**
- * Absolute http(s) URL: a hostname made of letters, digits, dots and hyphens
- * (or a bracketed IPv6 literal), an optional port, then an optional
- * path/query/fragment. No userinfo. A plain regex rather than `new URL`
- * because React Native's URL polyfill is a thin string wrapper that does
- * not validate.
+ * Absolute http(s) URL: a hostname made of letters (any script, so IDNs
+ * pass), digits, dots and hyphens, or a bracketed IPv6 literal; an optional
+ * port; then an optional path/query/fragment. No userinfo. A plain regex
+ * rather than `new URL` because React Native's URL polyfill is a thin string
+ * wrapper that does not validate.
  */
-const PHOTO_LINK_RE = /^https?:\/\/(?:[a-z0-9-]+(?:\.[a-z0-9-]+)*\.?|\[[0-9a-f:.]+\])(?::\d{1,5})?(?:[/?#]\S*)?$/i;
+const PHOTO_LINK_RE =
+  /^https?:\/\/(?:[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*\.?|\[[0-9a-f:.]+\])(?::\d{1,5})?(?:[/?#]\S*)?$/iu;
 
 /**
  * Parses pasted photo links, one per line, into image refs for the image
