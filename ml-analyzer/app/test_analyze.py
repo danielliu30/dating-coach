@@ -237,6 +237,17 @@ def test_llm_parse_rejects_drafted_replies() -> None:
     with pytest.raises(ValueError, match="drafted a reply"):
         scorer._parse(json.dumps(bad), boundaries)
 
+    for draft in ("Consider asking about her trip.", 'A better reply would be: "What trail was your favorite?"'):
+        worse = dict(good, overall=dict(good["overall"], improvements=[draft]))
+        with pytest.raises(ValueError, match="drafted a reply"):
+            scorer._parse(json.dumps(worse), boundaries)
+
+    quoted = dict(
+        good,
+        overall=dict(good["overall"], improvements=['Message 3 ("You could say I\'m obsessed with climbing") got no reply.']),
+    )
+    assert scorer._parse(json.dumps(quoted), boundaries).overall.improvements == quoted["overall"]["improvements"]
+
 
 def _png_base64(width: int, height: int) -> str:
     """Minimal PNG header (signature + IHDR) that ``image_dimensions`` can read."""

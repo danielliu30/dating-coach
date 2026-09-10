@@ -20,9 +20,14 @@ logger = logging.getLogger(__name__)
 DRAFTING = re.compile(
     r"\b(try (asking|saying|something like)|you could (say|ask|write|reply|respond)|"
     r"(you )?should have (said|asked|written)|say something like|for example[,:]? ask|"
-    r"ask (her|him|them) (something like|about)|next time,? (say|ask)|instead,? (say|ask))\b",
+    r"ask (her|him|them) (something like|about)|next time,? (say|ask)|instead,? (say|ask)|"
+    r"consider (asking|saying)|perhaps (say|ask)|reply with|respond with|"
+    r"a better (reply|response|message) (would be|is|might be))\b",
     re.IGNORECASE,
 )
+
+# Quoted spans: the prompt requires feedback to quote the customer's own message.
+QUOTED = re.compile(r"\"[^\"]*\"|“[^”]*”")
 
 SYSTEM_PROMPT = """You are a dating-conversation coach reviewing ONLY the messages \
 written by the customer you are coaching. You judge how each of their messages \
@@ -187,10 +192,12 @@ def _reject_drafting(texts: Sequence[str]) -> None:
 
     A prompt cannot enforce the no-drafting rule, so completions that still
     contain "try asking ..."-style suggestions are treated as failed and the
-    caller falls back to the heuristic scorer, which never drafts.
+    caller falls back to the heuristic scorer, which never drafts. Quoted spans
+    are removed first, since feedback is required to quote the customer's own
+    message and that text is theirs, not the model's advice.
     """
     for text in texts:
-        if DRAFTING.search(text):
+        if DRAFTING.search(QUOTED.sub(" ", text)):
             raise ValueError(f"llm drafted a reply for the customer: {text[:80]!r}")
 
 
