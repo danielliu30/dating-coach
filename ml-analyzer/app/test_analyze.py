@@ -144,3 +144,19 @@ def test_heuristic_wording_follows_outcomes_not_scores() -> None:
     assert response.segments[0].comment == "Your messages here got replies, but none of them detailed ones."
     assert response.overall.summary.startswith("Mixed results: 0 of your 1 messages drew a detailed reply")
     assert response.overall.strengths == []
+
+
+def test_heuristic_merges_multi_bubble_match_replies() -> None:
+    """Consecutive match bubbles count as one reply, so 'Great!' + a detailed follow-up is a good reply."""
+    reviews = review_self_messages(
+        [
+            Message(position=0, sender="self", body="How was your trip?"),
+            Message(position=1, sender="match", body="Great!"),
+            Message(position=2, sender="match", body="We hiked every day and found an amazing beach."),
+            Message(position=3, sender="self", body="That sounds incredible"),
+        ]
+    )
+    assert [r.outcome for r in reviews] == ["good_reply", "no_reply"]
+    assert reviews[0].reply is not None
+    assert reviews[0].reply.position == 1
+    assert reviews[0].reply.body == "Great! We hiked every day and found an amazing beach."

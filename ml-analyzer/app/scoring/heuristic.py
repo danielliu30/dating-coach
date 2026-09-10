@@ -90,23 +90,42 @@ def _content_adjustment(message: Message) -> float:
     return adjustment
 
 
+def _merge_bubbles(bubbles: Sequence[Message]) -> Optional[Message]:
+    """Collapse consecutive match messages into one reply; ``None`` when there are none.
+
+    Keeps the first bubble's position and timestamp and joins the bodies with a
+    space, so word counts and "asks a question back" see the whole answer.
+    """
+    if not bubbles:
+        return None
+    if len(bubbles) == 1:
+        return bubbles[0]
+    return bubbles[0].model_copy(update={"body": " ".join(b.body.strip() for b in bubbles)})
+
+
 def review_self_messages(messages: Sequence[Message]) -> List[SelfMessageReview]:
     """Pair every ``self`` message with the match reply it drew and score it.
 
     Messages are walked in position order. A ``self`` message is answered by
-    the first following ``match`` message, unless another ``self`` message
-    comes first (then it counts as unanswered). Match messages are never
-    reviewed themselves. The last customer message with no reply yet is still
-    reported as ``no_reply``, since the caller cannot tell a pending reply from
-    a dead thread.
+    the run of ``match`` messages that follows it, up to the customer's next
+    message; several match bubbles are merged into one reply (first bubble's
+    position, bodies joined) so a multi-bubble answer is judged whole. Another
+    ``self`` message coming first counts as unanswered. Match messages are
+    never reviewed themselves. The last customer message with no reply yet is
+    still reported as ``no_reply``, since the caller cannot tell a pending
+    reply from a dead thread.
     """
     ordered = sorted(messages, key=lambda m: m.position)
     reviews: List[SelfMessageReview] = []
     for index, message in enumerate(ordered):
         if message.sender != "self":
             continue
-        following = ordered[index + 1] if index + 1 < len(ordered) else None
-        reply = following if following is not None and following.sender == "match" else None
+        bubbles: List[Message] = []
+        for following in ordered[index + 1 :]:
+            if following.sender != "match":
+                break
+            bubbles.append(following)
+        reply = _merge_bubbles(bubbles)
         outcome = _classify_reply(reply)
         score = clamp(OUTCOME_SCORE[outcome] + _content_adjustment(message))
         reviews.append(SelfMessageReview(message=message, reply=reply, outcome=outcome, score=score))
