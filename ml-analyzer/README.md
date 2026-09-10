@@ -22,7 +22,8 @@ analysis looks at what came back — nothing, a short reply, or an engaged reply
 and flags the pattern as a hint. It **never drafts what to say**: the customer
 drives the conversation, the analyzer only points at what did and did not land.
 The LLM backend enforces this by rejecting any completion that reads as a
-suggested reply and falling back to the heuristic scorer.
+suggested reply and falling back to the heuristic scorer. (`ML_BACKEND=trained`
+is the exception — see the backends section.)
 
 ### Image track
 
@@ -140,7 +141,10 @@ vision endpoint of the configured provider (Anthropic or OpenAI-compatible);
 - **`heuristic.py`** — no network, no model. Length/question/reciprocity signals.
   Used for local dev, CI and as the LLM fallback.
 - **`trained.py`** — a fine-tuned checkpoint. torch/transformers are imported
-  lazily so the serving image stays small until you actually use it.
+  lazily so the serving image stays small until you actually use it. It
+  predates the message track's rules: it scores every segment regardless of
+  sender and ignores `preferences`, so the self-only / no-drafting guarantees
+  above hold for `llm` and `heuristic` only.
 
 ## Training your own model
 
