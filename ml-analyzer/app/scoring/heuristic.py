@@ -75,13 +75,9 @@ class HeuristicScorer(Scorer):
         strengths = []
         improvements = []
         if strongest is not None:
-            strengths.append(
-                f"Messages {strongest.start_position}-{strongest.end_position} carried the conversation best."
-            )
+            strengths.append(f"{_message_range(strongest)} carried the conversation best.")
         if weakest is not None:
-            improvements.append(
-                f"Messages {weakest.start_position}-{weakest.end_position} stalled — ask an open question there."
-            )
+            improvements.append(f"{_message_range(weakest)} stalled — ask an open question there.")
         if not any(m.body.strip().endswith("?") for m in request.messages):
             improvements.append("You never asked a question; invite the other person to share something.")
 
@@ -95,6 +91,16 @@ class HeuristicScorer(Scorer):
                 improvements=improvements,
             ),
         )
+
+
+def _message_range(segment: Segment) -> str:
+    """Name a segment the way a reader counts messages: from one, not from zero.
+
+    ``start_position``/``end_position`` stay 0-based on the wire; only this
+    human-readable phrase shifts, so feedback text matches what clients label
+    the same segment.
+    """
+    return f"Messages {segment.start_position + 1}-{segment.end_position + 1}"
 
 
 def _comment(score: float, window: Sequence[Message]) -> str:
