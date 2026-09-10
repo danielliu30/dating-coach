@@ -31,6 +31,9 @@ FOCUS_THRESHOLD = 0.6
 # Below this many pixels on the short side a dating-app photo renders soft.
 MIN_SHORT_SIDE = 600
 
+# Cap on overall improvement hints, so the list stays readable in the app.
+MAX_IMPROVEMENTS = 5
+
 IMAGE_SYSTEM_PROMPT = """You are a dating-profile photo coach reviewing photos that \
 belong to the customer you are coaching. For each photo you judge two things:
 
