@@ -11,16 +11,19 @@ const SAMPLE = `https://images.example.com/me/hiking.jpg
 https://images.example.com/me/dinner-with-friends.jpg`;
 
 /**
- * Absolute http(s) URL with a non-empty host, optionally followed by a
- * path/query/fragment. A plain regex rather than `new URL` because React
- * Native's URL polyfill is a thin string wrapper that does not validate.
+ * Absolute http(s) URL: a hostname made of letters, digits, dots and hyphens
+ * (or a bracketed IPv6 literal), an optional port, then an optional
+ * path/query/fragment. No userinfo. A plain regex rather than `new URL`
+ * because React Native's URL polyfill is a thin string wrapper that does
+ * not validate.
  */
-const PHOTO_LINK_RE = /^https?:\/\/[^\s/?#]+(?:[/?#]\S*)?$/i;
+const PHOTO_LINK_RE = /^https?:\/\/(?:[a-z0-9-]+(?:\.[a-z0-9-]+)*\.?|\[[0-9a-f:.]+\])(?::\d{1,5})?(?:[/?#]\S*)?$/i;
 
 /**
  * Parses pasted photo links, one per line, into image refs for the image
  * track. Blank lines are skipped. A line is rejected unless it matches
- * PHOTO_LINK_RE (the server applies the same scheme/host rule), or once more
+ * PHOTO_LINK_RE (stricter than the server, which only requires an http(s)
+ * scheme and a non-empty authority), or once more
  * than MAX_ANALYSIS_IMAGES valid lines have been seen. Errors name the
  * 1-based line so the user can fix the exact one.
  */
