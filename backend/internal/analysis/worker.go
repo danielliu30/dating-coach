@@ -57,11 +57,16 @@ func (w *Worker) Handle(ctx context.Context, job Job, lastAttempt bool) error {
 	if err != nil {
 		return w.fail(ctx, analysisID, lastAttempt, fmt.Errorf("load messages: %w", err))
 	}
+	preferences, err := w.datingPreferences(ctx, conversation.UserID)
+	if err != nil {
+		return w.fail(ctx, analysisID, lastAttempt, fmt.Errorf("load preferences: %w", err))
+	}
 
 	req := MLRequest{
 		ConversationID: conversationID.String(),
 		Platform:       conversation.Platform,
 		MatchName:      conversation.MatchName,
+		Preferences:    preferences,
 		Messages:       make([]MLMessage, 0, len(messages)),
 	}
 	for _, m := range messages {
@@ -98,6 +103,21 @@ func (w *Worker) Handle(ctx context.Context, job Job, lastAttempt bool) error {
 
 	w.notifyReady(ctx, job, analysisID)
 	return nil
+}
+
+// datingPreferences returns what the conversation's owner said they are looking
+// for, so the analyzer can tailor its hints. A user that no longer exists (or is
+// soft-deleted) yields "" rather than an error: the analysis still runs, just
+// untailored, and the owner's absence is dealt with when the result is delivered.
+func (w *Worker) datingPreferences(ctx context.Context, userID uuid.UUID) (string, error) {
+	user, err := w.queries.GetUserByID(ctx, userID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return user.DatingPreferences, nil
 }
 
 // fail records a permanent failure on the analysis row, or returns cause so the
