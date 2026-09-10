@@ -14,6 +14,7 @@ import CoachDetailScreen from '../screens/CoachDetailScreen';
 import CoachListScreen from '../screens/CoachListScreen';
 import CoachProfileScreen from '../screens/CoachProfileScreen';
 import MySessionsScreen from '../screens/MySessionsScreen';
+import PhotoAnalysisScreen from '../screens/PhotoAnalysisScreen';
 import SignInScreen from '../screens/SignInScreen';
 import SignUpScreen from '../screens/SignUpScreen';
 import SubmitConversationScreen from '../screens/SubmitConversationScreen';
@@ -37,7 +38,7 @@ const linking: LinkingOptions<RootTabParams> = {
       Coaches: { screens: { CoachList: 'coaches', CoachDetail: 'coaches/:coachID' } },
       Sessions: 'sessions',
       Chats: { screens: { Threads: 'chats', Chat: 'chats/:threadID' } },
-      Analyse: { screens: { Submit: 'analyse', History: 'analyse/history', Result: 'analyse/:analysisID' } },
+      Analyse: { screens: { Submit: 'analyse', History: 'analyse/history', Photos: 'analyse/photos', Result: 'analyse/:analysisID' } },
       Dashboard: 'dashboard',
       Profile: 'profile',
       Account: 'account',
@@ -85,6 +86,7 @@ function AnalysisNavigator(): React.ReactElement {
       <AnalysisStack.Screen name="Submit" component={SubmitConversationScreen} options={{ headerShown: false }} />
       <AnalysisStack.Screen name="History" component={AnalysisHistoryScreen} options={{ title: 'Past analyses' }} />
       <AnalysisStack.Screen name="Result" component={AnalysisResultScreen} options={{ title: 'Feedback' }} />
+      <AnalysisStack.Screen name="Photos" component={PhotoAnalysisScreen} options={{ title: 'Profile photos' }} />
     </AnalysisStack.Navigator>
   );
 }

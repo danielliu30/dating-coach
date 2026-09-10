@@ -19,6 +19,7 @@ export type ChatsStackParams = {
 export type AnalysisStackParams = {
   Submit: undefined;
   History: undefined;
+  Photos: undefined;
   Result: { analysisID: string; conversationID: string };
 };
 

@@ -114,6 +114,7 @@ export default function SubmitConversationScreen({
         <Button label="Use the example" variant="secondary" onPress={() => setRaw(SAMPLE)} />
       </View>
       <Button label="Past analyses" variant="secondary" onPress={() => navigation.navigate('History')} />
+      <Button label="Check your profile photos" variant="secondary" onPress={() => navigation.navigate('Photos')} />
     </Screen>
   );
 }
