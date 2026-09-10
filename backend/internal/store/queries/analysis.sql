@@ -6,6 +6,11 @@ RETURNING *;
 -- name: GetConversation :one
 SELECT * FROM conversations WHERE id = $1;
 
+-- Takes a row lock on the conversation, so a check of its analyses and the
+-- insert that depends on it cannot interleave with a concurrent request.
+-- name: LockConversation :one
+SELECT * FROM conversations WHERE id = $1 FOR UPDATE;
+
 -- name: ListConversationsForUser :many
 SELECT * FROM conversations
 WHERE user_id = $1

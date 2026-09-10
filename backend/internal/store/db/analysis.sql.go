@@ -405,6 +405,26 @@ func (q *Queries) ListTrainingExamples(ctx context.Context, arg ListTrainingExam
 	return items, nil
 }
 
+const lockConversation = `-- name: LockConversation :one
+SELECT id, user_id, title, platform, match_name, created_at FROM conversations WHERE id = $1 FOR UPDATE
+`
+
+// Takes a row lock on the conversation, so a check of its analyses and the
+// insert that depends on it cannot interleave with a concurrent request.
+func (q *Queries) LockConversation(ctx context.Context, id uuid.UUID) (Conversation, error) {
+	row := q.db.QueryRow(ctx, lockConversation, id)
+	var i Conversation
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Title,
+		&i.Platform,
+		&i.MatchName,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const markNotificationSent = `-- name: MarkNotificationSent :exec
 UPDATE notifications SET sent_at = now() WHERE id = $1
 `

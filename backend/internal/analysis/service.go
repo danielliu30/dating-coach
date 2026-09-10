@@ -29,6 +29,10 @@ const (
 	maxMessageLength  = 4000
 	defaultListLimit  = 25
 	analysisQueueKind = "analysis_ready"
+
+	// Budget for undoing a committed pending row when enqueueing it fails,
+	// which has to outlive the request context that failed.
+	enqueueCleanupTimeout = 5 * time.Second
 )
 
 // Publisher enqueues analysis jobs for the worker. JobPublisher is the RabbitMQ
@@ -200,7 +204,17 @@ func (s *Service) Reanalyze(ctx context.Context, conversationID, userID uuid.UUI
 	if _, err := s.ownedConversation(ctx, conversationID, userID); err != nil {
 		return Result{}, err
 	}
-	latest, err := s.queries.GetLatestAnalysisForConversation(ctx, conversationID)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Result{}, fmt.Errorf("begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := s.queries.WithTx(tx)
+
+	if _, err := q.LockConversation(ctx, conversationID); err != nil {
+		return Result{}, fmt.Errorf("lock conversation: %w", err)
+	}
+	latest, err := q.GetLatestAnalysisForConversation(ctx, conversationID)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return Result{}, fmt.Errorf("get latest analysis: %w", err)
 	}
@@ -208,17 +222,25 @@ func (s *Service) Reanalyze(ctx context.Context, conversationID, userID uuid.UUI
 		return resultOf(latest), nil
 	}
 
-	result, err := s.queries.CreateAnalysisResult(ctx, conversationID)
+	result, err := q.CreateAnalysisResult(ctx, conversationID)
 	if err != nil {
 		return Result{}, fmt.Errorf("create analysis result: %w", err)
 	}
+	if err := tx.Commit(ctx); err != nil {
+		return Result{}, fmt.Errorf("commit transaction: %w", err)
+	}
+
 	job := Job{
 		AnalysisID:     result.ID.String(),
 		ConversationID: conversationID.String(),
 		UserID:         userID.String(),
 	}
 	if err := s.publisher.Publish(ctx, job); err != nil {
-		failed, failErr := s.queries.FailAnalysis(ctx, db.FailAnalysisParams{ID: result.ID, Error: "could not enqueue analysis"})
+		// The pending row is already committed, so a caller that walked away
+		// mid-publish must not leave it waiting on a job nobody will send.
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), enqueueCleanupTimeout)
+		defer cancel()
+		failed, failErr := s.queries.FailAnalysis(cleanupCtx, db.FailAnalysisParams{ID: result.ID, Error: "could not enqueue analysis"})
 		if failErr != nil {
 			return Result{}, fmt.Errorf("publish job: %w (and mark failed: %v)", err, failErr)
 		}
