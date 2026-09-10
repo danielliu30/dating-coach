@@ -26,9 +26,9 @@ DRAFTING = re.compile(
     re.IGNORECASE,
 )
 
-# Where a citation of the customer's message may start: the ``Message N`` reference the prompt
-# requires, then an opening quote, e.g. ``Message 3 ("...")``. Group 1 is the opening quote.
-CITATION_START = re.compile(r"message\s+\d+\W{0,4}?([\"\u201c])", re.IGNORECASE)
+# The one citation syntax SYSTEM_PROMPT mandates, ``Message N ("...")``, up to and including the
+# opening quote (group 1). Citations written any other way are simply not exempted.
+CITATION_START = re.compile(r"message\s+\d+\s*\(\s*([\"\u201c])", re.IGNORECASE)
 CLOSING_QUOTE = re.compile(r"[\"\u201d]")
 # Shortest quotation that can be exempted from the drafting scan.
 MIN_QUOTE_WORDS = 3
@@ -63,12 +63,13 @@ to review there.
 detailed replies; 0.0 = they went unanswered or were met with one-word replies.
 - "improvements" point out potential flaws, phrased as hints to reflect on: a \
 message that got no reply, a message that only got a short reply, a message \
-that closed the topic. Name the message by its 1-based number (position + 1) \
-and quote it briefly. Explain what may have made it hard to answer. If the \
+that closed the topic. Cite the message exactly as Message N ("brief quote"), \
+where N is its 1-based number (position + 1) and the quote is the customer's \
+own words. Explain what may have made it hard to answer. If the \
 customer's final message has no reply recorded, the match may simply not have \
 answered yet: mention it neutrally, do not count it as a flaw.
 - "strengths" acknowledge the customer's messages that produced a good or \
-successful response, again naming and quoting the message.
+successful response, cited the same way.
 - NEVER suggest, draft or rewrite what the customer should say or should have \
 said. No example replies, no "try asking ...", no "you could say ...". The \
 customer always drives the conversation; you only hint at what to look at.
@@ -198,13 +199,15 @@ def _reject_drafting(texts: Sequence[str], sources: Sequence[str] = ()) -> None:
     contain "try asking ..."-style suggestions are treated as failed and the
     caller falls back to the heuristic scorer, which never drafts. Feedback is
     required to name and quote the customer's own messages briefly, so a quoted
-    span is blanked before scanning only when it is provably a citation: it
-    directly follows a ``Message N`` reference (``CITATION_LEAD``), is at least
+    span is blanked before scanning only when it is provably a citation: it is
+    written in the prompt's ``Message N ("...")`` syntax (``CITATION_START``), is at least
     ``MIN_QUOTE_WORDS`` long and is, case- and whitespace-insensitively, a
     substring of one of the ``sources`` bodies. Everything else, including
     unquoted text that happens to echo a short customer message and quoted
     text the model wrote itself (even when it reuses the customer's words), is
-    checked.
+    checked. A citation written any other way is not exempted, so a customer
+    message that itself sounds like drafting can still cause a needless (but
+    safe) fallback.
     """
     normalised_sources = [_squash(s) for s in sources if s.strip()]
 

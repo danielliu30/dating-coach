@@ -251,6 +251,7 @@ def test_llm_parse_rejects_drafted_replies() -> None:
         'Message 3 ("You could say I\'m obsessed with climbing") got no reply.',
         'Message 3 (\u201cyou could  say I\'m obsessed\u201d) got no reply.',
         'Message 4 ("She said "you could ask him about work"") drew a short reply.',
+        'Message 3 ("You could say I\'m obsessed") and Message 4 ("you could ask him about work") both stalled.',
         "Message 3 did not invite the match to respond with much detail.",
         "Message 2 was so narrow the match could respond with only yes or no.",
     ):
@@ -262,6 +263,12 @@ def test_llm_parse_rejects_drafted_replies() -> None:
         "You could say hello to restart things.",
         'Message 5 ("say") was one word; you could say more next time.',
         'A stronger answer is "you could ask him about work".',
+        # Only the prompt's Message N ("...") syntax is a citation; anything else is scanned.
+        'Message 3 says, "You could say I\'m obsessed with climbing", which drew no reply.',
+        # Unclosed quote: nothing is exempted.
+        'Message 3 ("You could say I\'m obsessed with climbing) got no reply.',
+        # The second span is not a citation even though the first one is.
+        'Message 3 ("You could say I\'m obsessed") stalled; "you could ask him about work" would land better.',
     ):
         bad = dict(good, overall=dict(good["overall"], improvements=[disguised]))
         with pytest.raises(ValueError, match="drafted a reply"):
