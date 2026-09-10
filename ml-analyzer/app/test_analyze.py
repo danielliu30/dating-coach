@@ -279,7 +279,8 @@ def test_heuristic_image_scorer_fallback_without_llm_key() -> None:
     assert not response.images[1].is_clear
     assert response.images[2].clarity_score == 0.5 and "URL" in response.images[2].feedback
     assert all(a.subject_focus_score == 0.5 for a in response.images)
-    assert "2 of 3 photos pass" in response.overall.summary
+    assert "1 of 2 inspected photos pass" in response.overall.summary
+    assert any("supplied by URL" in hint for hint in response.overall.improvements)
     assert "Someone outdoorsy" in response.overall.summary
     assert any("focal point" in hint for hint in response.overall.improvements)
 

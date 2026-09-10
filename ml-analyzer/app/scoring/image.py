@@ -89,7 +89,7 @@ def image_dimensions(data: bytes) -> Optional[Tuple[int, int]]:
         return width, height
     if data[:2] == b"\xff\xd8":
         offset = 2
-        while offset + 9 < len(data):
+        while offset + 9 <= len(data):
             if data[offset] != 0xFF:
                 return None
             marker = data[offset + 1]
@@ -111,18 +111,22 @@ class HeuristicImageScorer(ImageScorer):
     decodes them, reads the pixel dimensions from the file header and treats a
     small or undecodable image as unclear. Subject focus cannot be judged, so
     every image gets a neutral 0.5 and the feedback says a human should check
-    it. URL images are not fetched and are reported as unverified.
+    it. URL images are not fetched: they get neutral scores, are reported as
+    unverified and are left out of the pass/fail tally.
     """
 
     version = "image-heuristic-v1"
 
     async def analyze(self, request: ImageAnalyzeRequest) -> ImageAnalyzeResponse:
         assessments = [self._assess(index, image) for index, image in enumerate(request.images)]
-        unclear = [a for a in assessments if not a.is_clear]
+        inspected = [a for a, image in zip(assessments, request.images) if image.base64 is not None]
+        unclear = [a for a in inspected if not a.is_clear]
         improvements = [f"Photo {a.index + 1} looks low-resolution or unreadable; a sharper original would help." for a in unclear]
+        if len(inspected) < len(assessments):
+            improvements.append(f"{len(assessments) - len(inspected)} photo(s) were supplied by URL and could not be checked automatically.")
         improvements.append("Automatic checks cannot confirm you are the focal point of each photo; make sure you are, not a group, pet or scenery.")
-        strengths = [f"Photo {a.index + 1} is a good-resolution original." for a in assessments if a.is_clear and a.clarity_score >= 0.8]
-        summary = f"{len(assessments) - len(unclear)} of {len(assessments)} photos pass the resolution check."
+        strengths = [f"Photo {a.index + 1} is a good-resolution original." for a in inspected if a.clarity_score >= 0.8]
+        summary = f"{len(inspected) - len(unclear)} of {len(inspected)} inspected photos pass the resolution check."
         if request.preferences:
             summary += f" You said you are looking for: {request.preferences.strip()[:200]} — pick photos that would appeal to that kind of match."
         return ImageAnalyzeResponse(
