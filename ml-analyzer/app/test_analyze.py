@@ -242,18 +242,28 @@ def test_llm_parse_rejects_drafted_replies() -> None:
         with pytest.raises(ValueError, match="drafted a reply"):
             scorer._parse(json.dumps(worse), boundaries)
 
-    sources = ["You could say I'm obsessed with climbing", 'She said "you could ask him about work"']
+    sources = [
+        "You could say I'm obsessed with climbing, but lately I mostly stay home",
+        'She said "you could ask him about work"',
+        "say",
+    ]
     for fine in (
         'Message 3 ("You could say I\'m obsessed with climbing") got no reply.',
+        'Message 3 (\u201cyou could  say I\'m obsessed\u201d) got no reply.',
         'Message 4 ("She said "you could ask him about work"") drew a short reply.',
         "Message 3 did not invite the match to respond with much detail.",
     ):
         quoted = dict(good, overall=dict(good["overall"], improvements=[fine]))
         assert scorer._parse(json.dumps(quoted), boundaries, sources).overall.improvements == [fine]
 
-    disguised = dict(good, overall=dict(good["overall"], improvements=['Message 3 was terse; "Ask her about the trip."']))
-    with pytest.raises(ValueError, match="drafted a reply"):
-        scorer._parse(json.dumps(disguised), boundaries, sources)
+    for disguised in (
+        'Message 3 was terse; "Ask her about the trip."',
+        "You could say hello to restart things.",
+        'Message 5 ("say") was one word; you could say more next time.',
+    ):
+        bad = dict(good, overall=dict(good["overall"], improvements=[disguised]))
+        with pytest.raises(ValueError, match="drafted a reply"):
+            scorer._parse(json.dumps(bad), boundaries, sources)
 
 
 def _png_base64(width: int, height: int) -> str:

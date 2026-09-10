@@ -26,6 +26,12 @@ DRAFTING = re.compile(
     re.IGNORECASE,
 )
 
+# A quoted span in feedback; the contents may be customer text (exempt) or the model's own words (checked).
+# Lookahead so overlapping candidates are all seen, e.g. the inner quote of ``"She said "hi there""``.
+QUOTED = re.compile(r"(?=([\"\u201c]([^\"\u201c\u201d]+)[\"\u201d]))")
+# Shortest quotation that can be exempted from the drafting scan.
+MIN_QUOTE_WORDS = 3
+
 SYSTEM_PROMPT = """You are a dating-conversation coach reviewing ONLY the messages \
 written by the customer you are coaching. You judge how each of their messages \
 landed by looking at what the match did next.
@@ -190,17 +196,34 @@ def _reject_drafting(texts: Sequence[str], sources: Sequence[str] = ()) -> None:
     A prompt cannot enforce the no-drafting rule, so completions that still
     contain "try asking ..."-style suggestions are treated as failed and the
     caller falls back to the heuristic scorer, which never drafts. Feedback is
-    required to quote the customer's own messages, so every occurrence of a
-    ``sources`` body (case-insensitive, whitespace-normalised) is blanked before
-    scanning: that text is the customer's, not the model's advice. Anything
-    else, quoted or not, is checked.
+    required to quote the customer's own messages briefly, so a quoted span is
+    blanked before scanning only when it is provably theirs: at least
+    ``MIN_QUOTE_WORDS`` long and, case- and whitespace-insensitively, a
+    substring of one of the ``sources`` bodies. Everything else, including
+    unquoted text that happens to echo a short customer message and quoted
+    text the model wrote itself, is checked.
     """
-    quotes = [re.compile(r"\s+".join(map(re.escape, s.split())), re.IGNORECASE) for s in sources if s.strip()]
+    normalised_sources = [_squash(s) for s in sources if s.strip()]
+
+    def is_customer_quote(inner: str) -> bool:
+        inner = _squash(inner)
+        return len(inner.split()) >= MIN_QUOTE_WORDS and any(inner in s for s in normalised_sources)
+
     for text in texts:
-        for quote in quotes:
-            text = quote.sub(" ", text)
-        if DRAFTING.search(text):
+        scanned, cursor = [], 0
+        for match in QUOTED.finditer(text):
+            if match.start() < cursor or not is_customer_quote(match.group(2)):
+                continue
+            scanned.append(text[cursor : match.start()] + " ")
+            cursor = match.start() + len(match.group(1))
+        scanned.append(text[cursor:])
+        if DRAFTING.search("".join(scanned)):
             raise ValueError(f"llm drafted a reply for the customer: {text[:80]!r}")
+
+
+def _squash(text: str) -> str:
+    """Lower-case ``text`` and collapse runs of whitespace so quotes compare loosely against sources."""
+    return " ".join(text.lower().split())
 
 
 def self_message_digest(messages: Sequence[Message]) -> str:
