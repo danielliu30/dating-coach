@@ -1,5 +1,7 @@
 import asyncio
+import json
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -172,3 +174,60 @@ def test_heuristic_question_in_earlier_bubble_still_counts() -> None:
         ]
     )
     assert reviews[0].outcome == "good_reply"
+
+
+def test_llm_prompt_reviews_only_self_messages_and_never_drafts() -> None:
+    """The LLM prompt lists only the customer's messages with their outcomes, carries preferences, and forbids drafting replies."""
+    from app.config import Settings
+    from app.scoring.llm import SYSTEM_PROMPT, LLMScorer, self_message_digest
+
+    messages = [
+        Message(position=0, sender="self", body="What made you pick that hiking trail?"),
+        Message(position=1, sender="match", body="My sister said the ridge views are worth it, have you been?"),
+        Message(position=2, sender="self", body="Nice"),
+        Message(position=3, sender="match", body="ok"),
+        Message(position=4, sender="self", body="Weekend plans?"),
+    ]
+    digest = self_message_digest(messages)
+    assert digest.splitlines()[::2] == [
+        "#1 self: What made you pick that hiking trail?",
+        "#3 self: Nice",
+        "#5 self: Weekend plans?",
+    ]
+    assert "-> good reply: My sister said" in digest
+    assert "-> short reply: ok" in digest
+    assert "-> no reply" in digest
+
+    settings = Settings(
+        backend="llm", llm_provider="openai", llm_api_key="k", llm_model="m", llm_base_url="http://x",
+        llm_timeout=1.0, model_dir="", segment_size=2,
+    )
+    request = AnalyzeRequest(conversation_id="conv-6", preferences="a fellow climber", messages=messages)
+    prompt = LLMScorer(settings)._user_prompt(request, [(0, 1), (2, 3), (4, 4)])
+    assert "What the customer is looking for: a fellow climber" in prompt
+    assert "Customer messages to review" in prompt
+
+    assert 'Evaluate ONLY messages from "self"' in SYSTEM_PROMPT
+    assert "NEVER suggest, draft or rewrite what the customer should say" in SYSTEM_PROMPT
+
+
+def test_llm_parse_rejects_drafted_replies() -> None:
+    """A completion that drafts what the customer should say is a failed completion (triggers the fallback)."""
+    from app.config import Settings
+    from app.scoring.llm import LLMScorer
+
+    settings = Settings(
+        backend="llm", llm_provider="openai", llm_api_key="k", llm_model="m", llm_base_url="http://x",
+        llm_timeout=1.0, model_dir="", segment_size=2,
+    )
+    scorer = LLMScorer(settings)
+    boundaries = [(0, 1)]
+    good = {
+        "segments": [{"start_position": 0, "end_position": 1, "engagement_score": 0.7, "comment": "Message 1 drew a detailed reply."}],
+        "overall": {"engagement_score": 0.7, "summary": "Landing well.", "strengths": ["Message 1 landed."], "improvements": []},
+    }
+    assert scorer._parse(json.dumps(good), boundaries).overall.strengths == ["Message 1 landed."]
+
+    bad = dict(good, overall=dict(good["overall"], improvements=["Try asking: What are you passionate about?"]))
+    with pytest.raises(ValueError, match="drafted a reply"):
+        scorer._parse(json.dumps(bad), boundaries)
