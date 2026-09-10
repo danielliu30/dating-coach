@@ -11,7 +11,7 @@ import statistics
 from typing import List, Sequence
 
 from ..schemas import AnalyzeRequest, AnalyzeResponse, Message, Overall, Segment
-from .base import Scorer, align_segments, chunk, clamp, label_for
+from .base import Scorer, align_segments, chunk, clamp, label_for, message_range
 
 OPEN_QUESTION = re.compile(r"\b(what|why|how|where|when|which|who)\b", re.IGNORECASE)
 LOW_EFFORT = {"hey", "hi", "yo", "lol", "haha", "ok", "okay", "k", "nice", "cool", "hmm", "sup"}
@@ -75,13 +75,9 @@ class HeuristicScorer(Scorer):
         strengths = []
         improvements = []
         if strongest is not None:
-            strengths.append(
-                f"Messages {strongest.start_position}-{strongest.end_position} carried the conversation best."
-            )
+            strengths.append(f"{message_range(strongest)} carried the conversation best.")
         if weakest is not None:
-            improvements.append(
-                f"Messages {weakest.start_position}-{weakest.end_position} stalled — ask an open question there."
-            )
+            improvements.append(f"{message_range(weakest)} stalled — ask an open question there.")
         if not any(m.body.strip().endswith("?") for m in request.messages):
             improvements.append("You never asked a question; invite the other person to share something.")
 

@@ -16,7 +16,7 @@ from typing import Any, List
 
 from ..config import Settings
 from ..schemas import AnalyzeRequest, AnalyzeResponse, Overall, Segment
-from .base import Scorer, align_segments, chunk, clamp, transcript
+from .base import Scorer, align_segments, chunk, clamp, message_range, transcript
 
 logger = logging.getLogger(__name__)
 
@@ -85,11 +85,11 @@ class TrainedScorer(Scorer):
                 engagement_score=clamp(overall),
                 summary="Scored by the fine-tuned engagement model.",
                 strengths=[
-                    f"Messages {s.start_position}-{s.end_position} scored {s.engagement_score:.2f}"
+                    f"{message_range(s)} scored {s.engagement_score:.2f}"
                     for s in sorted(segments, key=lambda s: -s.engagement_score)[:2]
                 ],
                 improvements=[
-                    f"Messages {s.start_position}-{s.end_position} scored {s.engagement_score:.2f}"
+                    f"{message_range(s)} scored {s.engagement_score:.2f}"
                     for s in sorted(segments, key=lambda s: s.engagement_score)[:2]
                 ],
             ),
