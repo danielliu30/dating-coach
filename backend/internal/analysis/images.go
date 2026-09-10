@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -114,7 +115,7 @@ func validateImageRef(img ImageRef) (MLImageRef, error) {
 		return MLImageRef{}, fmt.Errorf("media_type %q is not supported", mediaType)
 	}
 	if img.URL != "" {
-		if len(img.URL) > maxImageURLLength {
+		if utf8.RuneCountInString(img.URL) > maxImageURLLength {
 			return MLImageRef{}, errors.New("url is too long")
 		}
 		u, err := url.Parse(img.URL)
@@ -123,11 +124,17 @@ func validateImageRef(img ImageRef) (MLImageRef, error) {
 		}
 		return MLImageRef{URL: img.URL, MediaType: mediaType}, nil
 	}
-	if base64.StdEncoding.DecodedLen(len(img.Base64)) > maxImageBytes {
+	// DecodedLen counts padding, so it can overshoot by two; it only guards
+	// against decoding something absurdly large before the exact check below.
+	if base64.StdEncoding.DecodedLen(len(img.Base64)) > maxImageBytes+2 {
 		return MLImageRef{}, fmt.Errorf("exceeds %d bytes", maxImageBytes)
 	}
-	if _, err := base64.StdEncoding.DecodeString(img.Base64); err != nil {
+	decoded, err := base64.StdEncoding.DecodeString(img.Base64)
+	if err != nil {
 		return MLImageRef{}, errors.New("base64 is not valid standard base64")
+	}
+	if len(decoded) > maxImageBytes {
+		return MLImageRef{}, fmt.Errorf("exceeds %d bytes", maxImageBytes)
 	}
 	return MLImageRef{Base64: img.Base64, MediaType: mediaType}, nil
 }
