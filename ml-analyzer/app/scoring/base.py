@@ -52,5 +52,15 @@ def align_segments(segments: List[Segment]) -> List[Segment]:
     return segments
 
 
+def message_range(segment: Segment) -> str:
+    """Name a segment the way a reader counts messages: from one, not from zero.
+
+    ``start_position``/``end_position`` stay 0-based on the wire; only this
+    human-readable phrase shifts, so feedback text matches what clients label
+    the same segment.
+    """
+    return f"Messages {segment.start_position + 1}-{segment.end_position + 1}"
+
+
 def transcript(messages: Sequence[Message]) -> str:
     return "\n".join(f"[{m.position}] {m.sender}: {m.body}" for m in sorted(messages, key=lambda m: m.position))

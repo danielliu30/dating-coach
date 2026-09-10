@@ -3,7 +3,8 @@ import asyncio
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.schemas import AnalyzeRequest, Message
+from app.schemas import AnalyzeRequest, Message, Segment
+from app.scoring.base import message_range
 from app.scoring.heuristic import HeuristicScorer
 
 client = TestClient(app)
@@ -32,6 +33,13 @@ def test_analyze_heuristic() -> None:
     body = response.json()
     assert body["model_version"]
     assert 0.0 <= body["overall"]["engagement_score"] <= 1.0
+
+
+def test_message_range_shifts_only_the_prose() -> None:
+    """The shared formatter every backend writes feedback with counts from 1."""
+    segment = Segment(start_position=0, end_position=5, engagement_score=0.5, comment="")
+    assert message_range(segment) == "Messages 1-6"
+    assert (segment.start_position, segment.end_position) == (0, 5)
 
 
 def test_heuristic_feedback_numbers_messages_from_one() -> None:
