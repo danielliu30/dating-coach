@@ -28,6 +28,9 @@ export default function AnalysisResultScreen({
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [retrying, setRetrying] = useState(false);
+  // Kept apart from `error`, whose retry re-polls: a queue request that failed
+  // has to be reissued, not polled for.
+  const [retryError, setRetryError] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [labelStatus, setLabelStatus] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -65,6 +68,7 @@ export default function AnalysisResultScreen({
   // once whatever broke it is back: queue a new run and follow that one.
   const retryAnalysis = async () => {
     setRetrying(true);
+    setRetryError(null);
     try {
       const next = await api.reanalyzeConversation(conversationID);
       failures.current = 0;
@@ -74,7 +78,7 @@ export default function AnalysisResultScreen({
       // so nothing would restart the poll loop that the failure ended.
       if (next.id === analysisID) void poll();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'could not queue the analysis again');
+      setRetryError(err instanceof Error ? err.message : 'could not queue the analysis again');
     } finally {
       setRetrying(false);
     }
@@ -125,6 +129,7 @@ export default function AnalysisResultScreen({
         <View style={shared.card}>
           <Text style={shared.heading}>Analysis failed</Text>
           <Text style={shared.body}>{result.error || 'The analyzer could not score this conversation.'}</Text>
+          {retryError ? <Text style={shared.error}>{retryError}</Text> : null}
           <Button
             label="Try again"
             loading={retrying}
