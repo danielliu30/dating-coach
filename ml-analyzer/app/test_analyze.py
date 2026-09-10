@@ -1,13 +1,18 @@
 import asyncio
+import base64
 import json
+import struct
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
+from app.config import Settings
 from app.main import app
-from app.schemas import AnalyzeRequest, Message, Segment
+from app.schemas import AnalyzeRequest, ImageAnalyzeRequest, ImageRef, Message, Segment
 from app.scoring.base import message_range
 from app.scoring.heuristic import HeuristicScorer, review_self_messages
+from app.scoring.image import HeuristicImageScorer, build_image_scorer, image_dimensions
 
 client = TestClient(app)
 
@@ -231,3 +236,56 @@ def test_llm_parse_rejects_drafted_replies() -> None:
     bad = dict(good, overall=dict(good["overall"], improvements=["Try asking: What are you passionate about?"]))
     with pytest.raises(ValueError, match="drafted a reply"):
         scorer._parse(json.dumps(bad), boundaries)
+
+
+def _png_base64(width: int, height: int) -> str:
+    """Minimal PNG header (signature + IHDR) that ``image_dimensions`` can read."""
+    ihdr = struct.pack(">II", width, height) + b"\x08\x02\x00\x00\x00"
+    data = b"\x89PNG\r\n\x1a\n" + struct.pack(">I", 13) + b"IHDR" + ihdr + b"\x00\x00\x00\x00"
+    return base64.b64encode(data).decode()
+
+
+def test_image_ref_requires_exactly_one_source() -> None:
+    """ImageRef accepts url XOR base64 and rejects both/neither."""
+    assert ImageRef(url="https://cdn.example/a.jpg").url
+    assert ImageRef(base64=_png_base64(800, 800)).base64
+    with pytest.raises(ValidationError):
+        ImageRef()
+    with pytest.raises(ValidationError):
+        ImageRef(url="https://cdn.example/a.jpg", base64=_png_base64(800, 800))
+
+
+def test_heuristic_image_scorer_fallback_without_llm_key() -> None:
+    """Without LLM_API_KEY build_image_scorer picks the heuristic, which judges resolution from headers only."""
+    settings = Settings(
+        backend="llm", llm_provider="openai", llm_api_key="", llm_model="m", llm_base_url="u", llm_timeout=1.0, model_dir="", segment_size=4
+    )
+    scorer = build_image_scorer(settings)
+    assert isinstance(scorer, HeuristicImageScorer)
+
+    request = ImageAnalyzeRequest(
+        images=[
+            ImageRef(base64=_png_base64(1200, 900)),
+            ImageRef(base64=_png_base64(200, 150)),
+            ImageRef(url="https://cdn.example/c.jpg"),
+        ],
+        preferences="Someone outdoorsy",
+    )
+    response = asyncio.run(scorer.analyze(request))
+
+    assert response.model_version == "image-heuristic-v1"
+    assert [a.index for a in response.images] == [0, 1, 2]
+    assert response.images[0].is_clear and response.images[0].clarity_score == 1.0
+    assert not response.images[1].is_clear
+    assert response.images[2].clarity_score == 0.5 and "URL" in response.images[2].feedback
+    assert all(a.subject_focus_score == 0.5 for a in response.images)
+    assert "2 of 3 photos pass" in response.overall.summary
+    assert "Someone outdoorsy" in response.overall.summary
+    assert any("focal point" in hint for hint in response.overall.improvements)
+
+
+def test_image_dimensions_reads_jpeg_and_rejects_garbage() -> None:
+    """JPEG SOF0 sizes are parsed; unknown bytes give None."""
+    sof0 = b"\xff\xd8" + b"\xff\xe0" + struct.pack(">H", 4) + b"\x00\x00" + b"\xff\xc0" + struct.pack(">H", 17) + b"\x08" + struct.pack(">HH", 480, 640)
+    assert image_dimensions(sof0) == (640, 480)
+    assert image_dimensions(b"not an image") is None
