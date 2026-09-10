@@ -1,7 +1,9 @@
 package analysis
 
 import (
+	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 
@@ -49,9 +51,8 @@ func (h *Handler) analyzeImages(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxImageBodyBytes)
 	var in ImageInput
-	if err := httpx.Decode(r, &in); err != nil {
+	if err := decodeBounded(w, r, maxImageBodyBytes, &in); err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
 			httpx.Error(w, http.StatusRequestEntityTooLarge, "request body is too large")
@@ -66,6 +67,26 @@ func (h *Handler) analyzeImages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusOK, result)
+}
+
+// decodeBounded reads a JSON body of at most limit bytes into dst, rejecting
+// unknown fields like httpx.Decode and additionally anything after the first
+// value, so trailing junk cannot ride past the size cap. A body over the limit
+// surfaces as *http.MaxBytesError whether the overflow is in the value or
+// after it; any other trailing content is a plain error.
+func decodeBounded(w http.ResponseWriter, r *http.Request, limit int64, dst any) error {
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(dst); err != nil {
+		return err
+	}
+	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return errors.New("unexpected data after JSON body")
+		}
+		return err
+	}
+	return nil
 }
 
 // submit handles POST /conversations: stores the transcript and returns the

@@ -52,14 +52,28 @@ func TestAnalyzeImagesEndpoint(t *testing.T) {
 }
 
 func TestAnalyzeImagesEndpointRejectsOversizedBody(t *testing.T) {
-	ml := &fakeImageAnalyzer{}
-	h := NewHandler(nil, NewImageService(fakeUsers{}, ml))
-	body := `{"images":[{"base64":"` + strings.Repeat("A", int(maxImageBodyBytes)) + `"}]}`
-	rec := postImages(t, h, body, true)
-	if rec.Code != http.StatusRequestEntityTooLarge {
-		t.Fatalf("status %d", rec.Code)
+	valid := `{"images":[{"url":"https://cdn.example/a.jpg"}]}`
+	cases := map[string]struct {
+		body string
+		want int
+	}{
+		"oversized value":           {`{"images":[{"base64":"` + strings.Repeat("A", int(maxImageBodyBytes)) + `"}]}`, http.StatusRequestEntityTooLarge},
+		"oversized trailing junk":   {valid + strings.Repeat(" ", int(maxImageBodyBytes)), http.StatusRequestEntityTooLarge},
+		"second value":              {valid + `{}`, http.StatusBadRequest},
+		"trailing non-whitespace":   {valid + `x`, http.StatusBadRequest},
+		"trailing whitespace is ok": {valid + "\n  \n", http.StatusOK},
 	}
-	if len(ml.got.Images) != 0 {
-		t.Fatal("analyzer was called")
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			ml := &fakeImageAnalyzer{}
+			h := NewHandler(nil, NewImageService(fakeUsers{}, ml))
+			rec := postImages(t, h, tc.body, true)
+			if rec.Code != tc.want {
+				t.Fatalf("status %d, want %d: %s", rec.Code, tc.want, rec.Body)
+			}
+			if called := len(ml.got.Images) != 0; called != (tc.want == http.StatusOK) {
+				t.Fatalf("analyzer called=%v", called)
+			}
+		})
 	}
 }
