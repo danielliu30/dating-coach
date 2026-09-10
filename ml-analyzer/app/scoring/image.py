@@ -76,7 +76,7 @@ class ImageScorer(ABC):
 
 
 def image_dimensions(data: bytes) -> Optional[Tuple[int, int]]:
-    """Read (width, height) from PNG, GIF or baseline/progressive JPEG headers.
+    """Read (width, height) from PNG, GIF, WebP or baseline/progressive JPEG headers.
 
     Returns ``None`` when the bytes are not one of those formats or are truncated
     before the size is known. Pure header parsing: no image library needed.
@@ -87,6 +87,8 @@ def image_dimensions(data: bytes) -> Optional[Tuple[int, int]]:
     if data[:6] in (b"GIF87a", b"GIF89a") and len(data) >= 10:
         width, height = struct.unpack("<HH", data[6:10])
         return width, height
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return _webp_dimensions(data)
     if data[:2] == b"\xff\xd8":
         offset = 2
         while offset + 9 <= len(data):
@@ -101,6 +103,26 @@ def image_dimensions(data: bytes) -> Optional[Tuple[int, int]]:
                 height, width = struct.unpack(">HH", data[offset + 5 : offset + 9])
                 return width, height
             offset += 2 + length
+    return None
+
+
+def _webp_dimensions(data: bytes) -> Optional[Tuple[int, int]]:
+    """Read (width, height) from the first WebP chunk: lossy VP8, lossless VP8L or extended VP8X.
+
+    ``data`` must already start with the RIFF/WEBP container header. Returns
+    ``None`` for a truncated file or an unknown chunk type.
+    """
+    chunk, payload = data[12:16], data[20:]
+    if chunk == b"VP8 " and len(payload) >= 10:
+        width, height = struct.unpack("<HH", payload[6:10])
+        return width & 0x3FFF, height & 0x3FFF
+    if chunk == b"VP8L" and len(payload) >= 5:
+        bits = int.from_bytes(payload[1:5], "little")
+        return (bits & 0x3FFF) + 1, ((bits >> 14) & 0x3FFF) + 1
+    if chunk == b"VP8X" and len(payload) >= 10:
+        width = int.from_bytes(payload[4:7], "little") + 1
+        height = int.from_bytes(payload[7:10], "little") + 1
+        return width, height
     return None
 
 
@@ -121,10 +143,13 @@ class HeuristicImageScorer(ImageScorer):
         assessments = [self._assess(index, image) for index, image in enumerate(request.images)]
         inspected = [a for a, image in zip(assessments, request.images) if image.base64 is not None]
         unclear = [a for a in inspected if not a.is_clear]
-        improvements = [f"Photo {a.index + 1} looks low-resolution or unreadable; a sharper original would help." for a in unclear]
+        improvements = ["Automatic checks cannot confirm you are the focal point of each photo; make sure you are, not a group, pet or scenery."]
         if len(inspected) < len(assessments):
             improvements.append(f"{len(assessments) - len(inspected)} photo(s) were supplied by URL and could not be checked automatically.")
-        improvements.append("Automatic checks cannot confirm you are the focal point of each photo; make sure you are, not a group, pet or scenery.")
+        if len(unclear) > MAX_IMPROVEMENTS - len(improvements):
+            improvements.append(f"{len(unclear)} photos look low-resolution or unreadable; sharper originals would help (see each photo's feedback).")
+        else:
+            improvements.extend(f"Photo {a.index + 1} looks low-resolution or unreadable; a sharper original would help." for a in unclear)
         strengths = [f"Photo {a.index + 1} is a good-resolution original." for a in inspected if a.clarity_score >= 0.8]
         summary = f"{len(inspected) - len(unclear)} of {len(inspected)} inspected photos pass the resolution check."
         if request.preferences:
@@ -132,7 +157,7 @@ class HeuristicImageScorer(ImageScorer):
         return ImageAnalyzeResponse(
             model_version=self.version,
             images=assessments,
-            overall=ImageOverall(summary=summary, strengths=strengths, improvements=improvements[:5]),
+            overall=ImageOverall(summary=summary, strengths=strengths, improvements=improvements[:MAX_IMPROVEMENTS]),
         )
 
     def _assess(self, index: int, image: ImageRef) -> ImageAssessment:

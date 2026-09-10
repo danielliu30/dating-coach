@@ -290,3 +290,29 @@ def test_image_dimensions_reads_jpeg_and_rejects_garbage() -> None:
     sof0 = b"\xff\xd8" + b"\xff\xe0" + struct.pack(">H", 4) + b"\x00\x00" + b"\xff\xc0" + struct.pack(">H", 17) + b"\x08" + struct.pack(">HH", 480, 640)
     assert image_dimensions(sof0) == (640, 480)
     assert image_dimensions(b"not an image") is None
+
+
+def _webp(chunk: bytes, payload: bytes) -> bytes:
+    """RIFF/WEBP container around a single ``chunk`` with ``payload``."""
+    return b"RIFF" + struct.pack("<I", 4 + 8 + len(payload)) + b"WEBP" + chunk + struct.pack("<I", len(payload)) + payload
+
+
+def test_image_dimensions_reads_webp_variants() -> None:
+    """Lossy VP8, lossless VP8L and extended VP8X WebP headers all yield their pixel size."""
+    vp8 = _webp(b"VP8 ", b"\x00" * 6 + struct.pack("<HH", 800, 600))
+    assert image_dimensions(vp8) == (800, 600)
+    bits = (800 - 1) | ((600 - 1) << 14)
+    vp8l = _webp(b"VP8L", b"\x2f" + bits.to_bytes(4, "little"))
+    assert image_dimensions(vp8l) == (800, 600)
+    vp8x = _webp(b"VP8X", b"\x00" * 4 + (800 - 1).to_bytes(3, "little") + (600 - 1).to_bytes(3, "little"))
+    assert image_dimensions(vp8x) == (800, 600)
+    assert image_dimensions(_webp(b"ALPH", b"\x00" * 10)) is None
+
+
+def test_heuristic_image_scorer_keeps_focus_warning_when_many_photos_are_unclear() -> None:
+    """Six unclear photos collapse into one hint so the focal-point caveat is never truncated away."""
+    request = ImageAnalyzeRequest(images=[ImageRef(base64=_png_base64(100, 100)) for _ in range(6)])
+    response = asyncio.run(HeuristicImageScorer().analyze(request))
+    assert len(response.overall.improvements) <= 5
+    assert any("focal point" in hint for hint in response.overall.improvements)
+    assert any("6 photos look low-resolution" in hint for hint in response.overall.improvements)
