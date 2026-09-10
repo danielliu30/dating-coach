@@ -6,6 +6,11 @@ RETURNING *;
 -- name: GetConversation :one
 SELECT * FROM conversations WHERE id = $1;
 
+-- Takes a row lock on the conversation, so a check of its analyses and the
+-- insert that depends on it cannot interleave with a concurrent request.
+-- name: LockConversation :one
+SELECT * FROM conversations WHERE id = $1 FOR UPDATE;
+
 -- name: ListConversationsForUser :many
 SELECT * FROM conversations
 WHERE user_id = $1
@@ -61,6 +66,16 @@ SET status = 'failed',
     error = $2,
     completed_at = now()
 WHERE id = $1
+RETURNING *;
+
+-- Fails a run only while it is still waiting for a worker, so a publish whose
+-- confirmation was lost cannot overwrite a row the worker already claimed.
+-- name: FailPendingAnalysis :one
+UPDATE analysis_results
+SET status = 'failed',
+    error = $2,
+    completed_at = now()
+WHERE id = $1 AND status = 'pending'
 RETURNING *;
 
 -- name: UpsertTrainingExample :one

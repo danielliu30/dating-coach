@@ -29,6 +29,10 @@ const (
 	maxMessageLength  = 4000
 	defaultListLimit  = 25
 	analysisQueueKind = "analysis_ready"
+
+	// Budget for undoing a committed pending row when enqueueing it fails,
+	// which has to outlive the request context that failed.
+	enqueueCleanupTimeout = 5 * time.Second
 )
 
 // Publisher enqueues analysis jobs for the worker. JobPublisher is the RabbitMQ
@@ -181,6 +185,67 @@ func (s *Service) Submit(ctx context.Context, userID uuid.UUID, in SubmitInput) 
 	}
 	if err := s.publisher.Publish(ctx, job); err != nil {
 		failed, failErr := s.queries.FailAnalysis(ctx, db.FailAnalysisParams{ID: result.ID, Error: "could not enqueue analysis"})
+		if failErr != nil {
+			return Result{}, fmt.Errorf("publish job: %w (and mark failed: %v)", err, failErr)
+		}
+		return resultOf(failed), fmt.Errorf("publish job: %w", err)
+	}
+	return resultOf(result), nil
+}
+
+// Reanalyze queues a fresh scoring run for a conversation the user already
+// submitted, so a run that failed for a transient reason (the analyzer being
+// down, a broker hiccup) can be retried without re-pasting the transcript.
+// It returns the pending analysis to poll. A run that is still pending or
+// running is returned as-is instead of being duplicated, so repeated calls
+// enqueue at most one job. Errors are ErrNotFound for an unknown conversation
+// and ErrForbidden when it belongs to someone else.
+func (s *Service) Reanalyze(ctx context.Context, conversationID, userID uuid.UUID) (Result, error) {
+	if _, err := s.ownedConversation(ctx, conversationID, userID); err != nil {
+		return Result{}, err
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Result{}, fmt.Errorf("begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := s.queries.WithTx(tx)
+
+	if _, err := q.LockConversation(ctx, conversationID); err != nil {
+		return Result{}, fmt.Errorf("lock conversation: %w", err)
+	}
+	latest, err := q.GetLatestAnalysisForConversation(ctx, conversationID)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return Result{}, fmt.Errorf("get latest analysis: %w", err)
+	}
+	if err == nil && (latest.Status == "pending" || latest.Status == "running") {
+		return resultOf(latest), nil
+	}
+
+	result, err := q.CreateAnalysisResult(ctx, conversationID)
+	if err != nil {
+		return Result{}, fmt.Errorf("create analysis result: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Result{}, fmt.Errorf("commit transaction: %w", err)
+	}
+
+	job := Job{
+		AnalysisID:     result.ID.String(),
+		ConversationID: conversationID.String(),
+		UserID:         userID.String(),
+	}
+	if err := s.publisher.Publish(ctx, job); err != nil {
+		// The pending row is already committed, so a caller that walked away
+		// mid-publish must not leave it waiting on a job nobody will send. A
+		// lost confirmation is not a lost message though, so the row is only
+		// failed while no worker has claimed it.
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), enqueueCleanupTimeout)
+		defer cancel()
+		failed, failErr := s.queries.FailPendingAnalysis(cleanupCtx, db.FailPendingAnalysisParams{ID: result.ID, Error: "could not enqueue analysis"})
+		if errors.Is(failErr, pgx.ErrNoRows) {
+			return resultOf(result), fmt.Errorf("publish job: %w", err)
+		}
 		if failErr != nil {
 			return Result{}, fmt.Errorf("publish job: %w (and mark failed: %v)", err, failErr)
 		}
