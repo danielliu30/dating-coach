@@ -160,3 +160,15 @@ def test_heuristic_merges_multi_bubble_match_replies() -> None:
     assert reviews[0].reply is not None
     assert reviews[0].reply.position == 1
     assert reviews[0].reply.body == "Great! We hiked every day and found an amazing beach."
+
+
+def test_heuristic_question_in_earlier_bubble_still_counts() -> None:
+    """A match question followed by a second bubble is still a good reply after merging."""
+    reviews = review_self_messages(
+        [
+            Message(position=0, sender="self", body="Just saw the new Dune movie"),
+            Message(position=1, sender="match", body="What did you think?"),
+            Message(position=2, sender="match", body="I loved it."),
+        ]
+    )
+    assert reviews[0].outcome == "good_reply"

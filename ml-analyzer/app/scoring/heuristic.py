@@ -20,6 +20,8 @@ from ..schemas import AnalyzeRequest, AnalyzeResponse, Message, Overall, Segment
 from .base import Scorer, align_segments, chunk, clamp, label_for
 
 OPEN_QUESTION = re.compile(r"\b(what|why|how|where|when|which|who)\b", re.IGNORECASE)
+# A question mark closing a sentence anywhere in the text (merged bubbles keep theirs mid-body).
+ASKS_BACK = re.compile(r"\?(\s|$)")
 LOW_EFFORT = {"hey", "hi", "yo", "lol", "haha", "ok", "okay", "k", "nice", "cool", "hmm", "sup"}
 
 SHORT_REPLY_WORDS = 3
@@ -57,14 +59,15 @@ def _classify_reply(reply: Optional[Message]) -> Outcome:
 
     A missing reply is ``no_reply``. A reply that is low-effort or at most
     ``SHORT_REPLY_WORDS`` words is ``short_reply``. A reply with at least
-    ``GOOD_REPLY_WORDS`` words or that asks a question back is ``good_reply``;
+    ``GOOD_REPLY_WORDS`` words or that asks a question back (a ``?`` ending any
+    sentence, so a question in an earlier bubble still counts) is ``good_reply``;
     anything in between is a plain ``reply``.
     """
     if reply is None:
         return "no_reply"
     if _is_low_effort(reply) or _word_count(reply) <= SHORT_REPLY_WORDS:
         return "short_reply"
-    if _word_count(reply) >= GOOD_REPLY_WORDS or reply.body.strip().endswith("?"):
+    if _word_count(reply) >= GOOD_REPLY_WORDS or ASKS_BACK.search(reply.body):
         return "good_reply"
     return "reply"
 
