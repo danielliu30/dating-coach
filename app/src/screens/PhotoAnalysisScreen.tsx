@@ -5,17 +5,24 @@ import { api } from '../api/client';
 import { MAX_ANALYSIS_IMAGES } from '../api/types';
 import type { ImageAnalysis, ImageAssessment, ImageRef } from '../api/types';
 import { Badge, Button, Field, Screen, ScoreBar } from '../components/ui';
-import { colors, scoreColor, shared } from '../theme';
+import { colors, shared } from '../theme';
 
 const SAMPLE = `https://images.example.com/me/hiking.jpg
 https://images.example.com/me/dinner-with-friends.jpg`;
 
 /**
+ * Absolute http(s) URL with a non-empty host, optionally followed by a
+ * path/query/fragment. A plain regex rather than `new URL` because React
+ * Native's URL polyfill is a thin string wrapper that does not validate.
+ */
+const PHOTO_LINK_RE = /^https?:\/\/[^\s/?#]+(?:[/?#]\S*)?$/i;
+
+/**
  * Parses pasted photo links, one per line, into image refs for the image
- * track. Blank lines are skipped. A line is rejected unless it is an absolute
- * http(s) URL (the server enforces the same), or once more than
- * MAX_ANALYSIS_IMAGES valid lines have been seen. Errors name the 1-based
- * line so the user can fix the exact one.
+ * track. Blank lines are skipped. A line is rejected unless it matches
+ * PHOTO_LINK_RE (the server applies the same scheme/host rule), or once more
+ * than MAX_ANALYSIS_IMAGES valid lines have been seen. Errors name the
+ * 1-based line so the user can fix the exact one.
  */
 export function parsePhotoLinks(raw: string): { images: ImageRef[]; errors: string[] } {
   const images: ImageRef[] = [];
@@ -28,7 +35,7 @@ export function parsePhotoLinks(raw: string): { images: ImageRef[]; errors: stri
       if (!line) {
         return;
       }
-      if (!/^https?:\/\/\S+$/i.test(line)) {
+      if (!PHOTO_LINK_RE.test(line)) {
         errors.push(`Line ${index + 1} is not an http(s) link.`);
         return;
       }
@@ -97,6 +104,8 @@ export default function PhotoAnalysisScreen(): React.ReactElement {
     }
     setBusy(true);
     setError(null);
+    setResult(null);
+    setSubmitted([]);
     try {
       const analysis = await api.analyzeImages({ images: parsed.images });
       setSubmitted(parsed.images);
