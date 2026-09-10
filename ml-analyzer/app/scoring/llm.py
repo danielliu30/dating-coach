@@ -21,13 +21,10 @@ DRAFTING = re.compile(
     r"\b(try (asking|saying|something like)|you could (say|ask|write|reply|respond)|"
     r"(you )?should have (said|asked|written)|say something like|for example[,:]? ask|"
     r"ask (her|him|them) (something like|about)|next time,? (say|ask)|instead,? (say|ask)|"
-    r"consider (asking|saying)|perhaps (say|ask)|reply with|respond with|"
+    r"consider (asking|saying)|perhaps (say|ask)|(you )?(could|should) (reply|respond) with|"
     r"a better (reply|response|message) (would be|is|might be))\b",
     re.IGNORECASE,
 )
-
-# Quoted spans: the prompt requires feedback to quote the customer's own message.
-QUOTED = re.compile(r"\"[^\"]*\"|“[^”]*”")
 
 SYSTEM_PROMPT = """You are a dating-conversation coach reviewing ONLY the messages \
 written by the customer you are coaching. You judge how each of their messages \
@@ -89,7 +86,7 @@ class LLMScorer(Scorer):
 
         try:
             raw = await self._complete(prompt)
-            return self._parse(raw, boundaries)
+            return self._parse(raw, boundaries, [m.body for m in request.messages if m.sender == "self"])
         except Exception:  # noqa: BLE001 - degrade instead of failing the job
             logger.exception("llm scoring failed, falling back to heuristic scorer")
             response = await self._fallback.analyze(request)
@@ -145,7 +142,7 @@ class LLMScorer(Scorer):
             response.raise_for_status()
             return response.json()["choices"][0]["message"]["content"]
 
-    def _parse(self, raw: str, boundaries: List[tuple[int, int]]) -> AnalyzeResponse:
+    def _parse(self, raw: str, boundaries: List[tuple[int, int]], sources: Sequence[str] = ()) -> AnalyzeResponse:
         payload: Dict[str, Any] = json.loads(_strip_fences(raw))
         by_boundary: Dict[tuple[int, int], Segment] = {}
         for item in payload.get("segments", []):
@@ -171,7 +168,7 @@ class LLMScorer(Scorer):
         overall = payload.get("overall", {})
         prose = [s.comment for s in segments] + [str(overall.get("summary", ""))]
         prose += [str(x) for x in overall.get("strengths", [])] + [str(x) for x in overall.get("improvements", [])]
-        _reject_drafting(prose)
+        _reject_drafting(prose, sources)
         scores = [s.engagement_score for s in segments]
         return AnalyzeResponse(
             model_version=self.version,
@@ -187,17 +184,22 @@ class LLMScorer(Scorer):
         )
 
 
-def _reject_drafting(texts: Sequence[str]) -> None:
+def _reject_drafting(texts: Sequence[str], sources: Sequence[str] = ()) -> None:
     """Raise ``ValueError`` if any feedback text drafts a reply for the customer.
 
     A prompt cannot enforce the no-drafting rule, so completions that still
     contain "try asking ..."-style suggestions are treated as failed and the
-    caller falls back to the heuristic scorer, which never drafts. Quoted spans
-    are removed first, since feedback is required to quote the customer's own
-    message and that text is theirs, not the model's advice.
+    caller falls back to the heuristic scorer, which never drafts. Feedback is
+    required to quote the customer's own messages, so every occurrence of a
+    ``sources`` body (case-insensitive, whitespace-normalised) is blanked before
+    scanning: that text is the customer's, not the model's advice. Anything
+    else, quoted or not, is checked.
     """
+    quotes = [re.compile(r"\s+".join(map(re.escape, s.split())), re.IGNORECASE) for s in sources if s.strip()]
     for text in texts:
-        if DRAFTING.search(QUOTED.sub(" ", text)):
+        for quote in quotes:
+            text = quote.sub(" ", text)
+        if DRAFTING.search(text):
             raise ValueError(f"llm drafted a reply for the customer: {text[:80]!r}")
 
 
