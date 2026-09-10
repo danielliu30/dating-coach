@@ -1,11 +1,18 @@
 import asyncio
+import base64
+import json
+import struct
 
+import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
+from app.config import Settings
 from app.main import app
-from app.schemas import AnalyzeRequest, Message, Segment
+from app.schemas import AnalyzeRequest, ImageAnalyzeRequest, ImageRef, Message, Segment
 from app.scoring.base import message_range
-from app.scoring.heuristic import HeuristicScorer
+from app.scoring.heuristic import HeuristicScorer, review_self_messages
+from app.scoring.image import HeuristicImageScorer, build_image_scorer, image_dimensions
 
 client = TestClient(app)
 
@@ -55,8 +62,231 @@ def test_heuristic_feedback_numbers_messages_from_one() -> None:
     )
     response = asyncio.run(HeuristicScorer(segment_size=2).analyze(request))
 
-    prose = response.overall.strengths + response.overall.improvements
-    assert "Messages 3-4 carried the conversation best." in prose
-    assert "Messages 1-2 stalled — ask an open question there." in prose
+    prose = "\n".join(response.overall.strengths + response.overall.improvements)
+    assert "Message 3 landed" in prose
+    assert "Message 1 ('Hey') only drew a short reply ('hi')" in prose
     # The wire contract stays 0-based whatever the prose says.
     assert [(s.start_position, s.end_position) for s in response.segments] == [(0, 1), (2, 3)]
+
+
+def test_heuristic_reviews_only_self_messages() -> None:
+    """Only the customer's messages are reviewed; the match's replies are evidence, never the subject."""
+    messages = [
+        Message(position=0, sender="self", body="What made you pick that hiking trail?"),
+        Message(position=1, sender="match", body="My sister said the ridge views are worth it, have you been?"),
+        Message(position=2, sender="self", body="Nice"),
+        Message(position=3, sender="match", body="ok"),
+        Message(position=4, sender="self", body="So what are you up to this weekend?"),
+        Message(position=5, sender="self", body="Hello?"),
+    ]
+    reviews = review_self_messages(messages)
+
+    assert [r.message.position for r in reviews] == [0, 2, 4, 5]
+    assert [r.outcome for r in reviews] == ["good_reply", "short_reply", "no_reply", "no_reply"]
+    assert reviews[0].score > reviews[1].score > reviews[2].score
+
+
+def test_heuristic_feedback_hints_without_drafting_replies() -> None:
+    """Improvements flag no-reply / short-reply messages as hints and never tell the customer what to say."""
+    request = AnalyzeRequest(
+        conversation_id="conv-4",
+        preferences="something serious, ideally with a fellow climber",
+        messages=[
+            Message(position=0, sender="self", body="What made you pick that hiking trail?"),
+            Message(position=1, sender="match", body="My sister said the ridge views are worth it, have you been?"),
+            Message(position=2, sender="self", body="Nice"),
+            Message(position=3, sender="match", body="ok"),
+            Message(position=4, sender="self", body="So what are you up to this weekend?"),
+        ],
+    )
+    response = asyncio.run(HeuristicScorer(segment_size=2).analyze(request))
+
+    assert response.overall.strengths == ["Message 1 landed: it drew a detailed reply ('My sister said the ridge views are wort…')."]
+    assert response.overall.improvements == [
+        "Message 3 ('Nice') only drew a short reply ('ok') — it may not have given them much to engage with.",
+        "Message 5 ('So what are you up to this weekend?') got no reply — worth a look at what made it hard to answer.",
+    ]
+    for hint in response.overall.improvements:
+        assert "ask" not in hint.lower() and "say" not in hint.lower()
+    assert "fellow climber" in response.overall.summary
+
+
+def test_heuristic_match_only_stretch_is_neutral() -> None:
+    """A window with none of the customer's messages is reported as neutral context, not scored."""
+    request = AnalyzeRequest(
+        conversation_id="conv-5",
+        messages=[
+            Message(position=0, sender="match", body="Hey there, how was the concert last night?"),
+            Message(position=1, sender="match", body="I heard the opener was great"),
+        ],
+    )
+    response = asyncio.run(HeuristicScorer(segment_size=2).analyze(request))
+
+    assert response.segments[0].engagement_score == 0.5
+    assert response.segments[0].comment == "No messages from you in this stretch; the match was carrying it."
+    assert response.overall.strengths == [] and response.overall.improvements == []
+
+
+def test_analyze_request_preferences_are_optional() -> None:
+    """``preferences`` is accepted when present and defaults to None so existing callers keep working."""
+    base = {"conversation_id": "conv-3", "messages": [{"position": 0, "sender": "self", "body": "Hey"}]}
+    assert AnalyzeRequest(**base).preferences is None
+    tailored = AnalyzeRequest(**base, preferences="Looking for something long-term, loves hiking")
+    assert tailored.preferences == "Looking for something long-term, loves hiking"
+    assert client.post("/analyze", json=tailored.model_dump()).status_code == 200
+
+
+def test_heuristic_wording_follows_outcomes_not_scores() -> None:
+    """A plain reply lifted above 0.66 by wording bonuses is still not described as detailed/landing."""
+    request = AnalyzeRequest(
+        conversation_id="conv-7",
+        messages=[
+            Message(position=0, sender="self", body="What are your favorite ways to spend a free weekend?"),
+            Message(position=1, sender="match", body="I usually go hiking with friends."),
+        ],
+    )
+    response = asyncio.run(HeuristicScorer(segment_size=2).analyze(request))
+
+    assert response.segments[0].engagement_score >= 0.66
+    assert response.segments[0].comment == "Your messages here got replies, but none of them detailed ones."
+    assert response.overall.summary.startswith("Mixed results: 0 of your 1 messages drew a detailed reply")
+    assert response.overall.strengths == []
+
+
+def test_heuristic_merges_multi_bubble_match_replies() -> None:
+    """Consecutive match bubbles count as one reply, so 'Great!' + a detailed follow-up is a good reply."""
+    reviews = review_self_messages(
+        [
+            Message(position=0, sender="self", body="How was your trip?"),
+            Message(position=1, sender="match", body="Great!"),
+            Message(position=2, sender="match", body="We hiked every day and found an amazing beach."),
+            Message(position=3, sender="self", body="That sounds incredible"),
+        ]
+    )
+    assert [r.outcome for r in reviews] == ["good_reply", "no_reply"]
+    assert reviews[0].reply is not None
+    assert reviews[0].reply.position == 1
+    assert reviews[0].reply.body == "Great! We hiked every day and found an amazing beach."
+
+
+def test_heuristic_question_in_earlier_bubble_still_counts() -> None:
+    """A match question followed by a second bubble is still a good reply after merging."""
+    reviews = review_self_messages(
+        [
+            Message(position=0, sender="self", body="Just saw the new Dune movie"),
+            Message(position=1, sender="match", body="What did you think?"),
+            Message(position=2, sender="match", body="I loved it."),
+        ]
+    )
+    assert reviews[0].outcome == "good_reply"
+
+
+def test_llm_prompt_reviews_only_self_messages_and_never_drafts() -> None:
+    """The LLM prompt lists only the customer's messages with their outcomes, carries preferences, and forbids drafting replies."""
+    from app.config import Settings
+    from app.scoring.llm import SYSTEM_PROMPT, LLMScorer, self_message_digest
+
+    messages = [
+        Message(position=0, sender="self", body="What made you pick that hiking trail?"),
+        Message(position=1, sender="match", body="My sister said the ridge views are worth it, have you been?"),
+        Message(position=2, sender="self", body="Nice"),
+        Message(position=3, sender="match", body="ok"),
+        Message(position=4, sender="self", body="Weekend plans?"),
+    ]
+    digest = self_message_digest(messages)
+    assert digest.splitlines()[::2] == [
+        "#1 self: What made you pick that hiking trail?",
+        "#3 self: Nice",
+        "#5 self: Weekend plans?",
+    ]
+    assert "-> good reply: My sister said" in digest
+    assert "-> short reply: ok" in digest
+    assert "-> no reply" in digest
+
+    settings = Settings(
+        backend="llm", llm_provider="openai", llm_api_key="k", llm_model="m", llm_base_url="http://x",
+        llm_timeout=1.0, model_dir="", segment_size=2,
+    )
+    request = AnalyzeRequest(conversation_id="conv-6", preferences="a fellow climber", messages=messages)
+    prompt = LLMScorer(settings)._user_prompt(request, [(0, 1), (2, 3), (4, 4)])
+    assert "What the customer is looking for: a fellow climber" in prompt
+    assert "Customer messages to review" in prompt
+
+    assert 'Evaluate ONLY messages from "self"' in SYSTEM_PROMPT
+    assert "NEVER suggest, draft or rewrite what the customer should say" in SYSTEM_PROMPT
+
+
+def test_llm_parse_rejects_drafted_replies() -> None:
+    """A completion that drafts what the customer should say is a failed completion (triggers the fallback)."""
+    from app.config import Settings
+    from app.scoring.llm import LLMScorer
+
+    settings = Settings(
+        backend="llm", llm_provider="openai", llm_api_key="k", llm_model="m", llm_base_url="http://x",
+        llm_timeout=1.0, model_dir="", segment_size=2,
+    )
+    scorer = LLMScorer(settings)
+    boundaries = [(0, 1)]
+    good = {
+        "segments": [{"start_position": 0, "end_position": 1, "engagement_score": 0.7, "comment": "Message 1 drew a detailed reply."}],
+        "overall": {"engagement_score": 0.7, "summary": "Landing well.", "strengths": ["Message 1 landed."], "improvements": []},
+    }
+    assert scorer._parse(json.dumps(good), boundaries).overall.strengths == ["Message 1 landed."]
+
+    bad = dict(good, overall=dict(good["overall"], improvements=["Try asking: What are you passionate about?"]))
+    with pytest.raises(ValueError, match="drafted a reply"):
+        scorer._parse(json.dumps(bad), boundaries)
+
+
+def _png_base64(width: int, height: int) -> str:
+    """Minimal PNG header (signature + IHDR) that ``image_dimensions`` can read."""
+    ihdr = struct.pack(">II", width, height) + b"\x08\x02\x00\x00\x00"
+    data = b"\x89PNG\r\n\x1a\n" + struct.pack(">I", 13) + b"IHDR" + ihdr + b"\x00\x00\x00\x00"
+    return base64.b64encode(data).decode()
+
+
+def test_image_ref_requires_exactly_one_source() -> None:
+    """ImageRef accepts url XOR base64 and rejects both/neither."""
+    assert ImageRef(url="https://cdn.example/a.jpg").url
+    assert ImageRef(base64=_png_base64(800, 800)).base64
+    with pytest.raises(ValidationError):
+        ImageRef()
+    with pytest.raises(ValidationError):
+        ImageRef(url="https://cdn.example/a.jpg", base64=_png_base64(800, 800))
+
+
+def test_heuristic_image_scorer_fallback_without_llm_key() -> None:
+    """Without LLM_API_KEY build_image_scorer picks the heuristic, which judges resolution from headers only."""
+    settings = Settings(
+        backend="llm", llm_provider="openai", llm_api_key="", llm_model="m", llm_base_url="u", llm_timeout=1.0, model_dir="", segment_size=4
+    )
+    scorer = build_image_scorer(settings)
+    assert isinstance(scorer, HeuristicImageScorer)
+
+    request = ImageAnalyzeRequest(
+        images=[
+            ImageRef(base64=_png_base64(1200, 900)),
+            ImageRef(base64=_png_base64(200, 150)),
+            ImageRef(url="https://cdn.example/c.jpg"),
+        ],
+        preferences="Someone outdoorsy",
+    )
+    response = asyncio.run(scorer.analyze(request))
+
+    assert response.model_version == "image-heuristic-v1"
+    assert [a.index for a in response.images] == [0, 1, 2]
+    assert response.images[0].is_clear and response.images[0].clarity_score == 1.0
+    assert not response.images[1].is_clear
+    assert response.images[2].clarity_score == 0.5 and "URL" in response.images[2].feedback
+    assert all(a.subject_focus_score == 0.5 for a in response.images)
+    assert "1 of 2 inspected photos pass" in response.overall.summary
+    assert any("supplied by URL" in hint for hint in response.overall.improvements)
+    assert "Someone outdoorsy" in response.overall.summary
+    assert any("focal point" in hint for hint in response.overall.improvements)
+
+
+def test_image_dimensions_reads_jpeg_and_rejects_garbage() -> None:
+    """JPEG SOF0 sizes are parsed; unknown bytes give None."""
+    sof0 = b"\xff\xd8" + b"\xff\xe0" + struct.pack(">H", 4) + b"\x00\x00" + b"\xff\xc0" + struct.pack(">H", 17) + b"\x08" + struct.pack(">HH", 480, 640)
+    assert image_dimensions(sof0) == (640, 480)
+    assert image_dimensions(b"not an image") is None
