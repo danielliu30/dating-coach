@@ -172,3 +172,38 @@ def test_heuristic_question_in_earlier_bubble_still_counts() -> None:
         ]
     )
     assert reviews[0].outcome == "good_reply"
+
+
+def test_llm_prompt_reviews_only_self_messages_and_never_drafts() -> None:
+    """The LLM prompt lists only the customer's messages with their outcomes, carries preferences, and forbids drafting replies."""
+    from app.config import Settings
+    from app.scoring.llm import SYSTEM_PROMPT, LLMScorer, self_message_digest
+
+    messages = [
+        Message(position=0, sender="self", body="What made you pick that hiking trail?"),
+        Message(position=1, sender="match", body="My sister said the ridge views are worth it, have you been?"),
+        Message(position=2, sender="self", body="Nice"),
+        Message(position=3, sender="match", body="ok"),
+        Message(position=4, sender="self", body="Weekend plans?"),
+    ]
+    digest = self_message_digest(messages)
+    assert digest.splitlines()[::2] == [
+        "#1 self: What made you pick that hiking trail?",
+        "#3 self: Nice",
+        "#5 self: Weekend plans?",
+    ]
+    assert "-> good reply: My sister said" in digest
+    assert "-> short reply: ok" in digest
+    assert "-> no reply" in digest
+
+    settings = Settings(
+        backend="llm", llm_provider="openai", llm_api_key="k", llm_model="m", llm_base_url="http://x",
+        llm_timeout=1.0, model_dir="", segment_size=2,
+    )
+    request = AnalyzeRequest(conversation_id="conv-6", preferences="a fellow climber", messages=messages)
+    prompt = LLMScorer(settings)._user_prompt(request, [(0, 1), (2, 3), (4, 4)])
+    assert "What the customer is looking for: a fellow climber" in prompt
+    assert "Customer messages to review" in prompt
+
+    assert 'Evaluate ONLY messages from "self"' in SYSTEM_PROMPT
+    assert "NEVER suggest, draft or rewrite what the customer should say" in SYSTEM_PROMPT
