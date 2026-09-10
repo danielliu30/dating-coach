@@ -21,14 +21,15 @@ DRAFTING = re.compile(
     r"\b(try (asking|saying|something like)|you could (say|ask|write|reply|respond)|"
     r"(you )?should have (said|asked|written)|say something like|for example[,:]? ask|"
     r"ask (her|him|them) (something like|about)|next time,? (say|ask)|instead,? (say|ask)|"
-    r"consider (asking|saying)|perhaps (say|ask)|(you )?(could|should) (reply|respond) with|"
+    r"consider (asking|saying)|perhaps (say|ask)|you (could|should) (reply|respond) with|"
     r"a better (reply|response|message) (would be|is|might be))\b",
     re.IGNORECASE,
 )
 
-# A quoted span in feedback; the contents may be customer text (exempt) or the model's own words (checked).
-# Lookahead so overlapping candidates are all seen, e.g. the inner quote of ``"She said "hi there""``.
-QUOTED = re.compile(r"(?=([\"\u201c]([^\"\u201c\u201d]+)[\"\u201d]))")
+# Where a citation of the customer's message may start: the ``Message N`` reference the prompt
+# requires, then an opening quote, e.g. ``Message 3 ("...")``. Group 1 is the opening quote.
+CITATION_START = re.compile(r"message\s+\d+\W{0,4}?([\"\u201c])", re.IGNORECASE)
+CLOSING_QUOTE = re.compile(r"[\"\u201d]")
 # Shortest quotation that can be exempted from the drafting scan.
 MIN_QUOTE_WORDS = 3
 
@@ -196,26 +197,38 @@ def _reject_drafting(texts: Sequence[str], sources: Sequence[str] = ()) -> None:
     A prompt cannot enforce the no-drafting rule, so completions that still
     contain "try asking ..."-style suggestions are treated as failed and the
     caller falls back to the heuristic scorer, which never drafts. Feedback is
-    required to quote the customer's own messages briefly, so a quoted span is
-    blanked before scanning only when it is provably theirs: at least
-    ``MIN_QUOTE_WORDS`` long and, case- and whitespace-insensitively, a
+    required to name and quote the customer's own messages briefly, so a quoted
+    span is blanked before scanning only when it is provably a citation: it
+    directly follows a ``Message N`` reference (``CITATION_LEAD``), is at least
+    ``MIN_QUOTE_WORDS`` long and is, case- and whitespace-insensitively, a
     substring of one of the ``sources`` bodies. Everything else, including
     unquoted text that happens to echo a short customer message and quoted
-    text the model wrote itself, is checked.
+    text the model wrote itself (even when it reuses the customer's words), is
+    checked.
     """
     normalised_sources = [_squash(s) for s in sources if s.strip()]
 
-    def is_customer_quote(inner: str) -> bool:
-        inner = _squash(inner)
-        return len(inner.split()) >= MIN_QUOTE_WORDS and any(inner in s for s in normalised_sources)
+    def citation_end(text: str, start: int) -> Optional[int]:
+        """Index just past the longest closing quote after ``start`` whose contents are a customer quote, else ``None``.
+
+        Trying every closing quote (longest first) lets a customer message that
+        itself contains quotes be cited whole.
+        """
+        for closing in reversed(list(CLOSING_QUOTE.finditer(text, start + 1))):
+            inner = _squash(text[start + 1 : closing.start()])
+            if len(inner.split()) >= MIN_QUOTE_WORDS and any(inner in s for s in normalised_sources):
+                return closing.end()
+        return None
 
     for text in texts:
         scanned, cursor = [], 0
-        for match in QUOTED.finditer(text):
-            if match.start() < cursor or not is_customer_quote(match.group(2)):
+        for match in CITATION_START.finditer(text):
+            start = match.start(1)
+            end = citation_end(text, start) if start >= cursor else None
+            if end is None:
                 continue
-            scanned.append(text[cursor : match.start()] + " ")
-            cursor = match.start() + len(match.group(1))
+            scanned.append(text[cursor:start] + " ")
+            cursor = end
         scanned.append(text[cursor:])
         if DRAFTING.search("".join(scanned)):
             raise ValueError(f"llm drafted a reply for the customer: {text[:80]!r}")

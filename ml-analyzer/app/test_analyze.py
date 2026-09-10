@@ -252,6 +252,7 @@ def test_llm_parse_rejects_drafted_replies() -> None:
         'Message 3 (\u201cyou could  say I\'m obsessed\u201d) got no reply.',
         'Message 4 ("She said "you could ask him about work"") drew a short reply.',
         "Message 3 did not invite the match to respond with much detail.",
+        "Message 2 was so narrow the match could respond with only yes or no.",
     ):
         quoted = dict(good, overall=dict(good["overall"], improvements=[fine]))
         assert scorer._parse(json.dumps(quoted), boundaries, sources).overall.improvements == [fine]
@@ -260,6 +261,7 @@ def test_llm_parse_rejects_drafted_replies() -> None:
         'Message 3 was terse; "Ask her about the trip."',
         "You could say hello to restart things.",
         'Message 5 ("say") was one word; you could say more next time.',
+        'A stronger answer is "you could ask him about work".',
     ):
         bad = dict(good, overall=dict(good["overall"], improvements=[disguised]))
         with pytest.raises(ValueError, match="drafted a reply"):
