@@ -71,6 +71,14 @@ export default function AccountScreen(): React.ReactElement {
   const savedStrong = user?.phases_strong ?? [];
   const savedWorking = user?.phases_working_on ?? [];
   const savedPreferences = user?.dating_preferences ?? '';
+  // A snapshot from before dating_preferences existed does not say what the
+  // server holds, and the save below PATCHes every field, so saving from it
+  // would blank the server's value. Re-fetch the profile first and keep Save
+  // off until it lands.
+  const preferencesUnknown = user !== null && user.dating_preferences === undefined;
+  useEffect(() => {
+    if (preferencesUnknown) void refresh().catch(() => undefined);
+  }, [preferencesUnknown, refresh]);
 
   const [styles, setStyles] = useState<DatingStyle[]>(savedStyles);
   const [strong, setStrong] = useState<DatingPhase[]>(savedStrong);
@@ -249,7 +257,15 @@ export default function AccountScreen(): React.ReactElement {
         />
         {saveError ? <Text style={shared.error}>{saveError}</Text> : null}
         {savedAt && !dirty ? <Text style={shared.muted}>Saved.</Text> : null}
-        <Button label="Save dating profile" disabled={!dirty} loading={saving} onPress={() => void save()} />
+        {preferencesUnknown ? (
+          <Text style={shared.muted}>Refreshing your profile before changes can be saved…</Text>
+        ) : null}
+        <Button
+          label="Save dating profile"
+          disabled={!dirty || preferencesUnknown}
+          loading={saving}
+          onPress={() => void save()}
+        />
       </View>
 
       <Button label="Refresh profile" variant="secondary" onPress={() => void refresh()} />
