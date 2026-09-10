@@ -63,6 +63,9 @@ func TestPrivateRoutesRejectVerifyScope(t *testing.T) {
 		{http.MethodGet, "/api/v1/chat/coach/threads"},
 		{http.MethodGet, "/api/v1/analysis/conversations"},
 		{http.MethodPost, "/api/v1/analysis/conversations"},
+		// An unparsable id keeps the request in the handler's own validation,
+		// so the unbacked service is never called.
+		{http.MethodPost, "/api/v1/analysis/conversations/not-a-uuid/reanalyze"},
 		{http.MethodGet, "/api/v1/coach/sessions"},
 		{http.MethodPut, "/api/v1/coach/profile"},
 	} {

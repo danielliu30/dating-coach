@@ -29,6 +29,7 @@ func (h *Handler) Routes() http.Handler {
 	r.Post("/conversations", h.submit)
 	r.Get("/conversations", h.listConversations)
 	r.Get("/conversations/{conversationID}/result", h.latestResult)
+	r.Post("/conversations/{conversationID}/reanalyze", h.reanalyze)
 	r.Post("/conversations/{conversationID}/label", h.label)
 	r.Get("/results/{analysisID}", h.result)
 	return r
@@ -49,6 +50,26 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 	result, err := h.svc.Submit(r.Context(), principal.UserID, in)
 	if err != nil {
 		respondErr(w, err, "could not submit conversation")
+		return
+	}
+	httpx.JSON(w, http.StatusAccepted, result)
+}
+
+// reanalyze handles POST /conversations/{conversationID}/reanalyze: queues a
+// new scoring run for an already submitted transcript and answers with the
+// pending analysis to poll.
+func (h *Handler) reanalyze(w http.ResponseWriter, r *http.Request) {
+	principal, ok := principalOf(w, r)
+	if !ok {
+		return
+	}
+	conversationID, ok := pathUUID(w, r, "conversationID")
+	if !ok {
+		return
+	}
+	result, err := h.svc.Reanalyze(r.Context(), conversationID, principal.UserID)
+	if err != nil {
+		respondErr(w, err, "could not queue the analysis again")
 		return
 	}
 	httpx.JSON(w, http.StatusAccepted, result)

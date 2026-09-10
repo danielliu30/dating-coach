@@ -189,6 +189,44 @@ func (s *Service) Submit(ctx context.Context, userID uuid.UUID, in SubmitInput) 
 	return resultOf(result), nil
 }
 
+// Reanalyze queues a fresh scoring run for a conversation the user already
+// submitted, so a run that failed for a transient reason (the analyzer being
+// down, a broker hiccup) can be retried without re-pasting the transcript.
+// It returns the pending analysis to poll. A run that is still pending or
+// running is returned as-is instead of being duplicated, so repeated calls
+// enqueue at most one job. Errors are ErrNotFound for an unknown conversation
+// and ErrForbidden when it belongs to someone else.
+func (s *Service) Reanalyze(ctx context.Context, conversationID, userID uuid.UUID) (Result, error) {
+	if _, err := s.ownedConversation(ctx, conversationID, userID); err != nil {
+		return Result{}, err
+	}
+	latest, err := s.queries.GetLatestAnalysisForConversation(ctx, conversationID)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return Result{}, fmt.Errorf("get latest analysis: %w", err)
+	}
+	if err == nil && (latest.Status == "pending" || latest.Status == "running") {
+		return resultOf(latest), nil
+	}
+
+	result, err := s.queries.CreateAnalysisResult(ctx, conversationID)
+	if err != nil {
+		return Result{}, fmt.Errorf("create analysis result: %w", err)
+	}
+	job := Job{
+		AnalysisID:     result.ID.String(),
+		ConversationID: conversationID.String(),
+		UserID:         userID.String(),
+	}
+	if err := s.publisher.Publish(ctx, job); err != nil {
+		failed, failErr := s.queries.FailAnalysis(ctx, db.FailAnalysisParams{ID: result.ID, Error: "could not enqueue analysis"})
+		if failErr != nil {
+			return Result{}, fmt.Errorf("publish job: %w (and mark failed: %v)", err, failErr)
+		}
+		return resultOf(failed), fmt.Errorf("publish job: %w", err)
+	}
+	return resultOf(result), nil
+}
+
 // Get returns one analysis by ID, provided userID owns its conversation.
 func (s *Service) Get(ctx context.Context, analysisID, userID uuid.UUID) (Result, error) {
 	result, err := s.queries.GetAnalysisResult(ctx, analysisID)
