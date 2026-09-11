@@ -70,10 +70,17 @@ export const gradients = {
   dawnSurface: [colors.surface, colors.surfaceAlt] as const,
 };
 
+/** `#rrggbb` → `rgba(r, g, b, alpha)` for CSS shadows; other formats are returned unchanged. */
+const rgba = (hex: string, alpha: number): string => {
+  const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
+  if (!m) return hex;
+  return `rgba(${parseInt(m[1], 16)}, ${parseInt(m[2], 16)}, ${parseInt(m[3], 16)}, ${alpha})`;
+};
+
 /**
  * Builds a cross-platform shadow style. Android only honours `elevation`
- * (scaled from `level`), so `opacity`/`radius`/`offsetY` apply to iOS and web
- * (react-native-web maps them to `box-shadow`). Returns a spreadable style;
+ * (scaled from `level`); iOS gets the `shadow*` props and web a CSS
+ * `boxShadow` built from the same values. Returns a spreadable style;
  * callers with `overflow: 'hidden'` clip their own shadow on iOS.
  */
 const elevate = (
@@ -87,6 +94,7 @@ const elevate = (
 ): ViewStyle =>
   Platform.select<ViewStyle>({
     android: { elevation: level * 2, shadowColor },
+    web: { boxShadow: `0 ${offsetY}px ${radius}px ${rgba(shadowColor, opacity)}` },
     default: {
       shadowColor,
       shadowOffset: { width: 0, height: offsetY },

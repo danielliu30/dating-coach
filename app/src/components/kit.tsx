@@ -124,8 +124,8 @@ export function PageHeader({
         end={{ x: 1, y: 1 }}
         style={styles.headerGradient}
       />
-      <View pointerEvents="none" style={styles.headerOrb} />
-      <View pointerEvents="none" style={styles.headerOrbSmall} />
+      <View style={styles.headerOrb} />
+      <View style={styles.headerOrbSmall} />
       <View style={styles.headerRow}>
         <View style={{ flex: 1, gap: 6 }}>
           {eyebrow ? <Text style={styles.headerEyebrow}>{eyebrow}</Text> : null}
@@ -191,7 +191,9 @@ export function StatTile({
         <Ionicons name={icon} size={16} color={h.fg} />
       </View>
       <Text style={styles.statValue}>{value}</Text>
-      <Text style={styles.statLabel}>{label}</Text>
+      <Text style={styles.statLabel} numberOfLines={1} adjustsFontSizeToFit>
+        {label}
+      </Text>
     </View>
   );
 }
@@ -380,7 +382,7 @@ export function GradientCard({
         end={{ x: 1, y: 1 }}
         style={styles.fill}
       />
-      <View pointerEvents="none" style={styles.gradientOrb} />
+      <View style={styles.gradientOrb} />
       <View style={{ gap: 10 }}>{children}</View>
     </View>
   );
@@ -408,6 +410,7 @@ const styles = StyleSheet.create({
   },
   headerGradient: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, opacity: 0.95 },
   headerOrb: {
+    pointerEvents: 'none',
     position: 'absolute',
     right: -60,
     top: -80,
@@ -417,6 +420,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.18)',
   },
   headerOrbSmall: {
+    pointerEvents: 'none',
     position: 'absolute',
     left: -30,
     bottom: -70,
@@ -484,6 +488,7 @@ const styles = StyleSheet.create({
   divider: { height: StyleSheet.hairlineWidth, backgroundColor: colors.border },
   gradientCard: { borderRadius: radii.xl, padding: 22, overflow: 'hidden', ...elevation.mid },
   gradientOrb: {
+    pointerEvents: 'none',
     position: 'absolute',
     right: -50,
     bottom: -60,

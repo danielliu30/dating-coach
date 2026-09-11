@@ -39,8 +39,8 @@ export function Screen({
   );
   return (
     <SafeAreaView style={shared.screen} edges={['top', 'left', 'right']}>
-      <View pointerEvents="none" style={styles.screenGlow} />
-      <View pointerEvents="none" style={styles.screenGlowSage} />
+      <View style={styles.screenGlow} />
+      <View style={styles.screenGlowSage} />
       {body}
     </SafeAreaView>
   );
@@ -81,7 +81,6 @@ export function Button({
     >
       {isPrimary ? (
         <LinearGradient
-          pointerEvents="none"
           colors={gradients.primary}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 1 }}
@@ -254,6 +253,7 @@ export function Empty({ text, icon = 'leaf-outline' }: { text: string; icon?: Ic
 
 const styles = StyleSheet.create({
   screenGlow: {
+    pointerEvents: 'none',
     position: 'absolute',
     top: -160,
     right: -120,
@@ -264,6 +264,7 @@ const styles = StyleSheet.create({
     opacity: 0.7,
   },
   screenGlowSage: {
+    pointerEvents: 'none',
     position: 'absolute',
     top: 40,
     left: -180,
@@ -282,7 +283,7 @@ const styles = StyleSheet.create({
     minHeight: 52,
     overflow: 'hidden',
   },
-  buttonGradient: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
+  buttonGradient: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, pointerEvents: 'none' },
   buttonInner: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   buttonPrimary: { backgroundColor: colors.primary },
   buttonSecondary: {
