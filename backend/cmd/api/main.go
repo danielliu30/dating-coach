@@ -95,7 +95,10 @@ func run() error {
 	// until their next scheduled re-check; this closes them as it happens.
 	go auth.WatchRevocations(ctx, rdb, hub.EndSessions)
 	chatHandler := chat.NewHandler(chat.NewService(pg.Queries, hub), hub, pg.Queries, cfg.CORSOrigins)
-	analysisHandler := analysis.NewHandler(analysis.NewService(pg.Pool, pg.Queries, queue))
+	analysisHandler := analysis.NewHandler(
+		analysis.NewService(pg.Pool, pg.Queries, queue),
+		analysis.NewImageService(pg.Queries, analysis.NewMLClient(cfg.MLServiceURL, cfg.MLServiceTimeout)),
+	)
 
 	router := newRouter(cfg, auth.Middleware(issuer), handlers{
 		auth:     authHandler,
