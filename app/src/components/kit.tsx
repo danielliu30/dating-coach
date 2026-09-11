@@ -191,9 +191,7 @@ export function StatTile({
         <Ionicons name={icon} size={16} color={h.fg} />
       </View>
       <Text style={styles.statValue}>{value}</Text>
-      <Text style={styles.statLabel} numberOfLines={1} adjustsFontSizeToFit>
-        {label}
-      </Text>
+      <Text style={styles.statLabel}>{label}</Text>
     </View>
   );
 }
@@ -435,9 +433,10 @@ const styles = StyleSheet.create({
   headerSubtitle: { ...type.body, color: 'rgba(255,255,255,0.9)' },
   sectionHeader: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 2, marginTop: 4 },
   sectionAction: { fontFamily: fonts.sansBold, fontSize: 14, color: colors.primaryDeep },
-  statRow: { flexDirection: 'row', gap: 10 },
+  statRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   stat: {
-    flex: 1,
+    flexGrow: 1,
+    flexBasis: 140,
     backgroundColor: colors.surface,
     borderRadius: radii.lg,
     padding: 14,
