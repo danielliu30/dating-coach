@@ -10,6 +10,8 @@ import type {
   CoachingSession,
   Conversation,
   DatingProfileInput,
+  ImageAnalysis,
+  ImageAnalyzeInput,
   Outcome,
   Profile,
   Role,
@@ -396,6 +398,15 @@ export class ApiClient {
       'GET',
       `/analysis/conversations/${conversationID}/result`,
     );
+  }
+
+  /**
+   * Runs the image track on 1-10 profile photos and resolves with the verdict.
+   * Synchronous and unstored: there is no ID to poll and the photos are not
+   * kept. The server tailors feedback to the caller's saved dating_preferences.
+   */
+  analyzeImages(input: ImageAnalyzeInput) {
+    return this.request<ImageAnalysis>('POST', '/analysis/images', input);
   }
 
   labelConversation(
