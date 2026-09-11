@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -436,6 +437,19 @@ func TestNormaliseChoicesCanonicalisesAndRejectsUnknown(t *testing.T) {
 	}
 	if _, err := normaliseChoices("dating_styles", []string{"carrier_pigeon"}, DatingStyles); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("unknown value: got %v, want ErrInvalidInput", err)
+	}
+}
+
+// TestUpdateDatingProfileRejectsOverlongPreferences pins the free-text cap:
+// the ML analyzer refuses longer preferences, so the API must too, before any
+// query runs.
+func TestUpdateDatingProfileRejectsOverlongPreferences(t *testing.T) {
+	svc := &Service{}
+	_, err := svc.UpdateDatingProfile(context.Background(), Principal{}, DatingProfileInput{
+		DatingPreferences: strings.Repeat("é", MaxDatingPreferencesLen+1),
+	})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("got %v, want ErrInvalidInput", err)
 	}
 }
 
