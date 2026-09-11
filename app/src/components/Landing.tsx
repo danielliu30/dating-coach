@@ -14,14 +14,24 @@ const IMAGES = {
 };
 
 const JOURNEY: { icon: IconName; label: string }[] = [
-  { icon: 'person-circle-outline', label: 'Create a profile' },
-  { icon: 'sparkles-outline', label: 'Get matches' },
-  { icon: 'chatbubbles-outline', label: 'Have conversations' },
-  { icon: 'calendar-outline', label: 'Get a date' },
-  { icon: 'cafe-outline', label: 'Go on the date' },
-  { icon: 'mail-open-outline', label: 'Follow up' },
-  { icon: 'repeat-outline', label: 'Go on more dates' },
-  { icon: 'heart-outline', label: 'Build a relationship' },
+  { icon: 'compass-outline', label: 'Understand what you want' },
+  { icon: 'people-outline', label: 'Meet people' },
+  { icon: 'hand-right-outline', label: 'Choose who to pursue' },
+  { icon: 'chatbubbles-outline', label: 'Connect' },
+  { icon: 'cafe-outline', label: 'Date' },
+  { icon: 'journal-outline', label: 'Reflect' },
+  { icon: 'bulb-outline', label: 'Learn' },
+  { icon: 'repeat-outline', label: 'Choose again' },
+];
+
+const AGENCY_QUESTIONS = ['Who do I actually want?', 'Did I actually like this person?', 'Am I choosing people because I want them, or because they chose me?'];
+
+const CONTROL: { icon: IconName; text: string }[] = [
+  { icon: 'hand-right-outline', text: 'Who you pursue' },
+  { icon: 'sunny-outline', text: 'How you show up' },
+  { icon: 'chatbox-ellipses-outline', text: 'What you communicate' },
+  { icon: 'shield-checkmark-outline', text: 'What you accept' },
+  { icon: 'bulb-outline', text: 'What you learn from what happens' },
 ];
 
 const FEATURES: { icon: IconName; hue: Hue; title: string; text: string }[] = [
@@ -47,21 +57,22 @@ const FEATURES: { icon: IconName; hue: Hue; title: string; text: string }[] = [
     icon: 'journal-outline',
     hue: 'sky',
     title: 'Afterwards, reflect',
-    text: 'Make sense of what happened instead of decoding every moment for two days.',
+    text: "Not just \"did they like me?\" — also \"did I like them?\" Make sense of what happened, and of how you felt.",
   },
 ];
 
 const PRINCIPLES: { icon: IconName; text: string }[] = [
   { icon: 'chatbox-ellipses-outline', text: 'Your words should still be your words.' },
   { icon: 'compass-outline', text: 'Your decisions should still be your decisions.' },
-  { icon: 'person-outline', text: 'The other person should be getting to know you.' },
+  { icon: 'heart-outline', text: 'Your dating life should still be yours.' },
 ];
 
 const PATTERNS = [
   'Lots of matches, very few dates.',
   'Great first dates that end after the second.',
-  'Weeks of texting before asking someone out.',
   'Investing more energy than the person on the other side.',
+  'Dating almost entirely from the people who pursue you.',
+  'Saying you want something serious, but choosing people who don\'t.',
 ];
 
 /**
@@ -139,12 +150,45 @@ export function Landing({
         </View>
       </View>
 
+      {/* Agency */}
+      <View style={[styles.section, styles.sectionDark]}>
+        <LinearGradient colors={gradients.meadow} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.fill} />
+        <View style={styles.darkOrb} />
+        <SectionTitle
+          light
+          eyebrow="Dating has an agency problem too"
+          title="Be open to what comes your way. But be the driver."
+          accent="We swipe through whoever an algorithm shows us and date whoever approaches us. Somewhere in there, it's easy to forget to ask:"
+        />
+        <View style={[styles.split, twoUp && styles.splitRow, { alignItems: 'stretch' }]}>
+          <View style={[styles.questionCard, twoUp && { flex: 1 }]}>
+            {AGENCY_QUESTIONS.map((q) => (
+              <Text key={q} style={styles.question}>
+                {q}
+              </Text>
+            ))}
+          </View>
+          <View style={[{ gap: 12 }, twoUp && { flex: 1 }]}>
+            <Text style={[type.eyebrow, { color: 'rgba(255,255,255,0.8)' }]}>Agency isn't control</Text>
+            <Text style={[type.body, { color: 'rgba(255,255,255,0.9)' }]}>
+              You can't control whether someone texts back or wants a second date. You can control:
+            </Text>
+            {CONTROL.map((c) => (
+              <View key={c.text} style={styles.controlRow}>
+                <Ionicons name={c.icon} size={18} color={colors.sunTint} />
+                <Text style={styles.controlText}>{c.text}</Text>
+              </View>
+            ))}
+          </View>
+        </View>
+      </View>
+
       {/* Journey */}
       <View style={[styles.section, styles.sectionSunken]}>
         <SectionTitle
           eyebrow="The problem is bigger than messaging"
-          title="At almost every step, there's a place to get stuck."
-          accent="Dating apps are very good at the beginning of the journey. After that, you're mostly on your own."
+          title="Under the app journey there's another loop — and at every step, a place to get stuck."
+          accent="Having options isn't the same as exercising agency over them. A big pool is still a pool somebody else selected."
         />
         <View style={styles.journey}>
           {JOURNEY.map((step, i) => (
@@ -163,7 +207,7 @@ export function Landing({
       <View style={styles.section}>
         <SectionTitle
           eyebrow="Your journey, with company"
-          title="You set the direction. We help at every step — software when it's useful, a person when it matters."
+          title="You drive. We help at every step — software when it's useful, a person when it matters."
         />
         <View style={styles.grid}>
           {FEATURES.map((f) => (
@@ -183,8 +227,9 @@ export function Landing({
               Talk to a live coach who understands dating and can actually listen.
             </Text>
             <Text style={[type.body, { color: 'rgba(255,255,255,0.92)' }]}>
-              Nervous before a date. Ten first dates that went nowhere. Someone who suddenly pulled away. You should be
-              able to talk it through with a real person.
+              Nervous before a date. Ten first dates that went nowhere. Or nothing is technically wrong, but you keep
+              ending up in situations you didn't actually want. You should be able to talk it through with a real
+              person — and choose whichever kind of help makes sense for you.
             </Text>
           </View>
         </View>
@@ -209,8 +254,8 @@ export function Landing({
           ))}
         </View>
         <Text style={[type.body, { color: 'rgba(255,255,255,0.85)', maxWidth: 640 }]}>
-          Taking ownership means the wins are yours too. A coach doesn't play the game for you — they help you get
-          better at playing it yourself.
+          A coach doesn't play the game for you. They help you understand yourself well enough to make better
+          decisions on your own — and the wins stay yours.
         </Text>
       </View>
 
@@ -220,7 +265,7 @@ export function Landing({
           <View style={[{ gap: 18 }, twoUp && { flex: 1.2 }]}>
             <SectionTitle
               eyebrow="Over time, the feedback gets better"
-              title="One bad date doesn't tell you much. Patterns across months do."
+              title="One bad date doesn't tell you much. Patterns across months do — outside and inside."
             />
             <View style={{ gap: 10 }}>
               {PATTERNS.map((p) => (
@@ -239,6 +284,9 @@ export function Landing({
               <Text style={[type.accent, { fontSize: 18, lineHeight: 24 }]}>
                 "Here's a pattern we've noticed. Is this worth thinking about?"
               </Text>
+              <Text style={[type.caption, { color: colors.muted }]}>
+                And never "here's who you should date." That's your decision. Self-awareness is what creates agency.
+              </Text>
             </View>
           </View>
           <View style={[styles.imageCard, twoUp && { flex: 1, minHeight: 360 }]}>
@@ -254,19 +302,20 @@ export function Landing({
         <SectionTitle
           center
           eyebrow="What we're really building"
-          title="We're not another dating app. We're the company you keep along the way."
-          accent="More confident. More self-aware. Better at communicating. Better at knowing what you want."
+          title="We're not another dating app. We help you understand what you want, go after it, and learn from what happens."
+          accent="More confident. More self-aware. More intentional about who you pursue. More willing to go after what you want."
         />
         <View style={styles.closingRow}>
-          {(['Profile', 'Conversations', 'Preparation', 'A real person', 'Reflection'] as const).map((t) => (
+          {(['Profile', 'Conversations', 'Preparation', 'A real person', 'Reflection', 'Your call'] as const).map((t) => (
             <View key={t} style={styles.closingChip}>
               <Text style={styles.closingChipText}>{t}</Text>
             </View>
           ))}
         </View>
         <Text style={[type.body, { color: colors.muted, textAlign: 'center', maxWidth: 520 }]}>
-          Dating apps can introduce you to someone. What happens after that is up to you — and owning it is the
-          point. You just shouldn't have to figure all of it out alone.
+          Dating apps can introduce you to someone. A coach can give you perspective. Technology can show you
+          patterns. But you should be the person driving your dating life — don't let what comes your way define
+          what you're allowed to want.
         </Text>
       </View>
 
@@ -275,7 +324,7 @@ export function Landing({
           <Ionicons name="leaf" size={16} color={colors.sageDeep} />
           <Text style={styles.footerWordmark}>Dating Humane</Text>
         </View>
-        <Text style={type.caption}>Helping people become better daters.</Text>
+        <Text style={type.caption}>Helping people become better, more intentional daters.</Text>
       </View>
     </View>
   );
@@ -294,6 +343,17 @@ const styles = StyleSheet.create({
   },
   sectionSunken: { backgroundColor: colors.surfaceAlt },
   sectionDark: { backgroundColor: colors.moss },
+  questionCard: {
+    gap: 14,
+    padding: 22,
+    borderRadius: radii.lg,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.22)',
+  },
+  question: { ...type.accent, color: colors.primaryText, fontSize: 22, lineHeight: 30 },
+  controlRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  controlText: { fontFamily: fonts.sansSemi, fontSize: 15, color: colors.primaryText },
   darkOrb: {
     pointerEvents: 'none',
     position: 'absolute',
