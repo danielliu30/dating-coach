@@ -247,7 +247,7 @@ export default function CoachDetailScreen({
               ? `${duration} min with ${c.display_name} · ${slotLabel(selectedSlot)}`
               : `${duration} min with ${c.display_name} · pick a time above`}
           </Text>
-          <Text style={styles.summaryPrice}>${((c.hourly_rate_cents / 100) * (duration / 60)).toFixed(2)}</Text>
+          <Text style={styles.summaryPrice}>${(Math.round((c.hourly_rate_cents * duration) / 60) / 100).toFixed(2)}</Text>
         </View>
         {status ? (
           <View style={shared.row}>
