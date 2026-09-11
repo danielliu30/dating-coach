@@ -55,7 +55,8 @@ export default function MySessionsScreen(): React.ReactElement {
   const [slotError, setSlotError] = useState<string | null>(null);
 
   const sessions = data ?? [];
-  const upcoming = sessions.filter((s) => s.status === 'scheduled').length;
+  const now = Date.now();
+  const upcoming = sessions.filter((s) => s.status === 'scheduled' && new Date(s.scheduled_time).getTime() > now).length;
   const completed = sessions.filter((s) => s.status === 'completed').length;
   const minutes = sessions.filter((s) => s.status === 'completed').reduce((sum, s) => sum + s.duration_minutes, 0);
 
