@@ -25,7 +25,7 @@ export function AuthLayout({ children }: { children: React.ReactNode }): React.R
         >
           {wide && (
             <View style={styles.hero}>
-              <Text style={styles.wordmark}>Dating Coach</Text>
+              <Text style={styles.wordmark}>Dating Humane</Text>
               <Text style={styles.headline}>Better conversations.{'\n'}Real connection.</Text>
               <Text style={styles.tagline}>
                 Human coaching plus honest feedback on how your chats actually land.
@@ -33,7 +33,7 @@ export function AuthLayout({ children }: { children: React.ReactNode }): React.R
             </View>
           )}
           <View style={[styles.card, wide && styles.cardWide]}>
-            {!wide && <Text style={styles.wordmarkCompact}>Dating Coach</Text>}
+            {!wide && <Text style={styles.wordmarkCompact}>Dating Humane</Text>}
             {children}
           </View>
         </ScrollView>
