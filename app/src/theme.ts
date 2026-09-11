@@ -64,8 +64,8 @@ export const radii = {
 export const gradients = {
   primary: [colors.primary, colors.primaryDeep] as const,
   sunrise: [colors.sun, colors.bark] as const,
-  meadow: [colors.sage, colors.sageDeep] as const,
-  sky: [colors.sky, colors.sage] as const,
+  meadow: [colors.sageDeep, colors.moss] as const,
+  sky: ['#6d8f84', colors.primaryDeep] as const,
   dusk: [colors.moss, colors.bark] as const,
   dawnSurface: [colors.surface, colors.surfaceAlt] as const,
 };
