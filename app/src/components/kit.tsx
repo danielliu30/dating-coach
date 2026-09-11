@@ -7,6 +7,13 @@ import { colors, elevation, fonts, gradients, radii, type } from '../theme';
 import { Button, type IconName } from './ui';
 
 type Gradient = keyof typeof gradients;
+/** Gradients dark enough to carry white text. */
+type DarkGradient = Exclude<Gradient, 'dawnSurface'>;
+
+/** Translucent (~12%) fill for a `#rrggbb` tone; falls back to the sunken surface for other colour formats. */
+function tint(tone: string): string {
+  return /^#[0-9a-f]{6}$/i.test(tone) ? `${tone}1f` : colors.surfaceSunken;
+}
 
 /** Hue families used for tinted chrome (avatars, icon discs, stat tiles). */
 export type Hue = 'rose' | 'sage' | 'sky' | 'sun';
@@ -106,7 +113,7 @@ export function PageHeader({
   title: string;
   subtitle?: string;
   aside?: React.ReactNode;
-  gradient?: Gradient;
+  gradient?: DarkGradient;
   children?: React.ReactNode;
 }): React.ReactElement {
   return (
@@ -294,7 +301,7 @@ export function StatusPill({
   onDark?: boolean;
 }): React.ReactElement {
   return (
-    <View style={[styles.pill, { backgroundColor: onDark ? 'rgba(255,255,255,0.18)' : `${tone}1f` }]}>
+    <View style={[styles.pill, { backgroundColor: onDark ? 'rgba(255,255,255,0.18)' : tint(tone) }]}>
       <View style={[styles.pillDot, { backgroundColor: tone }]} />
       <Text style={[styles.pillText, { color: tone }]}>{text}</Text>
     </View>
