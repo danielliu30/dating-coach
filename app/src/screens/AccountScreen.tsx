@@ -1,8 +1,14 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
 import { ApiError } from '../api/client';
-import { DATING_PHASES, DATING_STYLES, type DatingPhase, type DatingStyle } from '../api/types';
+import {
+  DATING_PHASES,
+  DATING_STYLES,
+  MAX_DATING_PREFERENCES_LEN,
+  type DatingPhase,
+  type DatingStyle,
+} from '../api/types';
 import { Badge, Button, Chip, Field, Screen } from '../components/ui';
 import { useAuth } from '../state/auth';
 import { colors, shared } from '../theme';
@@ -64,27 +70,54 @@ export default function AccountScreen(): React.ReactElement {
   const savedStyles = user?.dating_styles ?? [];
   const savedStrong = user?.phases_strong ?? [];
   const savedWorking = user?.phases_working_on ?? [];
+  const savedPreferences = user?.dating_preferences ?? '';
+  // A snapshot from before dating_preferences existed does not say what the
+  // server holds, and the save below PATCHes every field, so saving from it
+  // would blank the server's value. Re-fetch the profile first and keep Save
+  // off until it lands.
+  const preferencesUnknown = user !== null && user.dating_preferences === undefined;
+  const [bootstrapFailed, setBootstrapFailed] = useState(false);
+  const bootstrap = useCallback(() => {
+    setBootstrapFailed(false);
+    refresh().catch(() => setBootstrapFailed(true));
+  }, [refresh]);
+  useEffect(() => {
+    if (preferencesUnknown) bootstrap();
+  }, [preferencesUnknown, bootstrap]);
 
   const [styles, setStyles] = useState<DatingStyle[]>(savedStyles);
   const [strong, setStrong] = useState<DatingPhase[]>(savedStrong);
   const [working, setWorking] = useState<DatingPhase[]>(savedWorking);
+  const [preferences, setPreferences] = useState(savedPreferences);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<number | null>(null);
+  // Every dating-profile control is frozen until the bootstrap settles, so the
+  // refreshed profile cannot land on top of edits made in the meantime.
+  const locked = saving || preferencesUnknown;
 
   // Drafts follow the saved profile only when its lists actually change (a
   // save, or an edit made elsewhere); a refresh that returns the same lists
   // leaves unsaved choices alone.
-  const savedKey = JSON.stringify([savedStyles, savedStrong, savedWorking]);
+  const savedKey = JSON.stringify([savedStyles, savedStrong, savedWorking, savedPreferences]);
   useEffect(() => {
-    const [nextStyles, nextStrong, nextWorking] = JSON.parse(savedKey) as [DatingStyle[], DatingPhase[], DatingPhase[]];
+    const [nextStyles, nextStrong, nextWorking, nextPreferences] = JSON.parse(savedKey) as [
+      DatingStyle[],
+      DatingPhase[],
+      DatingPhase[],
+      string,
+    ];
     setStyles(nextStyles);
     setStrong(nextStrong);
     setWorking(nextWorking);
+    setPreferences(nextPreferences);
   }, [savedKey]);
 
   const dirty =
-    !sameSet(styles, savedStyles) || !sameSet(strong, savedStrong) || !sameSet(working, savedWorking);
+    !sameSet(styles, savedStyles) ||
+    !sameSet(strong, savedStrong) ||
+    !sameSet(working, savedWorking) ||
+    preferences.trim() !== savedPreferences;
 
   const standingOf = (phase: DatingPhase): PhaseStanding =>
     strong.includes(phase) ? 'strong' : working.includes(phase) ? 'working_on' : null;
@@ -106,7 +139,12 @@ export default function AccountScreen(): React.ReactElement {
     setSaving(true);
     setSaveError(null);
     try {
-      await updateDatingProfile({ dating_styles: styles, phases_strong: strong, phases_working_on: working });
+      await updateDatingProfile({
+        dating_styles: styles,
+        phases_strong: strong,
+        phases_working_on: working,
+        dating_preferences: preferences.trim(),
+      });
       setSavedAt(Date.now());
     } catch (err) {
       setSaveError(err instanceof ApiError ? err.message : 'Could not save your dating profile. Please try again.');
@@ -162,7 +200,7 @@ export default function AccountScreen(): React.ReactElement {
               key={style}
               label={STYLE_LABELS[style]}
               selected={styles.includes(style)}
-              disabled={saving}
+              disabled={locked}
               onPress={() => {
                 setSavedAt(null);
                 setStyles((prev) => toggle(prev, style, DATING_STYLES));
@@ -192,23 +230,56 @@ export default function AccountScreen(): React.ReactElement {
                   label="Strength"
                   tone={colors.engaging}
                   selected={standing === 'strong'}
-                  disabled={saving}
+                  disabled={locked}
                   onPress={() => setStanding(phase, standing === 'strong' ? null : 'strong')}
                 />
                 <Chip
                   label="Working on"
                   tone={colors.neutral}
                   selected={standing === 'working_on'}
-                  disabled={saving}
+                  disabled={locked}
                   onPress={() => setStanding(phase, standing === 'working_on' ? null : 'working_on')}
                 />
               </View>
             </View>
           );
         })}
+      </View>
+
+      <View style={shared.card}>
+        <Text style={shared.heading}>What you are looking for</Text>
+        <Text style={shared.muted}>
+          In your own words. Your analyses use this to judge whether your messages and photos surface it.
+        </Text>
+        <Field
+          label={`${preferences.length}/${MAX_DATING_PREFERENCES_LEN}`}
+          value={preferences}
+          onChangeText={(text) => {
+            setSavedAt(null);
+            setPreferences(text);
+          }}
+          placeholder="e.g. Something serious with someone who likes the outdoors and can laugh at themselves"
+          multiline
+          maxLength={MAX_DATING_PREFERENCES_LEN}
+          editable={!locked}
+        />
         {saveError ? <Text style={shared.error}>{saveError}</Text> : null}
         {savedAt && !dirty ? <Text style={shared.muted}>Saved.</Text> : null}
-        <Button label="Save dating profile" disabled={!dirty} loading={saving} onPress={() => void save()} />
+        {preferencesUnknown && !bootstrapFailed ? (
+          <Text style={shared.muted}>Refreshing your profile before it can be edited…</Text>
+        ) : null}
+        {preferencesUnknown && bootstrapFailed ? (
+          <>
+            <Text style={shared.error}>Could not refresh your profile. Editing stays off until it loads.</Text>
+            <Button label="Try again" variant="secondary" onPress={bootstrap} />
+          </>
+        ) : null}
+        <Button
+          label="Save dating profile"
+          disabled={!dirty || locked}
+          loading={saving}
+          onPress={() => void save()}
+        />
       </View>
 
       <Button label="Refresh profile" variant="secondary" onPress={() => void refresh()} />

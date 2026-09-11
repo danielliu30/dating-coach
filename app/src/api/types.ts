@@ -11,6 +11,8 @@ export interface Profile {
   dating_styles: DatingStyle[];
   phases_strong: DatingPhase[];
   phases_working_on: DatingPhase[];
+  /** Free text: what the user is looking for. The analyzer tailors its hints to it. */
+  dating_preferences: string;
 }
 
 // Vocabularies mirror auth.DatingStyles / auth.DatingPhases in the backend.
@@ -44,7 +46,12 @@ export interface DatingProfileInput {
   dating_styles: DatingStyle[];
   phases_strong: DatingPhase[];
   phases_working_on: DatingPhase[];
+  /** Trimmed server-side and capped at MAX_DATING_PREFERENCES_LEN characters. */
+  dating_preferences: string;
 }
+
+// Mirrors auth.MaxDatingPreferencesLen in the backend.
+export const MAX_DATING_PREFERENCES_LEN = 2000;
 
 export interface AuthSession {
   token: string;
