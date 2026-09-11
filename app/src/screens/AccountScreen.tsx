@@ -1,3 +1,4 @@
+import { Ionicons } from '@expo/vector-icons';
 import React, { useCallback, useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
@@ -9,9 +10,10 @@ import {
   type DatingPhase,
   type DatingStyle,
 } from '../api/types';
+import { Avatar, Divider, GradientCard, SectionHeader, StatusPill } from '../components/kit';
 import { Badge, Button, Chip, Field, Screen } from '../components/ui';
 import { useAuth } from '../state/auth';
-import { colors, shared } from '../theme';
+import { colors, fonts, radii, shared, type } from '../theme';
 
 // Typed to arm deletion. Matched case-insensitively so the phrase is a
 // deliberate act rather than a typing test.
@@ -176,24 +178,56 @@ export default function AccountScreen(): React.ReactElement {
     }
   };
 
+  const name = user?.display_name ?? 'You';
+  const stylesCount = styles.length;
+  const phasesCount = strong.length + working.length;
+
   return (
     <Screen>
-      <Text style={shared.title}>Account</Text>
-      <View style={shared.card}>
-        <Text style={shared.heading}>{user?.display_name}</Text>
-        <Text style={shared.body}>{user?.email}</Text>
-        <View style={shared.row}>
-          <Badge text={user?.role ?? 'user'} tone={colors.primary} />
-          <Badge
-            text={user?.email_verified ? 'email verified' : 'email not verified'}
-            tone={user?.email_verified ? colors.engaging : colors.neutral}
+      <GradientCard gradient="dusk">
+        <View style={local.profileRow}>
+          <Avatar name={name} size={68} />
+          <View style={{ flex: 1, gap: 4 }}>
+            <Text style={[type.eyebrow, { color: 'rgba(255,255,255,0.85)' }]}>Dating Humane account</Text>
+            <Text style={[type.title, { color: colors.primaryText }]}>{name}</Text>
+            <Text style={[type.caption, { color: 'rgba(255,255,255,0.85)' }]}>{user?.email}</Text>
+          </View>
+        </View>
+        <View style={local.pillRow}>
+          <StatusPill
+            text={user?.role === 'coach' ? 'Coach' : user?.role === 'admin' ? 'Admin' : 'Member'}
+            tone={colors.primaryText}
+            onDark
+          />
+          <StatusPill
+            text={user?.email_verified ? 'Email verified' : 'Email not verified'}
+            tone={colors.primaryText}
+            onDark
           />
         </View>
-      </View>
+        <View style={local.factRow}>
+          <View style={local.fact}>
+            <Text style={local.factValue}>{stylesCount}</Text>
+            <Text style={local.factLabel}>ways you meet people</Text>
+          </View>
+          <View style={local.fact}>
+            <Text style={local.factValue}>{phasesCount}</Text>
+            <Text style={local.factLabel}>phases marked</Text>
+          </View>
+          <View style={local.fact}>
+            <Text style={local.factValue}>{preferences.trim() ? 'Set' : '—'}</Text>
+            <Text style={local.factLabel}>looking for</Text>
+          </View>
+        </View>
+      </GradientCard>
 
       <View style={shared.card}>
-        <Text style={shared.heading}>How you date</Text>
-        <Text style={shared.muted}>Pick everywhere you meet people. Your coach tailors advice to these.</Text>
+        <SectionHeader
+          title="How you date"
+          caption="Pick everywhere you meet people. Your coach tailors advice to these."
+          icon="compass-outline"
+          hue="sage"
+        />
         <View style={local.chips}>
           {DATING_STYLES.map((style) => (
             <Chip
@@ -211,11 +245,12 @@ export default function AccountScreen(): React.ReactElement {
       </View>
 
       <View style={shared.card}>
-        <Text style={shared.heading}>Phases of dating</Text>
-        <Text style={shared.muted}>
-          For each stage, mark whether it is a strength or something you are working on. Leave it blank if
-          neither applies.
-        </Text>
+        <SectionHeader
+          title="Phases of dating"
+          caption="For each stage, mark whether it is a strength or something you are working on. Leave it blank if neither applies."
+          icon="footsteps-outline"
+          hue="sun"
+        />
         <View style={local.legend}>
           <Badge text="strength" tone={colors.engaging} />
           <Badge text="working on" tone={colors.neutral} />
@@ -224,7 +259,16 @@ export default function AccountScreen(): React.ReactElement {
           const standing = standingOf(phase);
           return (
             <View key={phase} style={local.phaseRow}>
-              <Text style={local.phaseLabel}>{PHASE_LABELS[phase]}</Text>
+              <View style={shared.row}>
+                <View
+                  style={[
+                    local.phaseDot,
+                    standing === 'strong' && { backgroundColor: colors.engaging },
+                    standing === 'working_on' && { backgroundColor: colors.neutral },
+                  ]}
+                />
+                <Text style={local.phaseLabel}>{PHASE_LABELS[phase]}</Text>
+              </View>
               <View style={local.phaseChoices}>
                 <Chip
                   label="Strength"
@@ -247,10 +291,12 @@ export default function AccountScreen(): React.ReactElement {
       </View>
 
       <View style={shared.card}>
-        <Text style={shared.heading}>What you are looking for</Text>
-        <Text style={shared.muted}>
-          In your own words. Your analyses use this to judge whether your messages and photos surface it.
-        </Text>
+        <SectionHeader
+          title="What you are looking for"
+          caption="In your own words. Your analyses use this to judge whether your messages and photos surface it."
+          icon="heart-outline"
+          hue="rose"
+        />
         <Field
           label={`${preferences.length}/${MAX_DATING_PREFERENCES_LEN}`}
           value={preferences}
@@ -264,7 +310,12 @@ export default function AccountScreen(): React.ReactElement {
           editable={!locked}
         />
         {saveError ? <Text style={shared.error}>{saveError}</Text> : null}
-        {savedAt && !dirty ? <Text style={shared.muted}>Saved.</Text> : null}
+        {savedAt && !dirty ? (
+          <View style={shared.row}>
+            <Ionicons name="checkmark-circle" size={16} color={colors.engaging} />
+            <Text style={[type.caption, { color: colors.engaging }]}>Saved.</Text>
+          </View>
+        ) : null}
         {preferencesUnknown && !bootstrapFailed ? (
           <Text style={shared.muted}>Refreshing your profile before it can be edited…</Text>
         ) : null}
@@ -276,21 +327,33 @@ export default function AccountScreen(): React.ReactElement {
         ) : null}
         <Button
           label="Save dating profile"
+          icon="save-outline"
           disabled={!dirty || locked}
           loading={saving}
           onPress={() => void save()}
         />
       </View>
 
-      <Button label="Refresh profile" variant="secondary" onPress={() => void refresh()} />
-      <Button label="Sign out" onPress={() => void signOut()} />
-
       <View style={shared.card}>
-        <Text style={shared.heading}>Delete account</Text>
-        <Text style={shared.muted}>
-          Permanently removes your profile, sessions, chats and analyses, and signs you out
-          everywhere. This cannot be undone.
-        </Text>
+        <SectionHeader title="Session" caption="Signed in on this device." icon="shield-checkmark-outline" hue="sky" />
+        <View style={local.actions}>
+          <View style={{ flex: 1 }}>
+            <Button label="Refresh profile" icon="refresh-outline" variant="secondary" onPress={() => void refresh()} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Button label="Sign out" icon="log-out-outline" onPress={() => void signOut()} />
+          </View>
+        </View>
+      </View>
+
+      <View style={[shared.card, local.danger]}>
+        <SectionHeader
+          title="Delete account"
+          caption="Permanently removes your profile, sessions, chats and analyses, and signs you out everywhere. This cannot be undone."
+          icon="trash-outline"
+          hue="rose"
+        />
+        <Divider />
         {confirming ? (
           <View style={{ gap: 12 }}>
             <Field
@@ -319,9 +382,25 @@ export default function AccountScreen(): React.ReactElement {
 }
 
 const local = StyleSheet.create({
+  profileRow: { flexDirection: 'row', alignItems: 'center', gap: 16 },
+  pillRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  factRow: { flexDirection: 'row', gap: 8 },
+  fact: {
+    flex: 1,
+    padding: 10,
+    borderRadius: radii.md,
+    backgroundColor: 'rgba(255,255,255,0.16)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.22)',
+  },
+  factValue: { fontFamily: fonts.sansBlack, fontSize: 18, color: colors.primaryText, letterSpacing: -0.3 },
+  factLabel: { fontFamily: fonts.sans, fontSize: 11, color: 'rgba(255,255,255,0.8)' },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   legend: { flexDirection: 'row', gap: 8 },
-  phaseRow: { gap: 8, paddingVertical: 8, borderTopWidth: 1, borderTopColor: colors.border },
-  phaseLabel: { fontSize: 15, fontWeight: '600', color: colors.text },
+  phaseRow: { gap: 8, paddingVertical: 10, borderTopWidth: 1, borderTopColor: colors.border },
+  phaseDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.border },
+  phaseLabel: { fontFamily: fonts.sansSemi, fontSize: 15, color: colors.text },
   phaseChoices: { flexDirection: 'row', gap: 8 },
+  actions: { flexDirection: 'row', gap: 8 },
+  danger: { borderColor: `${colors.flat}33`, borderWidth: 1 },
 });
