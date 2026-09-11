@@ -19,7 +19,7 @@ const OUTCOMES: { value: Outcome; label: string; icon: IconName }[] = [
 
 /** One-word read of an engagement score in [0, 1] for the hero card. */
 const scoreWord = (score: number): string =>
-  score >= 0.7 ? 'Engaging' : score >= 0.4 ? 'Steady' : 'Flat';
+  score >= 0.66 ? 'Engaging' : score >= 0.4 ? 'Steady' : 'Flat';
 
 const POLL_MS = 2000;
 const MAX_POLL_FAILURES = 5;
@@ -39,6 +39,7 @@ export default function AnalysisResultScreen({
   const [retryError, setRetryError] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [labelStatus, setLabelStatus] = useState<string | null>(null);
+  const [labelFailed, setLabelFailed] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const failures = useRef(0);
 
@@ -93,6 +94,7 @@ export default function AnalysisResultScreen({
   const saveLabel = async (value: Outcome) => {
     setOutcome(value);
     setLabelStatus(null);
+    setLabelFailed(false);
     try {
       await api.labelConversation(conversationID, {
         outcome: value,
@@ -101,6 +103,7 @@ export default function AnalysisResultScreen({
       });
       setLabelStatus('Thanks — this helps train the model.');
     } catch (err) {
+      setLabelFailed(true);
       setLabelStatus(err instanceof Error ? err.message : 'could not save');
     }
   };
@@ -271,8 +274,12 @@ export default function AnalysisResultScreen({
         </View>
         {labelStatus ? (
           <View style={shared.row}>
-            <Ionicons name="heart-outline" size={14} color={colors.sageDeep} />
-            <Text style={[type.caption, { color: colors.sageDeep }]}>{labelStatus}</Text>
+            <Ionicons
+              name={labelFailed ? 'alert-circle-outline' : 'heart-outline'}
+              size={14}
+              color={labelFailed ? colors.flat : colors.sageDeep}
+            />
+            <Text style={labelFailed ? shared.error : [type.caption, { color: colors.sageDeep }]}>{labelStatus}</Text>
           </View>
         ) : null}
       </View>
