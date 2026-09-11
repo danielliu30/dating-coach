@@ -42,6 +42,31 @@ def test_analyze_heuristic() -> None:
     assert 0.0 <= body["overall"]["engagement_score"] <= 1.0
 
 
+def test_analyze_images_endpoint_fallback() -> None:
+    """POST /analyze/images returns an ImageAnalyzeResponse via the heuristic image scorer (LLM_API_KEY unset)."""
+    request = ImageAnalyzeRequest(
+        images=[ImageRef(base64=_png_base64(1200, 900)), ImageRef(url="https://cdn.example/b.jpg")],
+        preferences="Someone who likes hiking",
+    )
+    response = client.post("/analyze/images", json=request.model_dump())
+    assert response.status_code == 200
+    body = response.json()
+    assert body["model_version"] == "image-heuristic-v1"
+    assert [img["index"] for img in body["images"]] == [0, 1]
+    assert body["images"][0]["is_clear"] is True
+    assert "Someone who likes hiking" in body["overall"]["summary"]
+    assert client.get("/healthz").json()["active_image_backend"] == "HeuristicImageScorer"
+
+
+def test_analyze_images_rejects_image_with_both_sources() -> None:
+    """The route surfaces the url-XOR-base64 rule as a 422, not a 500."""
+    response = client.post(
+        "/analyze/images",
+        json={"images": [{"url": "https://cdn.example/a.jpg", "base64": _png_base64(800, 800)}]},
+    )
+    assert response.status_code == 422
+
+
 def test_message_range_shifts_only_the_prose() -> None:
     """The shared formatter every backend writes feedback with counts from 1."""
     segment = Segment(start_position=0, end_position=5, engagement_score=0.5, comment="")

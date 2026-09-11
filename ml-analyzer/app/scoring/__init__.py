@@ -7,12 +7,23 @@ import logging
 from ..config import Settings
 from .base import Scorer
 from .heuristic import HeuristicScorer
+from .image import HeuristicImageScorer, ImageScorer, LLMImageScorer, build_image_scorer
 from .llm import LLMScorer
 from .trained import TrainedScorer
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["Scorer", "HeuristicScorer", "LLMScorer", "TrainedScorer", "build_scorer"]
+__all__ = [
+    "Scorer",
+    "HeuristicScorer",
+    "LLMScorer",
+    "TrainedScorer",
+    "build_scorer",
+    "ImageScorer",
+    "HeuristicImageScorer",
+    "LLMImageScorer",
+    "build_image_scorer",
+]
 
 
 def build_scorer(settings: Settings) -> Scorer:
