@@ -179,10 +179,20 @@ export default function CoachDashboardScreen(): React.ReactElement {
                 />
               </View>
               <View style={{ flex: 1 }}>
-                <Button label="Completed" icon="checkmark-outline" onPress={() => void act(session, 'complete')} />
+                <Button
+                  label="Completed"
+                  icon="checkmark-outline"
+                  disabled={busyID === session.id}
+                  onPress={() => void act(session, 'complete')}
+                />
               </View>
               <View style={{ flex: 1 }}>
-                <Button label="No show" variant="secondary" onPress={() => void act(session, 'no_show')} />
+                <Button
+                  label="No show"
+                  variant="secondary"
+                  disabled={busyID === session.id}
+                  onPress={() => void act(session, 'no_show')}
+                />
               </View>
             </View>
           </View>
