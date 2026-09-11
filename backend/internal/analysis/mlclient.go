@@ -73,30 +73,39 @@ func NewMLClient(baseURL string, timeout time.Duration) *MLClient {
 // become errors carrying a snippet of the body, so the worker can record why a
 // job failed. Called by Worker.Handle.
 func (c *MLClient) Analyze(ctx context.Context, in MLRequest) (MLResponse, error) {
+	var out MLResponse
+	if err := c.post(ctx, "/analyze", in, &out); err != nil {
+		return MLResponse{}, err
+	}
+	return out, nil
+}
+
+// post sends in as JSON to path and decodes a 200 response into out. Non-200
+// responses become errors carrying a snippet of the body.
+func (c *MLClient) post(ctx context.Context, path string, in any, out any) error {
 	body, err := json.Marshal(in)
 	if err != nil {
-		return MLResponse{}, fmt.Errorf("encode ml request: %w", err)
+		return fmt.Errorf("encode ml request: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/analyze", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, bytes.NewReader(body))
 	if err != nil {
-		return MLResponse{}, fmt.Errorf("build ml request: %w", err)
+		return fmt.Errorf("build ml request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return MLResponse{}, fmt.Errorf("call ml service: %w", err)
+		return fmt.Errorf("call ml service: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return MLResponse{}, fmt.Errorf("ml service returned %d: %s", resp.StatusCode, strings.TrimSpace(string(snippet)))
+		return fmt.Errorf("ml service returned %d: %s", resp.StatusCode, strings.TrimSpace(string(snippet)))
 	}
 
-	var out MLResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return MLResponse{}, fmt.Errorf("decode ml response: %w", err)
+	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		return fmt.Errorf("decode ml response: %w", err)
 	}
-	return out, nil
+	return nil
 }
