@@ -1,11 +1,13 @@
+import { Ionicons } from '@expo/vector-icons';
 import React, { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { ApiError, api } from '../api/client';
 import type { AvailabilityWindow } from '../api/types';
-import { Button, Field, Loading, Screen } from '../components/ui';
+import { Avatar, GradientCard, SectionHeader, SkeletonCard, StatusPill } from '../components/kit';
+import { Badge, Button, Field, Screen } from '../components/ui';
 import { useAuth } from '../state/auth';
-import { colors, shared } from '../theme';
+import { colors, fonts, radii, shared, type } from '../theme';
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -158,20 +160,56 @@ export default function CoachProfileScreen(): React.ReactElement {
 
   const removeWindow = (key: string) => setWindows((current) => current.filter((w) => w.key !== key));
 
+  const name = user?.display_name ?? 'You';
+  const specialtyList = specialties
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+
   if (loading) {
     return (
       <Screen>
         <Text style={shared.title}>Your coach profile</Text>
-        <Loading />
+        <SkeletonCard />
+        <SkeletonCard />
       </Screen>
     );
   }
 
   return (
     <Screen>
-      <Text style={shared.title}>Your coach profile</Text>
-      <Text style={shared.muted}>This is what clients see in the coach directory.</Text>
+      <GradientCard gradient="meadow">
+        <View style={styles.previewRow}>
+          <Avatar name={name} size={64} />
+          <View style={{ flex: 1, gap: 4 }}>
+            <Text style={[type.eyebrow, { color: 'rgba(255,255,255,0.85)' }]}>How clients see you</Text>
+            <Text style={[type.title, { color: colors.primaryText }]}>{name}</Text>
+            <Text style={[type.caption, { color: 'rgba(255,255,255,0.9)' }]} numberOfLines={2}>
+              {headline.trim() || 'Your headline appears here'}
+            </Text>
+          </View>
+        </View>
+        <View style={styles.previewPills}>
+          <StatusPill text={accepting ? 'Accepting clients' : 'Not accepting'} tone={colors.primaryText} onDark />
+          <StatusPill text={`$${Number(rate) || 0}/hr`} tone={colors.primaryText} onDark />
+          <StatusPill text={`${Number(years) || 0} yrs`} tone={colors.primaryText} onDark />
+        </View>
+        {specialtyList.length ? (
+          <View style={styles.previewPills}>
+            {specialtyList.map((item) => (
+              <Badge key={item} text={item} tone={colors.primaryText} />
+            ))}
+          </View>
+        ) : null}
+      </GradientCard>
+
       <View style={shared.card}>
+        <SectionHeader
+          title="Profile"
+          caption="This is what clients see in the coach directory."
+          icon="person-circle-outline"
+          hue="sage"
+        />
         <Field label="Headline" value={headline} onChangeText={setHeadline} placeholder="Opening messages that land" />
         <Field label="Bio" value={bio} onChangeText={setBio} multiline />
         <Field
@@ -193,18 +231,38 @@ export default function CoachProfileScreen(): React.ReactElement {
           accessibilityRole="switch"
           accessibilityState={{ checked: accepting }}
           onPress={() => setAccepting((value) => !value)}
+          style={[styles.toggle, accepting && styles.toggleOn]}
         >
-          <Text style={shared.body}>{accepting ? '✓ Accepting new clients' : '✗ Not accepting new clients'}</Text>
+          <Ionicons
+            name={accepting ? 'checkmark-circle' : 'close-circle-outline'}
+            size={22}
+            color={accepting ? colors.engaging : colors.muted}
+          />
+          <View style={{ flex: 1 }}>
+            <Text style={type.subheading}>{accepting ? 'Accepting new clients' : 'Not accepting new clients'}</Text>
+            <Text style={type.caption}>
+              {accepting ? 'You appear in the directory and can be booked.' : 'Hidden from new bookings.'}
+            </Text>
+          </View>
+          <View style={[styles.track, accepting && styles.trackOn]}>
+            <View style={[styles.knob, accepting && styles.knobOn]} />
+          </View>
         </Pressable>
       </View>
 
       <View style={shared.card}>
-        <Text style={shared.heading}>Weekly availability</Text>
-        <Text style={shared.muted}>
-          One row per window: add several rows for split hours or different hours per day. Times are in your profile
-          timezone.
-        </Text>
-        {windows.length === 0 ? <Text style={shared.muted}>No availability published.</Text> : null}
+        <SectionHeader
+          title="Weekly availability"
+          caption="One row per window: add several rows for split hours or different hours per day. Times are in your profile timezone."
+          icon="time-outline"
+          hue="sun"
+        />
+        {windows.length === 0 ? (
+          <View style={styles.none}>
+            <Ionicons name="calendar-clear-outline" size={18} color={colors.muted} />
+            <Text style={type.caption}>No availability published. Add a window so clients can book you.</Text>
+          </View>
+        ) : null}
         {windows.map((window) => (
           <View key={window.key} style={styles.window}>
             <View style={[shared.row, { flexWrap: 'wrap' }]}>
@@ -238,26 +296,51 @@ export default function CoachProfileScreen(): React.ReactElement {
                 />
               </View>
             </View>
-            <Pressable accessibilityRole="button" onPress={() => removeWindow(window.key)}>
-              <Text style={styles.link}>Remove window</Text>
+            <Pressable accessibilityRole="button" onPress={() => removeWindow(window.key)} style={styles.linkRow}>
+              <Ionicons name="trash-outline" size={15} color={colors.flat} />
+              <Text style={[styles.link, { color: colors.flat }]}>Remove window</Text>
             </Pressable>
           </View>
         ))}
-        <Pressable accessibilityRole="button" onPress={addWindow}>
-          <Text style={styles.link}>+ Add window</Text>
+        <Pressable accessibilityRole="button" onPress={addWindow} style={styles.add}>
+          <Ionicons name="add-circle-outline" size={18} color={colors.primaryDeep} />
+          <Text style={styles.link}>Add window</Text>
         </Pressable>
       </View>
 
-      {status ? <Text style={shared.muted}>{status}</Text> : null}
+      {status ? (
+        <View style={shared.row}>
+          <Ionicons name="checkmark-circle" size={16} color={colors.engaging} />
+          <Text style={[type.caption, { color: colors.engaging }]}>{status}</Text>
+        </View>
+      ) : null}
       {error ? <Text style={shared.error}>{error}</Text> : null}
-      <Button label="Save profile" onPress={save} loading={busy} />
+      <Button label="Save profile" icon="save-outline" onPress={save} loading={busy} />
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
+  previewRow: { flexDirection: 'row', alignItems: 'center', gap: 14 },
+  previewPills: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  toggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    padding: 12,
+    borderRadius: radii.md,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceAlt,
+  },
+  toggleOn: { borderColor: colors.sage, backgroundColor: colors.sageTint },
+  track: { width: 42, height: 24, borderRadius: 12, backgroundColor: colors.sand, padding: 2 },
+  trackOn: { backgroundColor: colors.engaging },
+  knob: { width: 20, height: 20, borderRadius: 10, backgroundColor: colors.surface },
+  knobOn: { alignSelf: 'flex-end' },
+  none: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   day: {
-    borderWidth: 1,
+    borderWidth: 1.5,
     borderColor: colors.border,
     backgroundColor: colors.surface,
     borderRadius: 999,
@@ -265,14 +348,28 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
   },
   window: {
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-    paddingTop: 12,
-    marginTop: 12,
+    padding: 12,
+    marginTop: 4,
     gap: 8,
+    borderRadius: radii.md,
+    backgroundColor: colors.surfaceAlt,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
-  dayActive: { borderColor: colors.primary, backgroundColor: '#fdf0f4' },
-  dayLabel: { color: colors.muted, fontWeight: '600', fontSize: 13 },
-  dayActiveLabel: { color: colors.primary, fontWeight: '700', fontSize: 13 },
-  link: { color: colors.primary, fontWeight: '600', fontSize: 14 },
+  dayActive: { borderColor: colors.primary, backgroundColor: colors.primaryTint },
+  dayLabel: { color: colors.muted, fontFamily: fonts.sansSemi, fontSize: 13 },
+  dayActiveLabel: { color: colors.primaryDeep, fontFamily: fonts.sansBold, fontSize: 13 },
+  linkRow: { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start' },
+  add: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 12,
+    borderRadius: radii.md,
+    borderWidth: 1.5,
+    borderStyle: 'dashed',
+    borderColor: colors.primaryLight,
+  },
+  link: { color: colors.primaryDeep, fontFamily: fonts.sansBold, fontSize: 14 },
 });
