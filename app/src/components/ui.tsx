@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import {
   ActivityIndicator,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -285,6 +286,7 @@ const styles = StyleSheet.create({
   inputFocused: {
     borderColor: colors.primary,
     backgroundColor: colors.surface,
+    ...Platform.select({ web: { outlineWidth: 0 }, default: {} }),
     ...elevation.mid,
   },
   inputMultiline: { minHeight: 120, textAlignVertical: 'top' },
