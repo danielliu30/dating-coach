@@ -14,10 +14,13 @@ import (
 // MLRequest is the payload sent to the Python analyzer. It is intentionally
 // model-agnostic: the LLM-prompt backend and a future fine-tuned model share it.
 type MLRequest struct {
-	ConversationID string      `json:"conversation_id"`
-	Platform       string      `json:"platform"`
-	MatchName      string      `json:"match_name,omitempty"`
-	Messages       []MLMessage `json:"messages"`
+	ConversationID string `json:"conversation_id"`
+	Platform       string `json:"platform"`
+	MatchName      string `json:"match_name,omitempty"`
+	// Preferences is the owner's users.dating_preferences text; omitted when blank
+	// so the analyzer's default (untailored) path is taken.
+	Preferences string      `json:"preferences,omitempty"`
+	Messages    []MLMessage `json:"messages"`
 }
 
 // MLMessage is one transcript message as the analyzer expects it.
