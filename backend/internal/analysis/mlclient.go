@@ -53,6 +53,47 @@ type MLOverall struct {
 	Improvements    []string `json:"improvements"`
 }
 
+// MLImageRef is one profile photo for the analyzer's image track. Exactly one of
+// URL or Base64 must be set (the analyzer rejects both or neither with a 422);
+// Base64 is the raw payload without a data: prefix.
+type MLImageRef struct {
+	URL       string `json:"url,omitempty"`
+	Base64    string `json:"base64,omitempty"`
+	MediaType string `json:"media_type,omitempty"`
+}
+
+// MLImageRequest is the payload for POST /analyze/images: 1-10 photos plus the
+// owner's dating preferences so feedback can be tailored to them.
+type MLImageRequest struct {
+	Images      []MLImageRef `json:"images"`
+	Preferences string       `json:"preferences,omitempty"`
+}
+
+// MLImageAssessment mirrors ml-analyzer's ImageAssessment: how sharp and well-lit
+// one photo is and whether the customer is its clear focal point.
+type MLImageAssessment struct {
+	Index                int     `json:"index"`
+	ClarityScore         float64 `json:"clarity_score"`
+	IsClear              bool    `json:"is_clear"`
+	SubjectFocusScore    float64 `json:"subject_focus_score"`
+	IsCustomerFocalPoint bool    `json:"is_customer_focal_point"`
+	Feedback             string  `json:"feedback"`
+}
+
+// MLImageOverall is the verdict across all submitted photos.
+type MLImageOverall struct {
+	Summary      string   `json:"summary"`
+	Strengths    []string `json:"strengths"`
+	Improvements []string `json:"improvements"`
+}
+
+// MLImageResponse mirrors ml-analyzer's ImageAnalyzeResponse schema.
+type MLImageResponse struct {
+	ModelVersion string              `json:"model_version"`
+	Images       []MLImageAssessment `json:"images"`
+	Overall      MLImageOverall      `json:"overall"`
+}
+
 // MLClient talks to the ml-analyzer service over HTTP only, so the ML component
 // can be deployed, scaled and replaced independently.
 type MLClient struct {
@@ -76,6 +117,17 @@ func (c *MLClient) Analyze(ctx context.Context, in MLRequest) (MLResponse, error
 	var out MLResponse
 	if err := c.post(ctx, "/analyze", in, &out); err != nil {
 		return MLResponse{}, err
+	}
+	return out, nil
+}
+
+// AnalyzeImages assesses profile photos by POSTing them to /analyze/images. It
+// is synchronous and stores nothing: photos are only ever held in memory for the
+// duration of the call. Errors are shaped like Analyze's.
+func (c *MLClient) AnalyzeImages(ctx context.Context, in MLImageRequest) (MLImageResponse, error) {
+	var out MLImageResponse
+	if err := c.post(ctx, "/analyze/images", in, &out); err != nil {
+		return MLImageResponse{}, err
 	}
 	return out, nil
 }
