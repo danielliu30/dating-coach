@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -185,7 +186,13 @@ type Profile struct {
 	DatingStyles    []string `json:"dating_styles"`
 	PhasesStrong    []string `json:"phases_strong"`
 	PhasesWorkingOn []string `json:"phases_working_on"`
+	// DatingPreferences is what the user is looking for, in their own words.
+	DatingPreferences string `json:"dating_preferences"`
 }
+
+// MaxDatingPreferencesLen caps users.dating_preferences; the ML analyzer
+// accepts at most this many characters in its preferences field.
+const MaxDatingPreferencesLen = 2000
 
 // DatingStyles is the vocabulary of where a user meets people, as stored in
 // users.dating_styles and accepted by PATCH /auth/me.
@@ -202,25 +209,28 @@ var DatingPhases = []string{
 }
 
 // DatingProfileInput is the decoded PATCH /auth/me body. Every list replaces the
-// stored one wholesale; a nil list is treated as empty.
+// stored one wholesale; a nil list is treated as empty. DatingPreferences
+// likewise replaces the stored text; blank clears it.
 type DatingProfileInput struct {
-	DatingStyles    []string `json:"dating_styles"`
-	PhasesStrong    []string `json:"phases_strong"`
-	PhasesWorkingOn []string `json:"phases_working_on"`
+	DatingStyles      []string `json:"dating_styles"`
+	PhasesStrong      []string `json:"phases_strong"`
+	PhasesWorkingOn   []string `json:"phases_working_on"`
+	DatingPreferences string   `json:"dating_preferences"`
 }
 
 // profileOf projects a database row onto the API shape, keeping the password
 // hash and verification token out of responses.
 func profileOf(u db.User) Profile {
 	return Profile{
-		ID:              u.ID.String(),
-		Email:           u.Email,
-		DisplayName:     u.DisplayName,
-		Role:            u.Role,
-		EmailVerified:   u.EmailVerified,
-		DatingStyles:    nonNil(u.DatingStyles),
-		PhasesStrong:    nonNil(u.PhasesStrong),
-		PhasesWorkingOn: nonNil(u.PhasesWorkingOn),
+		ID:                u.ID.String(),
+		Email:             u.Email,
+		DisplayName:       u.DisplayName,
+		Role:              u.Role,
+		EmailVerified:     u.EmailVerified,
+		DatingStyles:      nonNil(u.DatingStyles),
+		PhasesStrong:      nonNil(u.PhasesStrong),
+		PhasesWorkingOn:   nonNil(u.PhasesWorkingOn),
+		DatingPreferences: u.DatingPreferences,
 	}
 }
 
@@ -279,11 +289,16 @@ func (s *Service) UpdateDatingProfile(ctx context.Context, principal Principal, 
 			return Profile{}, fmt.Errorf("%w: phase %q cannot be both a strength and being worked on", ErrInvalidInput, p)
 		}
 	}
+	preferences := strings.TrimSpace(in.DatingPreferences)
+	if utf8.RuneCountInString(preferences) > MaxDatingPreferencesLen {
+		return Profile{}, fmt.Errorf("%w: dating_preferences exceeds %d characters", ErrInvalidInput, MaxDatingPreferencesLen)
+	}
 	user, err := s.queries.UpdateUserDatingProfile(ctx, db.UpdateUserDatingProfileParams{
-		ID:              principal.UserID,
-		DatingStyles:    styles,
-		PhasesStrong:    strong,
-		PhasesWorkingOn: working,
+		ID:                principal.UserID,
+		DatingStyles:      styles,
+		PhasesStrong:      strong,
+		PhasesWorkingOn:   working,
+		DatingPreferences: preferences,
 	})
 	if err != nil {
 		return Profile{}, fmt.Errorf("update dating profile: %w", err)
