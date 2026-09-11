@@ -73,7 +73,7 @@ export function AuthLayout({
             style={styles.fill}
           />
           <LinearGradient
-            colors={['rgba(185,83,95,0.25)', 'rgba(63,91,69,0.0)']}
+            colors={['rgba(216,167,106,0.28)', 'rgba(63,91,69,0.0)']}
             start={{ x: 0, y: 0 }}
             end={{ x: 1, y: 1 }}
             style={styles.fill}
