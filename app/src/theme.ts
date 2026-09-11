@@ -31,6 +31,12 @@ export const radii = {
   pill: 999,
 };
 
+/**
+ * Builds a cross-platform shadow style. Android only honours `elevation`
+ * (scaled from `level`), so `opacity`/`radius`/`offsetY` apply to iOS and web
+ * (react-native-web maps them to `box-shadow`). Returns a spreadable style;
+ * callers with `overflow: 'hidden'` clip their own shadow on iOS.
+ */
 const elevate = (
   level: 1 | 2 | 3,
   { opacity, radius, offsetY, shadowColor = colors.shadow }: {
