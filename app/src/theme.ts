@@ -1,39 +1,39 @@
 import { Platform, StyleSheet, type TextStyle, type ViewStyle } from 'react-native';
 
 /**
- * Dating Humane palette: warm, sunlit and alive. Linen and sand grounds,
- * a soft terracotta-rose accent, and leafy sage / sky / sun tones for
- * secondary meaning. Semantic keys (`engaging`, `neutral`, `flat`) stay
+ * Dating Humane palette: greens and tans, like sun through leaves. Linen
+ * and sand grounds, a leafy fern accent, and moss / eucalyptus / honey
+ * tones for secondary meaning. Semantic keys (`engaging`, `neutral`, `flat`) stay
  * traffic-light coloured so scores read at a glance.
  */
 export const colors = {
-  bg: '#f7f1e8',
-  surface: '#fffcf8',
-  surfaceAlt: '#fbf5ec',
-  surfaceSunken: '#efe5d8',
-  border: '#ebe0d2',
-  text: '#2b2521',
-  muted: '#7a6d64',
-  primary: '#d9707a',
-  primaryDeep: '#b9535f',
-  primaryLight: '#f0a2a8',
-  primaryTint: '#fbe7e6',
+  bg: '#f4efe4',
+  surface: '#fdfbf6',
+  surfaceAlt: '#f8f3e8',
+  surfaceSunken: '#ebe3d2',
+  border: '#e3d9c4',
+  text: '#27302a',
+  muted: '#6f6e5e',
+  primary: '#5c8a5e',
+  primaryDeep: '#3f6444',
+  primaryLight: '#9dbb97',
+  primaryTint: '#e5efe1',
   primaryText: '#ffffff',
-  sage: '#8fae8b',
+  sage: '#93ae8d',
   sageDeep: '#5f7f5c',
   sageTint: '#e8f0e3',
-  moss: '#3f5b45',
-  sky: '#9cc0d3',
-  skyTint: '#e6f0f5',
-  sun: '#f2b56b',
-  sunTint: '#fdefdc',
-  sand: '#e9d7bf',
-  bark: '#5a4638',
+  moss: '#2f4a38',
+  sky: '#a3bcae',
+  skyTint: '#e7efe9',
+  sun: '#d8a76a',
+  sunTint: '#f6ead6',
+  sand: '#d9c3a0',
+  bark: '#6b5238',
   engaging: '#4f9a5b',
-  neutral: '#e09a3c',
-  noticeBg: '#fdf1e0',
-  flat: '#d1554f',
-  shadow: '#3a2c24',
+  neutral: '#d0963c',
+  noticeBg: '#f7ecd9',
+  flat: '#c25a4a',
+  shadow: '#2f3326',
 };
 
 /** Content wider than this is centred on web instead of stretching. */
@@ -63,10 +63,10 @@ export const radii = {
 /** Gradient stop pairs shared by heroes, buttons and feature cards. */
 export const gradients = {
   primary: [colors.primary, colors.primaryDeep] as const,
-  sunrise: [colors.sun, colors.primary] as const,
+  sunrise: [colors.sun, colors.bark] as const,
   meadow: [colors.sage, colors.sageDeep] as const,
   sky: [colors.sky, colors.sage] as const,
-  dusk: [colors.primaryDeep, colors.moss] as const,
+  dusk: [colors.moss, colors.bark] as const,
   dawnSurface: [colors.surface, colors.surfaceAlt] as const,
 };
 
@@ -154,7 +154,7 @@ export const shared = StyleSheet.create({
     backgroundColor: colors.surface,
     borderRadius: radii.lg,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(58, 44, 36, 0.06)',
+    borderColor: 'rgba(47, 51, 38, 0.06)',
     padding: 20,
     gap: 10,
     ...elevation.mid,

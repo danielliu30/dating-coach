@@ -21,8 +21,8 @@ export type Hue = 'rose' | 'sage' | 'sky' | 'sun';
 const hues: Record<Hue, { fg: string; bg: string }> = {
   rose: { fg: colors.primaryDeep, bg: colors.primaryTint },
   sage: { fg: colors.sageDeep, bg: colors.sageTint },
-  sky: { fg: '#3f6e86', bg: colors.skyTint },
-  sun: { fg: '#a86a1c', bg: colors.sunTint },
+  sky: { fg: colors.moss, bg: colors.skyTint },
+  sun: { fg: colors.bark, bg: colors.sunTint },
 };
 
 /** Picks a stable hue for a name so the same person always gets the same colour. */
