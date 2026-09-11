@@ -1,13 +1,37 @@
 # ml-analyzer
 
-FastAPI service that scores a dating-app conversation for engagement /
-interestingness. It is fully decoupled from the Go backend — the only coupling
-is the HTTP contract below.
+FastAPI service with two independent analysis tracks for a dating-app customer.
+It is fully decoupled from the Go backend — the only coupling is the HTTP
+contract below.
 
 ```
-POST /analyze   → per-segment scores + overall feedback
-GET  /healthz   → status, active backend, model version
+POST /analyze          → message track: critique of the customer's own messages
+POST /analyze/images   → image track: clarity + focal-point verdict per profile photo
+GET  /healthz          → status, active backend, model version
 ```
+
+Both tracks accept an optional `preferences` string — the customer's own words
+about what they are looking for — and tailor their feedback to it. The Go
+backend fills it from `users.dating_preferences`.
+
+### Message track
+
+Only the customer's messages (`sender == "self"`) are evaluated. The match's
+messages are context and evidence, never scored. For each customer message the
+analysis looks at what came back — nothing, a short reply, or an engaged reply —
+and flags the pattern as a hint. It **never drafts what to say**: the customer
+drives the conversation, the analyzer only points at what did and did not land.
+The LLM backend enforces this by rejecting any completion that reads as a
+suggested reply and falling back to the heuristic scorer. (`ML_BACKEND=trained`
+is the exception — see the backends section.)
+
+### Image track
+
+Each photo is judged on two things: is it sharp and well lit, and is the
+customer unmistakably the focal point. Feedback is tailored to `preferences`.
+Without an LLM key the heuristic image scorer reads inline image headers for
+resolution and format only; it cannot see who is in the frame, so it returns a
+neutral focus score and says so.
 
 ## Run locally
 
@@ -30,7 +54,19 @@ curl -s localhost:8000/analyze -H 'content-type: application/json' -d '{
 }' | jq
 ```
 
+```bash
+curl -s localhost:8000/analyze/images -H 'content-type: application/json' -d '{
+  "preferences": "someone outdoorsy who wants something serious",
+  "images": [
+    {"url": "https://cdn.example/me/hiking.jpg"},
+    {"base64": "/9j/4AAQSkZJRg...", "media_type": "image/jpeg"}
+  ]
+}' | jq
+```
+
 ## API contract
+
+### `POST /analyze` (messages)
 
 Request:
 
@@ -39,7 +75,8 @@ Request:
 | `conversation_id` | string | Echo of the backend's row id. |
 | `platform` | string | Optional, defaults to `unknown`. |
 | `match_name` | string | Optional, used only in the prompt. |
-| `messages[]` | array | `position` (0-based), `sender` (`self`\|`match`), `body`, optional `sent_at`. |
+| `messages[]` | array | `position` (0-based), `sender` (`self`\|`match`), `body`, optional `sent_at`. Only `self` messages are scored. |
+| `preferences` | string | Optional, ≤2000 chars. What the customer is looking for; feedback is tailored to it. |
 
 Response:
 
@@ -50,7 +87,28 @@ Response:
 | `overall` | object | `engagement_score`, `summary`, `strengths[]`, `improvements[]`. |
 
 `label` is always derived from the score (≥0.66 engaging, ≥0.4 neutral, else
-flat), so it is consistent across backends.
+flat), so it is consistent across backends. `comment`, `summary` and
+`improvements` describe reply outcomes (no reply / short reply / engaged
+reply) and hint at what to reconsider; they never contain a drafted message.
+
+### `POST /analyze/images` (photos)
+
+Request:
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `images[]` | array | 1–10 entries of `{url?, base64?, media_type?}`. Exactly one of `url` / `base64` per entry. `base64` is the raw payload (no `data:` prefix). `media_type` is one of `image/jpeg` (default), `image/png`, `image/webp`, `image/gif`. |
+| `preferences` | string | Optional, ≤2000 chars. Same meaning as on `/analyze`. |
+
+Response:
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `model_version` | string | `image-llm-<provider>-<model>` or `image-heuristic-v1`. |
+| `images[]` | array | One per request image, by `index`: `clarity_score` (0–1), `is_clear`, `subject_focus_score` (0–1), `is_customer_focal_point`, `feedback`. |
+| `overall` | object | `summary`, `strengths[]`, `improvements[]`. |
+
+The response is synchronous and the service stores nothing.
 
 ## Configuration
 
@@ -58,7 +116,7 @@ flat), so it is consistent across backends.
 | --- | --- | --- |
 | `ML_BACKEND` | `llm` | `llm`, `trained` or `heuristic`. |
 | `LLM_PROVIDER` | `openai` | `openai` (also any OpenAI-compatible gateway: Azure, Ollama, vLLM) or `anthropic`. |
-| `LLM_API_KEY` | – | If unset, the service logs a warning and falls back to the heuristic scorer. |
+| `LLM_API_KEY` | – | If unset, the service logs a warning and falls back to the heuristic scorer on both tracks. |
 | `LLM_MODEL` | `gpt-4o-mini` / `claude-3-5-haiku-latest` | Per provider. |
 | `LLM_BASE_URL` | provider default | Point at a self-hosted gateway. |
 | `LLM_TIMEOUT_SECONDS` | `45` | |
@@ -69,6 +127,12 @@ flat), so it is consistent across backends.
 
 `app/scoring/` contains one class per backend behind the `Scorer` ABC
 (`analyze(request) -> AnalyzeResponse`). `build_scorer()` picks one from env.
+The image track has its own `ImageScorer` ABC in `image.py`
+(`analyze(request) -> ImageAnalyzeResponse`) and `build_image_scorer()`, which
+reads the same `LLM_*` variables: `LLMImageScorer` sends the photos to the
+vision endpoint of the configured provider (Anthropic or OpenAI-compatible);
+`HeuristicImageScorer` is the no-key fallback and is also used when
+`ML_BACKEND=heuristic`. There is no trained image backend.
 
 - **`llm.py` (v1, default)** — prompts the LLM with the transcript and the exact
   segment boundaries, parses strict JSON, clamps and re-labels every score. Any
@@ -77,7 +141,10 @@ flat), so it is consistent across backends.
 - **`heuristic.py`** — no network, no model. Length/question/reciprocity signals.
   Used for local dev, CI and as the LLM fallback.
 - **`trained.py`** — a fine-tuned checkpoint. torch/transformers are imported
-  lazily so the serving image stays small until you actually use it.
+  lazily so the serving image stays small until you actually use it. It
+  predates the message track's rules: it scores every segment regardless of
+  sender and ignores `preferences`, so the self-only / no-drafting guarantees
+  above hold for `llm` and `heuristic` only.
 
 ## Training your own model
 
