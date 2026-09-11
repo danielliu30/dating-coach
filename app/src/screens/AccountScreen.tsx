@@ -194,7 +194,11 @@ export default function AccountScreen(): React.ReactElement {
           </View>
         </View>
         <View style={local.pillRow}>
-          <StatusPill text={user?.role === 'coach' ? 'Coach' : 'Member'} tone={colors.primaryText} onDark />
+          <StatusPill
+            text={user?.role === 'coach' ? 'Coach' : user?.role === 'admin' ? 'Admin' : 'Member'}
+            tone={colors.primaryText}
+            onDark
+          />
           <StatusPill
             text={user?.email_verified ? 'Email verified' : 'Email not verified'}
             tone={colors.primaryText}

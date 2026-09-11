@@ -79,7 +79,8 @@ export default function CoachDashboardScreen(): React.ReactElement {
         action={{ label: 'All chats', onPress: () => navigation.navigate('Chats', { screen: 'Threads' }) }}
       />
       {threads.loading && !threads.data ? <SkeletonCard /> : null}
-      {threadList.length === 0 && !threads.loading ? (
+      {threads.error ? <Text style={shared.error}>{threads.error}</Text> : null}
+      {threadList.length === 0 && !threads.loading && !threads.error ? (
         <EmptyState
           icon="chatbubble-ellipses-outline"
           hue="sky"
