@@ -1,13 +1,25 @@
+import { Ionicons } from '@expo/vector-icons';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import React, { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { AuthLayout } from '../components/AuthLayout';
+import { Divider } from '../components/kit';
 import { Button, Field } from '../components/ui';
 import type { Role } from '../api/types';
 import type { AuthStackParams } from '../navigation/types';
 import { useAuth } from '../state/auth';
-import { colors } from '../theme';
+import { colors, fonts, radii, shared, type } from '../theme';
+
+const ROLE_OPTIONS: {
+  value: Role;
+  icon: React.ComponentProps<typeof Ionicons>['name'];
+  title: string;
+  text: string;
+}[] = [
+  { value: 'user', icon: 'heart-outline', title: 'Someone dating', text: 'Get feedback and coaching' },
+  { value: 'coach', icon: 'people-outline', title: 'A coach', text: 'Offer sessions to daters' },
+];
 
 export default function SignUpScreen({
   navigation,
@@ -35,11 +47,12 @@ export default function SignUpScreen({
 
   return (
     <AuthLayout>
-      <View style={{ gap: 4 }}>
-        <Text style={styles.title}>Create your account</Text>
-        <Text style={styles.subtitle}>We email a verification code right after sign-up.</Text>
+      <View style={{ gap: 6 }}>
+        <Text style={type.eyebrow}>Join Dating Humane</Text>
+        <Text style={type.title}>Create your account</Text>
+        <Text style={type.caption}>We email a verification code right after sign-up.</Text>
       </View>
-      <View style={styles.card}>
+      <View style={{ gap: 14 }}>
         <Field label="Name" value={displayName} onChangeText={setDisplayName} placeholder="Alex" />
         <Field
           label="Email"
@@ -56,57 +69,78 @@ export default function SignUpScreen({
           secureTextEntry
           placeholder="at least 8 characters"
         />
-        <Text style={styles.subtitle}>I am signing up as</Text>
-        <View style={styles.row}>
-          {(['user', 'coach'] as const).map((option) => (
-            <Pressable
-              key={option}
-              accessibilityRole="radio"
-              accessibilityState={{ selected: role === option }}
-              onPress={() => setRole(option)}
-              style={[styles.option, role === option && styles.optionActive]}
-            >
-              <Text style={role === option ? styles.optionActiveLabel : styles.optionLabel}>
-                {option === 'user' ? 'Someone dating' : 'A coach'}
-              </Text>
-            </Pressable>
-          ))}
+        <View style={{ gap: 8 }}>
+          <Text style={styles.roleLabel}>I am signing up as</Text>
+          <View style={styles.row}>
+            {ROLE_OPTIONS.map((option) => {
+              const active = role === option.value;
+              return (
+                <Pressable
+                  key={option.value}
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected: active }}
+                  onPress={() => setRole(option.value)}
+                  style={[styles.option, active && styles.optionActive]}
+                >
+                  <View style={[styles.optionIcon, active && styles.optionIconActive]}>
+                    <Ionicons name={option.icon} size={18} color={active ? colors.primaryText : colors.sageDeep} />
+                  </View>
+                  <Text style={[styles.optionTitle, active && { color: colors.primaryDeep }]}>{option.title}</Text>
+                  <Text style={styles.optionText}>{option.text}</Text>
+                  {active ? (
+                    <Ionicons name="checkmark-circle" size={18} color={colors.primary} style={styles.optionCheck} />
+                  ) : null}
+                </Pressable>
+              );
+            })}
+          </View>
         </View>
-        {error ? <Text style={styles.error}>{error}</Text> : null}
-        <Button label="Sign up" onPress={submit} loading={busy} />
+        {error ? <Text style={shared.error}>{error}</Text> : null}
+        <Button label="Create account" onPress={submit} loading={busy} icon="sparkles-outline" />
       </View>
-      <Button
-        label="I already have an account"
-        variant="secondary"
-        onPress={() => navigation.navigate('SignIn')}
-      />
+      <Divider />
+      <View style={styles.footer}>
+        <Text style={type.caption}>Already have an account?</Text>
+        <Pressable accessibilityRole="button" onPress={() => navigation.navigate('SignIn')} hitSlop={8}>
+          <Text style={styles.link}>Sign in</Text>
+        </Pressable>
+      </View>
     </AuthLayout>
   );
 }
 
 const styles = StyleSheet.create({
-  title: { fontSize: 28, fontWeight: '700', color: colors.text },
-  subtitle: { fontSize: 14, color: colors.muted, lineHeight: 20 },
-  card: {
-    backgroundColor: colors.surface,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: colors.border,
-    padding: 16,
-    gap: 10,
+  roleLabel: {
+    fontFamily: fonts.sansBold,
+    fontSize: 11.5,
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+    color: colors.bark,
+    paddingHorizontal: 2,
   },
-  row: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  row: { flexDirection: 'row', gap: 10 },
   option: {
     flex: 1,
-    borderWidth: 1,
+    gap: 6,
+    padding: 14,
+    borderRadius: radii.md,
+    borderWidth: 1.5,
     borderColor: colors.border,
-    borderRadius: 10,
-    paddingVertical: 12,
-    alignItems: 'center',
-    backgroundColor: colors.surface,
+    backgroundColor: colors.surfaceAlt,
   },
-  optionActive: { borderColor: colors.primary, backgroundColor: '#fdf0f4' },
-  optionLabel: { color: colors.muted, fontWeight: '600' },
-  optionActiveLabel: { color: colors.primary, fontWeight: '700' },
-  error: { color: colors.flat, fontSize: 14 },
+  optionActive: { borderColor: colors.primary, backgroundColor: colors.primaryTint },
+  optionIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.sageTint,
+  },
+  optionIconActive: { backgroundColor: colors.primary },
+  optionTitle: { fontFamily: fonts.sansBold, fontSize: 14, color: colors.text },
+  optionText: { ...type.caption, fontSize: 12 },
+  optionCheck: { position: 'absolute', top: 10, right: 10 },
+  footer: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 6 },
+  link: { fontFamily: fonts.sansBold, fontSize: 14, color: colors.primaryDeep },
 });

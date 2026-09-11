@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "Dating Coach",
+    "name": "Dating Humane",
     "slug": "dating-coach",
     "scheme": "datingcoach",
     "version": "1.0.0",
@@ -26,6 +26,9 @@
       "output": "single",
       "favicon": "./assets/favicon.png"
     },
-    "plugins": ["expo-status-bar"]
+    "plugins": [
+      "expo-status-bar",
+      "expo-font"
+    ]
   }
 }

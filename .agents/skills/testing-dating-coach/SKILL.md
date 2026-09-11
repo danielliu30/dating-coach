@@ -23,11 +23,14 @@ cd app && npm install && npx expo start --web   # web on :8081
 ## Accounts and the verification gate
 - Role (client/coach) is chosen at sign-up and cannot be changed later; you need one of each.
 - Sign-up returns a live session but the app holds you on the Verify screen until `email_verified`.
-- No SMTP: grab the token from the API log. Newer revisions log a deep link — opening
-  `http://localhost:8081/verify?token=<64hex>` auto-submits, no typing needed:
+- No SMTP: read the six-digit verification code from the API log and enter it on the Verify
+  screen. Match the log entry to the account email when testing multiple roles. Codes expire
+  after 3 minutes and are discarded after 3 wrong attempts; use Resend if needed.
 ```bash
-docker compose logs api | grep -i verification       # token=<64 hex chars> / full /verify?token=... link
+docker compose logs api --since 5m | grep -A 5 -B 3 'Your verification code is:'
 ```
+- Older revisions used `/verify?token=<64hex>` deep links; inspect the current log and Verify
+  screen rather than assuming that older token format is still accepted.
 - A coach is invisible to clients (and unchattable) until a coach profile + availability is saved from the coach Profile tab.
 
 ## Direct DB inspection
@@ -123,11 +126,18 @@ Top tab labels may be truncated ("Coac…", "Analy…") at ~1024px — cosmetic,
 - **Session-ended notice levers** (`app/src/screens/SignInScreen.tsx` holds the copy):
   - "revoked" copy — *Your session was ended / This can happen if the account was deleted or signed out
     on another device.* Trigger with
-    `update refresh_tokens set revoked_at=now() where user_id=… and revoked_at is null` (or a real
+    `delete from refresh_tokens where user_id=…` on a disposable local test user (or a real
     `DELETE /auth/me` from another client), then wait out the access token and trigger a request.
+    Check the current auth reason mapping before asserting copy. The current table has
+    `expires_at` and `used_at`, not `revoked_at`; inspect `\d refresh_tokens` if a recipe fails.
   - "expired" copy — *You were signed out / Your session expired for security…* Trigger at runtime with
-    `JWT_TTL=30s REFRESH_TOKEN_TTL=40s docker compose up -d api`, sign in, idle ~60 s; or patch
-    `dating-coach.session` in localStorage to a past `refresh_expires_at` and reload (startup path).
+    `JWT_TTL=30s REFRESH_TOKEN_TTL=40s docker compose up -d api`, sign in, idle ~60 s. For the
+    startup path, expire the disposable user's DB refresh rows
+    (`update refresh_tokens set expires_at=now()-interval '1 minute' where user_id=…`), patch
+    `dating-coach.session` in localStorage to a past `expires_at`, and reload. Expiring only
+    the stored access expiry normally refreshes successfully and does not show a Notice.
+    Never print stored token values. Click the round Dismiss button and verify the banner
+    disappears; sign in again afterward to restore a usable session.
   - Explicit "Sign out" must show **no** banner, and a successful self-delete from the Account screen
     must also land on a clean Sign In screen (auth.tsx clears `endedReason` in `clearSession`).
   - Regression watch: `client.ts` must call `onUnauthorized()` only once per renewal — `refresh()`
