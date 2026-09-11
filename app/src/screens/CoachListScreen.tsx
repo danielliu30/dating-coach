@@ -1,52 +1,99 @@
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import React from 'react';
-import { FlatList, Pressable, Text, View } from 'react-native';
+import { FlatList, StyleSheet, Text, View } from 'react-native';
 
 import { api } from '../api/client';
-import { Badge, Empty, Loading, Screen } from '../components/ui';
+import { Avatar, EmptyState, ListCard, MetaRow, PageHeader, SkeletonCard, StatRow, StatTile } from '../components/kit';
+import { Badge, Screen } from '../components/ui';
 import { useAsync } from '../hooks/useAsync';
 import type { CoachesStackParams } from '../navigation/types';
-import { colors, shared } from '../theme';
+import { colors, fonts, shared, type } from '../theme';
 
 export default function CoachListScreen({
   navigation,
 }: NativeStackScreenProps<CoachesStackParams, 'CoachList'>): React.ReactElement {
   const { data, error, loading } = useAsync(() => api.listCoaches(true));
+  const coaches = data ?? [];
+  const specialties = new Set(coaches.flatMap((c) => c.specialties)).size;
+  const avgYears = coaches.length
+    ? Math.round(coaches.reduce((sum, c) => sum + c.years_experience, 0) / coaches.length)
+    : 0;
 
   return (
     <Screen scroll={false}>
-      <Text style={shared.title}>Coaches</Text>
-      <Text style={shared.muted}>Book a session or start a live chat with a human coach.</Text>
-      {loading && !data ? <Loading /> : null}
-      {error ? <Text style={shared.error}>{error}</Text> : null}
       <FlatList
-        data={data ?? []}
+        data={coaches}
         keyExtractor={(coach) => coach.id}
-        contentContainerStyle={{ gap: 12, paddingVertical: 12 }}
-        ListEmptyComponent={loading ? null : <Empty text="No coaches are accepting clients yet." />}
+        contentContainerStyle={{ gap: 12, paddingBottom: 24 }}
+        ListHeaderComponent={
+          <View style={{ gap: 16, marginBottom: 4 }}>
+            <PageHeader
+              eyebrow="Dating Humane coaches"
+              title="Talk to a real person"
+              subtitle="Book a session or start a live chat with a human coach who will actually listen."
+              gradient="meadow"
+            />
+            {coaches.length > 0 ? (
+              <StatRow>
+                <StatTile value={coaches.length} label="Accepting clients" icon="people-outline" hue="sage" />
+                <StatTile value={specialties} label="Specialties" icon="ribbon-outline" hue="sun" />
+                <StatTile value={`${avgYears}y`} label="Avg. experience" icon="leaf-outline" hue="sky" />
+              </StatRow>
+            ) : null}
+            {error ? <Text style={shared.error}>{error}</Text> : null}
+            {loading && !data ? (
+              <>
+                <SkeletonCard />
+                <SkeletonCard />
+              </>
+            ) : null}
+          </View>
+        }
+        ListEmptyComponent={
+          loading ? null : (
+            <EmptyState
+              icon="leaf-outline"
+              title="No coaches yet"
+              text="Nobody is accepting new clients right now. Check back soon — new coaches join regularly."
+            />
+          )
+        }
         renderItem={({ item }) => (
-          <Pressable
-            accessibilityRole="button"
-            onPress={() =>
-              navigation.navigate('CoachDetail', { coachID: item.id, coachName: item.display_name })
+          <ListCard
+            onPress={() => navigation.navigate('CoachDetail', { coachID: item.id, coachName: item.display_name })}
+            leading={<Avatar name={item.display_name} size={52} />}
+            title={item.display_name}
+            subtitle={item.headline || 'Human dating coach'}
+            trailing={
+              <View style={styles.rate}>
+                <Text style={styles.rateValue}>${(item.hourly_rate_cents / 100).toFixed(0)}</Text>
+                <Text style={styles.rateUnit}>/hr</Text>
+              </View>
             }
-            style={({ pressed }) => [shared.card, pressed && { opacity: 0.9 }]}
           >
-            <View style={[shared.row, { justifyContent: 'space-between' }]}>
-              <Text style={shared.heading}>{item.display_name}</Text>
-              <Text style={shared.muted}>${(item.hourly_rate_cents / 100).toFixed(0)}/hr</Text>
+            {item.specialties.length > 0 ? (
+              <View style={[shared.row, { flexWrap: 'wrap', gap: 6 }]}>
+                {item.specialties.map((specialty) => (
+                  <Badge key={specialty} text={specialty} tone={colors.primaryDeep} />
+                ))}
+              </View>
+            ) : null}
+            <View style={styles.metaRow}>
+              {item.years_experience > 0 ? (
+                <MetaRow icon="leaf-outline" text={`${item.years_experience} years coaching`} />
+              ) : null}
+              <MetaRow icon="globe-outline" text={item.timezone} />
             </View>
-            {item.headline ? <Text style={shared.body}>{item.headline}</Text> : null}
-            <View style={[shared.row, { flexWrap: 'wrap' }]}>
-              {item.specialties.map((specialty) => (
-                <Badge key={specialty} text={specialty} tone={colors.primary} />
-              ))}
-              {item.years_experience > 0 ? <Badge text={`${item.years_experience}y experience`} /> : null}
-              <Badge text={item.timezone} />
-            </View>
-          </Pressable>
+          </ListCard>
         )}
       />
     </Screen>
   );
 }
+
+const styles = StyleSheet.create({
+  rate: { alignItems: 'flex-end' },
+  rateValue: { fontFamily: fonts.sansBlack, fontSize: 20, color: colors.text, letterSpacing: -0.5 },
+  rateUnit: { ...type.caption, fontSize: 11 },
+  metaRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 14 },
+});
