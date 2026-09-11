@@ -1,11 +1,14 @@
+import { Ionicons } from '@expo/vector-icons';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import React, { useCallback, useEffect, useState } from 'react';
-import { Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { Button, Field, Screen } from '../components/ui';
+import { AuthLayout } from '../components/AuthLayout';
+import { Divider, IconDisc } from '../components/kit';
+import { Button, Field } from '../components/ui';
 import type { AuthStackParams } from '../navigation/types';
 import { useAuth } from '../state/auth';
-import { shared } from '../theme';
+import { colors, fonts, radii, shared, type } from '../theme';
 
 export default function VerifyEmailScreen({
   route,
@@ -52,12 +55,19 @@ export default function VerifyEmailScreen({
   };
 
   return (
-    <Screen>
-      <View style={{ gap: 4, paddingTop: 24, paddingBottom: 8 }}>
-        <Text style={shared.title}>Verify your email</Text>
-        <Text style={shared.muted}>Enter the 6-digit code sent to your email. It expires in 3 minutes.</Text>
+    <AuthLayout>
+      <View style={styles.intro}>
+        <IconDisc icon="mail-unread-outline" hue="sun" size={56} />
+        <View style={{ flex: 1, gap: 4 }}>
+          <Text style={type.eyebrow}>One last step</Text>
+          <Text style={type.title}>Check your inbox</Text>
+        </View>
       </View>
-      <View style={shared.card}>
+      <Text style={type.body}>
+        We sent a 6-digit code to <Text style={{ fontFamily: fonts.sansBold }}>{email || 'your email'}</Text>. Enter it
+        below to verify your account.
+      </Text>
+      <View style={{ gap: 14 }}>
         <Field label="Email" value={email} editable={false} autoCapitalize="none" keyboardType="email-address" />
         <Field
           label="Verification code"
@@ -66,15 +76,54 @@ export default function VerifyEmailScreen({
           autoCapitalize="none"
           keyboardType="number-pad"
           maxLength={6}
+          placeholder="••••••"
+          style={styles.codeInput}
         />
-        {status ? <Text style={shared.muted}>{status}</Text> : null}
+        {status ? (
+          <View style={styles.status}>
+            <Ionicons name="checkmark-circle" size={16} color={colors.engaging} />
+            <Text style={[type.caption, { color: colors.engaging }]}>{status}</Text>
+          </View>
+        ) : null}
         {error ? <Text style={shared.error}>{error}</Text> : null}
-        <Button label="Verify" onPress={() => void submit()} loading={busy} />
-        <Button label="Resend code" variant="secondary" onPress={resend} />
+        <Button label="Verify email" onPress={() => void submit()} loading={busy} icon="shield-checkmark-outline" />
+      </View>
+      <View style={styles.hint}>
+        <Ionicons name="time-outline" size={14} color={colors.muted} />
+        <Text style={type.caption}>Codes expire after 3 minutes.</Text>
+        <Pressable accessibilityRole="button" onPress={resend} hitSlop={8}>
+          <Text style={styles.link}>Resend code</Text>
+        </Pressable>
       </View>
       {token ? null : (
-        <Button label="Back to sign in" variant="secondary" onPress={() => navigation.navigate('SignIn')} />
+        <>
+          <Divider />
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => navigation.navigate('SignIn')}
+            hitSlop={8}
+            style={styles.back}
+          >
+            <Ionicons name="arrow-back" size={14} color={colors.primaryDeep} />
+            <Text style={styles.link}>Back to sign in</Text>
+          </Pressable>
+        </>
       )}
-    </Screen>
+    </AuthLayout>
   );
 }
+
+const styles = StyleSheet.create({
+  intro: { flexDirection: 'row', alignItems: 'center', gap: 14 },
+  codeInput: {
+    fontFamily: fonts.sansBlack,
+    fontSize: 24,
+    letterSpacing: 8,
+    textAlign: 'center',
+    borderRadius: radii.md,
+  },
+  status: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  hint: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, flexWrap: 'wrap' },
+  link: { fontFamily: fonts.sansBold, fontSize: 14, color: colors.primaryDeep },
+  back: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
+});

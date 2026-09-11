@@ -1,13 +1,15 @@
+import { Ionicons } from '@expo/vector-icons';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import React, { useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { ApiError } from '../api/client';
 import { AuthLayout } from '../components/AuthLayout';
+import { Divider } from '../components/kit';
 import { Button, Field, Notice } from '../components/ui';
 import type { AuthStackParams } from '../navigation/types';
 import { useAuth } from '../state/auth';
-import { colors } from '../theme';
+import { colors, fonts, shared, type } from '../theme';
 
 export default function SignInScreen({
   navigation,
@@ -36,10 +38,11 @@ export default function SignInScreen({
   };
 
   return (
-    <AuthLayout>
-      <View style={{ gap: 4 }}>
-        <Text style={styles.title}>Welcome back</Text>
-        <Text style={styles.subtitle}>Coaching and conversation feedback, in one place.</Text>
+    <AuthLayout landing>
+      <View style={{ gap: 6 }}>
+        <Text style={type.eyebrow}>Welcome back</Text>
+        <Text style={type.title}>Sign in to Dating Humane</Text>
+        <Text style={type.caption}>Coaching and conversation feedback, in one place.</Text>
       </View>
       {signedOutReason ? (
         <Notice
@@ -52,7 +55,7 @@ export default function SignInScreen({
           onDismiss={dismissSignedOutReason}
         />
       ) : null}
-      <View style={styles.card}>
+      <View style={{ gap: 14 }}>
         <Field
           label="Email"
           value={email}
@@ -70,28 +73,29 @@ export default function SignInScreen({
           autoComplete="current-password"
           placeholder="••••••••"
         />
-        {error ? <Text style={styles.error}>{error}</Text> : null}
-        <Button label="Sign in" onPress={submit} loading={busy} />
+        {error ? <Text style={shared.error}>{error}</Text> : null}
+        <Button label="Sign in" onPress={submit} loading={busy} icon="arrow-forward" />
       </View>
-      <Button
-        label="Create an account"
-        variant="secondary"
-        onPress={() => navigation.navigate('SignUp')}
-      />
+      <View style={styles.dividerRow}>
+        <Divider />
+      </View>
+      <View style={styles.footer}>
+        <Text style={type.caption}>New here?</Text>
+        <Pressable accessibilityRole="button" onPress={() => navigation.navigate('SignUp')} hitSlop={8}>
+          <Text style={styles.link}>Create an account</Text>
+        </Pressable>
+      </View>
+      <View style={styles.reassure}>
+        <Ionicons name="lock-closed-outline" size={14} color={colors.sageDeep} />
+        <Text style={[type.caption, { color: colors.sageDeep }]}>Private by default. We never date on your behalf.</Text>
+      </View>
     </AuthLayout>
   );
 }
 
 const styles = StyleSheet.create({
-  title: { fontSize: 28, fontWeight: '700', color: colors.text },
-  subtitle: { fontSize: 14, color: colors.muted, lineHeight: 20 },
-  card: {
-    backgroundColor: colors.surface,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: colors.border,
-    padding: 16,
-    gap: 10,
-  },
-  error: { color: colors.flat, fontSize: 14 },
+  dividerRow: { paddingVertical: 2 },
+  footer: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 6 },
+  link: { fontFamily: fonts.sansBold, fontSize: 14, color: colors.primaryDeep },
+  reassure: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
 });
