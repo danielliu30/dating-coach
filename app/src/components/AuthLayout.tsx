@@ -176,6 +176,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    flexWrap: 'wrap',
     paddingHorizontal: 22,
     paddingVertical: 18,
     gap: 12,
@@ -191,7 +192,7 @@ const styles = StyleSheet.create({
     ...elevation.primary,
   },
   wordmark: { fontFamily: fonts.sansBlack, fontSize: 20, letterSpacing: -0.4, color: colors.primaryText },
-  navLinks: { flexDirection: 'row', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' },
+  navLinks: { flexDirection: 'row', gap: 8, flexWrap: 'wrap', flexShrink: 1, justifyContent: 'flex-end' },
   navLink: {
     paddingHorizontal: 14,
     paddingVertical: 8,
