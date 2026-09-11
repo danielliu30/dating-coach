@@ -21,8 +21,9 @@ const HERO_IMAGE_URL =
   'https://images.unsplash.com/photo-1529333166437-7750a6dd5a70?auto=format&fit=crop&w=2000&q=80';
 
 const PROOF: { icon: React.ComponentProps<typeof Ionicons>['name']; text: string }[] = [
+  { icon: 'compass-outline', text: 'You lead, we walk alongside' },
   { icon: 'people-outline', text: 'Live human coaches' },
-  { icon: 'pulse-outline', text: 'Honest conversation feedback' },
+  { icon: 'pulse-outline', text: 'Honest feedback on your chats' },
   { icon: 'shield-checkmark-outline', text: 'Never dates on your behalf' },
 ];
 
@@ -98,10 +99,10 @@ export function AuthLayout({
               {wide ? (
                 <View style={styles.heroCopy}>
                   <Text style={styles.eyebrow}>Coaching for the part after the match</Text>
-                  <Text style={styles.headline}>Better conversations.{'\n'}Real connection.</Text>
+                  <Text style={styles.headline}>Own your dating life.{'\n'}We'll walk it with you.</Text>
                   <Text style={styles.tagline}>
-                    Human coaching and honest feedback on how your chats actually land — so you become a better dater,
-                    not a better script.
+                    Honest feedback and real human coaches for every step of the journey — so the growth, the choices
+                    and the connection stay yours.
                   </Text>
                   <View style={styles.proofRow}>
                     {PROOF.map((p) => (
@@ -116,7 +117,7 @@ export function AuthLayout({
 
               <View ref={formRef} collapsable={false} style={[styles.card, wide && styles.cardWide]}>
                 {!wide ? (
-                  <Text style={styles.compactTagline}>Better conversations. Real connection.</Text>
+                  <Text style={styles.compactTagline}>Own your dating life. We'll walk it with you.</Text>
                 ) : null}
                 {children}
               </View>

@@ -162,8 +162,8 @@ export function Landing({
       {/* Features */}
       <View style={styles.section}>
         <SectionTitle
-          eyebrow="Somewhere to turn"
-          title="Help throughout your dating life — from software when it's useful, from a person when it matters."
+          eyebrow="Your journey, with company"
+          title="You set the direction. We help at every step — software when it's useful, a person when it matters."
         />
         <View style={styles.grid}>
           {FEATURES.map((f) => (
@@ -193,11 +193,11 @@ export function Landing({
       {/* About */}
       <View ref={aboutRef} collapsable={false} style={[styles.section, styles.sectionDark]}>
         <LinearGradient colors={gradients.dusk} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.fill} />
-        <View pointerEvents="none" style={styles.darkOrb} />
+        <View style={styles.darkOrb} />
         <SectionTitle
           light
           eyebrow="About us"
-          title="We don't want to date for you."
+          title="This is your dating life. We don't want to date for you."
           accent="At some point they aren't talking to you anymore — they're talking to an algorithm pretending to be you."
         />
         <View style={[styles.split, twoUp && styles.splitRow]}>
@@ -209,7 +209,8 @@ export function Landing({
           ))}
         </View>
         <Text style={[type.body, { color: 'rgba(255,255,255,0.85)', maxWidth: 640 }]}>
-          The point of a coach isn't to play the game for you. It's to make you better at playing it yourself.
+          Taking ownership means the wins are yours too. A coach doesn't play the game for you — they help you get
+          better at playing it yourself.
         </Text>
       </View>
 
@@ -253,7 +254,7 @@ export function Landing({
         <SectionTitle
           center
           eyebrow="What we're really building"
-          title="We're not another dating app. We help with the part that comes next."
+          title="We're not another dating app. We're the company you keep along the way."
           accent="More confident. More self-aware. Better at communicating. Better at knowing what you want."
         />
         <View style={styles.closingRow}>
@@ -264,8 +265,8 @@ export function Landing({
           ))}
         </View>
         <Text style={[type.body, { color: colors.muted, textAlign: 'center', maxWidth: 520 }]}>
-          Dating apps can introduce you to someone. What happens after that is still up to you — you just shouldn't
-          have to figure all of it out alone.
+          Dating apps can introduce you to someone. What happens after that is up to you — and owning it is the
+          point. You just shouldn't have to figure all of it out alone.
         </Text>
       </View>
 
@@ -294,6 +295,7 @@ const styles = StyleSheet.create({
   sectionSunken: { backgroundColor: colors.surfaceAlt },
   sectionDark: { backgroundColor: colors.moss },
   darkOrb: {
+    pointerEvents: 'none',
     position: 'absolute',
     right: -80,
     top: -100,

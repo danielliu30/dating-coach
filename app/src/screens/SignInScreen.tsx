@@ -42,7 +42,7 @@ export default function SignInScreen({
       <View style={{ gap: 6 }}>
         <Text style={type.eyebrow}>Welcome back</Text>
         <Text style={type.title}>Sign in to Dating Humane</Text>
-        <Text style={type.caption}>Coaching and conversation feedback, in one place.</Text>
+        <Text style={type.caption}>Pick up your journey where you left it.</Text>
       </View>
       {signedOutReason ? (
         <Notice
