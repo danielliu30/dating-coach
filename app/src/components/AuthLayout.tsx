@@ -26,10 +26,12 @@ export function AuthLayout({ children }: { children: React.ReactNode }): React.R
         </ScrollView>
         {showImage && (
           <View style={styles.imagePanel}>
-            <Image source={{ uri: COUPLE_IMAGE_URL }} style={styles.image} resizeMode="cover" />
-            <View pointerEvents="none" style={styles.imageTintTop} />
-            <View pointerEvents="none" style={styles.imageTintBottom} />
-            <View pointerEvents="none" style={styles.panelSeam} />
+            <View style={styles.imageClip}>
+              <Image source={{ uri: COUPLE_IMAGE_URL }} style={styles.image} resizeMode="cover" />
+              <View pointerEvents="none" style={styles.imageTintTop} />
+              <View pointerEvents="none" style={styles.imageTintBottom} />
+              <View pointerEvents="none" style={styles.panelSeam} />
+            </View>
           </View>
         )}
       </View>
@@ -95,8 +97,13 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceSunken,
     borderTopLeftRadius: radii.xl,
     borderBottomLeftRadius: radii.xl,
-    overflow: 'hidden',
     ...elevation.high,
+  },
+  imageClip: {
+    flex: 1,
+    borderTopLeftRadius: radii.xl,
+    borderBottomLeftRadius: radii.xl,
+    overflow: 'hidden',
   },
   image: {
     width: '100%',
