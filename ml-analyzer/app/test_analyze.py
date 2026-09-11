@@ -262,6 +262,43 @@ def test_llm_parse_rejects_drafted_replies() -> None:
     with pytest.raises(ValueError, match="drafted a reply"):
         scorer._parse(json.dumps(bad), boundaries)
 
+    for draft in ("Consider asking about her trip.", 'A better reply would be: "What trail was your favorite?"'):
+        worse = dict(good, overall=dict(good["overall"], improvements=[draft]))
+        with pytest.raises(ValueError, match="drafted a reply"):
+            scorer._parse(json.dumps(worse), boundaries)
+
+    sources = [
+        "You could say I'm obsessed with climbing, but lately I mostly stay home",
+        'She said "you could ask him about work"',
+        "say",
+    ]
+    for fine in (
+        'Message 3 ("You could say I\'m obsessed with climbing") got no reply.',
+        'Message 3 (\u201cyou could  say I\'m obsessed\u201d) got no reply.',
+        'Message 4 ("She said "you could ask him about work"") drew a short reply.',
+        'Message 3 ("You could say I\'m obsessed") and Message 4 ("you could ask him about work") both stalled.',
+        "Message 3 did not invite the match to respond with much detail.",
+        "Message 2 was so narrow the match could respond with only yes or no.",
+    ):
+        quoted = dict(good, overall=dict(good["overall"], improvements=[fine]))
+        assert scorer._parse(json.dumps(quoted), boundaries, sources).overall.improvements == [fine]
+
+    for disguised in (
+        'Message 3 was terse; "Ask her about the trip."',
+        "You could say hello to restart things.",
+        'Message 5 ("say") was one word; you could say more next time.',
+        'A stronger answer is "you could ask him about work".',
+        # Only the prompt's Message N ("...") syntax is a citation; anything else is scanned.
+        'Message 3 says, "You could say I\'m obsessed with climbing", which drew no reply.',
+        # Unclosed quote: nothing is exempted.
+        'Message 3 ("You could say I\'m obsessed with climbing) got no reply.',
+        # The second span is not a citation even though the first one is.
+        'Message 3 ("You could say I\'m obsessed") stalled; "you could ask him about work" would land better.',
+    ):
+        bad = dict(good, overall=dict(good["overall"], improvements=[disguised]))
+        with pytest.raises(ValueError, match="drafted a reply"):
+            scorer._parse(json.dumps(bad), boundaries, sources)
+
 
 def _png_base64(width: int, height: int) -> str:
     """Minimal PNG header (signature + IHDR) that ``image_dimensions`` can read."""

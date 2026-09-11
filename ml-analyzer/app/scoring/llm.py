@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Any, Dict, List, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 import httpx
 
@@ -20,9 +20,18 @@ logger = logging.getLogger(__name__)
 DRAFTING = re.compile(
     r"\b(try (asking|saying|something like)|you could (say|ask|write|reply|respond)|"
     r"(you )?should have (said|asked|written)|say something like|for example[,:]? ask|"
-    r"ask (her|him|them) (something like|about)|next time,? (say|ask)|instead,? (say|ask))\b",
+    r"ask (her|him|them) (something like|about)|next time,? (say|ask)|instead,? (say|ask)|"
+    r"consider (asking|saying)|perhaps (say|ask)|you (could|should) (reply|respond) with|"
+    r"a better (reply|response|message) (would be|is|might be))\b",
     re.IGNORECASE,
 )
+
+# The one citation syntax SYSTEM_PROMPT mandates, ``Message N ("...")``, up to and including the
+# opening quote (group 1). Citations written any other way are simply not exempted.
+CITATION_START = re.compile(r"message\s+\d+\s*\(\s*([\"\u201c])", re.IGNORECASE)
+CLOSING_QUOTE = re.compile(r"[\"\u201d]")
+# Shortest quotation that can be exempted from the drafting scan.
+MIN_QUOTE_WORDS = 3
 
 SYSTEM_PROMPT = """You are a dating-conversation coach reviewing ONLY the messages \
 written by the customer you are coaching. You judge how each of their messages \
@@ -54,12 +63,13 @@ to review there.
 detailed replies; 0.0 = they went unanswered or were met with one-word replies.
 - "improvements" point out potential flaws, phrased as hints to reflect on: a \
 message that got no reply, a message that only got a short reply, a message \
-that closed the topic. Name the message by its 1-based number (position + 1) \
-and quote it briefly. Explain what may have made it hard to answer. If the \
+that closed the topic. Cite the message exactly as Message N ("brief quote"), \
+where N is its 1-based number (position + 1) and the quote is the customer's \
+own words. Explain what may have made it hard to answer. If the \
 customer's final message has no reply recorded, the match may simply not have \
 answered yet: mention it neutrally, do not count it as a flaw.
 - "strengths" acknowledge the customer's messages that produced a good or \
-successful response, again naming and quoting the message.
+successful response, cited the same way.
 - NEVER suggest, draft or rewrite what the customer should say or should have \
 said. No example replies, no "try asking ...", no "you could say ...". The \
 customer always drives the conversation; you only hint at what to look at.
@@ -84,7 +94,7 @@ class LLMScorer(Scorer):
 
         try:
             raw = await self._complete(prompt)
-            return self._parse(raw, boundaries)
+            return self._parse(raw, boundaries, [m.body for m in request.messages if m.sender == "self"])
         except Exception:  # noqa: BLE001 - degrade instead of failing the job
             logger.exception("llm scoring failed, falling back to heuristic scorer")
             response = await self._fallback.analyze(request)
@@ -140,7 +150,7 @@ class LLMScorer(Scorer):
             response.raise_for_status()
             return response.json()["choices"][0]["message"]["content"]
 
-    def _parse(self, raw: str, boundaries: List[tuple[int, int]]) -> AnalyzeResponse:
+    def _parse(self, raw: str, boundaries: List[tuple[int, int]], sources: Sequence[str] = ()) -> AnalyzeResponse:
         payload: Dict[str, Any] = json.loads(_strip_fences(raw))
         by_boundary: Dict[tuple[int, int], Segment] = {}
         for item in payload.get("segments", []):
@@ -166,7 +176,7 @@ class LLMScorer(Scorer):
         overall = payload.get("overall", {})
         prose = [s.comment for s in segments] + [str(overall.get("summary", ""))]
         prose += [str(x) for x in overall.get("strengths", [])] + [str(x) for x in overall.get("improvements", [])]
-        _reject_drafting(prose)
+        _reject_drafting(prose, sources)
         scores = [s.engagement_score for s in segments]
         return AnalyzeResponse(
             model_version=self.version,
@@ -182,16 +192,54 @@ class LLMScorer(Scorer):
         )
 
 
-def _reject_drafting(texts: Sequence[str]) -> None:
+def _reject_drafting(texts: Sequence[str], sources: Sequence[str] = ()) -> None:
     """Raise ``ValueError`` if any feedback text drafts a reply for the customer.
 
     A prompt cannot enforce the no-drafting rule, so completions that still
     contain "try asking ..."-style suggestions are treated as failed and the
-    caller falls back to the heuristic scorer, which never drafts.
+    caller falls back to the heuristic scorer, which never drafts. Feedback is
+    required to name and quote the customer's own messages briefly, so a quoted
+    span is blanked before scanning only when it is provably a citation: it is
+    written in the prompt's ``Message N ("...")`` syntax (``CITATION_START``), is at least
+    ``MIN_QUOTE_WORDS`` long and is, case- and whitespace-insensitively, a
+    substring of one of the ``sources`` bodies. Everything else, including
+    unquoted text that happens to echo a short customer message and quoted
+    text the model wrote itself (even when it reuses the customer's words), is
+    checked. A citation written any other way is not exempted, so a customer
+    message that itself sounds like drafting can still cause a needless (but
+    safe) fallback.
     """
+    normalised_sources = [_squash(s) for s in sources if s.strip()]
+
+    def citation_end(text: str, start: int) -> Optional[int]:
+        """Index just past the longest closing quote after ``start`` whose contents are a customer quote, else ``None``.
+
+        Trying every closing quote (longest first) lets a customer message that
+        itself contains quotes be cited whole.
+        """
+        for closing in reversed(list(CLOSING_QUOTE.finditer(text, start + 1))):
+            inner = _squash(text[start + 1 : closing.start()])
+            if len(inner.split()) >= MIN_QUOTE_WORDS and any(inner in s for s in normalised_sources):
+                return closing.end()
+        return None
+
     for text in texts:
-        if DRAFTING.search(text):
+        scanned, cursor = [], 0
+        for match in CITATION_START.finditer(text):
+            start = match.start(1)
+            end = citation_end(text, start) if start >= cursor else None
+            if end is None:
+                continue
+            scanned.append(text[cursor:start] + " ")
+            cursor = end
+        scanned.append(text[cursor:])
+        if DRAFTING.search("".join(scanned)):
             raise ValueError(f"llm drafted a reply for the customer: {text[:80]!r}")
+
+
+def _squash(text: str) -> str:
+    """Lower-case ``text`` and collapse runs of whitespace so quotes compare loosely against sources."""
+    return " ".join(text.lower().split())
 
 
 def self_message_digest(messages: Sequence[Message]) -> str:
