@@ -1,19 +1,25 @@
+import { Ionicons } from '@expo/vector-icons';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { api } from '../api/client';
 import type { AnalysisResult, Outcome } from '../api/types';
-import { Badge, Button, Loading, Screen, ScoreBar } from '../components/ui';
+import { Divider, EmptyState, IconDisc, SectionHeader, Skeleton, SkeletonCard, StatusPill } from '../components/kit';
+import { Badge, Button, Loading, Screen, ScoreBar, type IconName } from '../components/ui';
 import type { AnalysisStackParams } from '../navigation/types';
-import { colors, scoreColor, shared } from '../theme';
+import { colors, fonts, radii, scoreColor, shared, type } from '../theme';
 
-const OUTCOMES: { value: Outcome; label: string }[] = [
-  { value: 'ghosted', label: 'Ghosted' },
-  { value: 'kept_talking', label: 'Kept talking' },
-  { value: 'number_exchanged', label: 'Numbers' },
-  { value: 'date_set', label: 'Date set' },
+const OUTCOMES: { value: Outcome; label: string; icon: IconName }[] = [
+  { value: 'ghosted', label: 'Ghosted', icon: 'cloud-outline' },
+  { value: 'kept_talking', label: 'Kept talking', icon: 'chatbubbles-outline' },
+  { value: 'number_exchanged', label: 'Numbers', icon: 'call-outline' },
+  { value: 'date_set', label: 'Date set', icon: 'calendar-outline' },
 ];
+
+/** One-word read of an engagement score in [0, 1] for the hero card. */
+const scoreWord = (score: number): string =>
+  score >= 0.7 ? 'Engaging' : score >= 0.4 ? 'Steady' : 'Flat';
 
 const POLL_MS = 2000;
 const MAX_POLL_FAILURES = 5;
@@ -102,13 +108,19 @@ export default function AnalysisResultScreen({
   if (error) {
     return (
       <Screen>
-        <Text style={shared.error}>{error}</Text>
-        <Button
-          label="Try again"
-          onPress={() => {
-            failures.current = 0;
-            setError(null);
-            void poll();
+        <EmptyState
+          icon="cloud-offline-outline"
+          hue="rose"
+          title="We lost the thread"
+          text={error}
+          action={{
+            label: 'Try again',
+            icon: 'refresh-outline',
+            onPress: () => {
+              failures.current = 0;
+              setError(null);
+              void poll();
+            },
           }}
         />
       </Screen>
@@ -118,7 +130,15 @@ export default function AnalysisResultScreen({
   if (!result || result.status === 'pending' || result.status === 'running') {
     return (
       <Screen>
-        <Loading label={result?.status === 'running' ? 'Scoring your conversation…' : 'Queued for analysis…'} />
+        <View style={styles.pending}>
+          <IconDisc icon={result?.status === 'running' ? 'analytics-outline' : 'hourglass-outline'} hue="sun" size={64} />
+          <Loading label={result?.status === 'running' ? 'Scoring your conversation…' : 'Queued for analysis…'} />
+          <Text style={[type.caption, { textAlign: 'center' }]}>
+            This usually takes a few seconds. We look at rhythm, reciprocity and where the energy shifts.
+          </Text>
+        </View>
+        <SkeletonCard />
+        <Skeleton height={80} radius={radii.lg} />
       </Screen>
     );
   }
@@ -127,108 +147,175 @@ export default function AnalysisResultScreen({
     return (
       <Screen>
         <View style={shared.card}>
-          <Text style={shared.heading}>Analysis failed</Text>
-          <Text style={shared.body}>{result.error || 'The analyzer could not score this conversation.'}</Text>
-          {retryError ? <Text style={shared.error}>{retryError}</Text> : null}
-          <Button
-            label="Try again"
-            loading={retrying}
-            onPress={() => void retryAnalysis()}
+          <SectionHeader
+            title="Analysis failed"
+            caption="Your transcript is safe — we can score it again."
+            icon="alert-circle-outline"
+            hue="rose"
           />
+          <Text style={type.body}>{result.error || 'The analyzer could not score this conversation.'}</Text>
+          {retryError ? <Text style={shared.error}>{retryError}</Text> : null}
+          <Button label="Try again" icon="refresh-outline" loading={retrying} onPress={() => void retryAnalysis()} />
         </View>
       </Screen>
     );
   }
 
   const overall = result.overall;
+  const score = overall?.engagement_score ?? 0;
+  const tone = scoreColor(score);
+  const segments = result.segments ?? [];
 
   return (
     <Screen>
-      <View style={shared.card}>
-        <View style={[shared.row, { justifyContent: 'space-between' }]}>
-          <Text style={shared.heading}>Overall engagement</Text>
-          <Badge
-            text={`${Math.round((overall?.engagement_score ?? 0) * 100)}%`}
-            tone={scoreColor(overall?.engagement_score ?? 0)}
-          />
+      <View style={[shared.card, styles.hero]}>
+        <View style={styles.heroRow}>
+          <View style={[styles.ring, { borderColor: tone }]}>
+            <Text style={[styles.ringValue, { color: tone }]}>{Math.round(score * 100)}</Text>
+            <Text style={styles.ringUnit}>%</Text>
+          </View>
+          <View style={{ flex: 1, gap: 6 }}>
+            <Text style={type.eyebrow}>Overall engagement</Text>
+            <Text style={type.title}>{scoreWord(score)}</Text>
+            <StatusPill text={`${segments.length} stretch${segments.length === 1 ? '' : 'es'} scored`} tone={colors.sageDeep} />
+          </View>
         </View>
-        <ScoreBar score={overall?.engagement_score ?? 0} />
-        {overall?.summary ? <Text style={shared.body}>{overall.summary}</Text> : null}
+        <ScoreBar score={score} />
+        {overall?.summary ? <Text style={type.body}>{overall.summary}</Text> : null}
         {overall?.strengths?.length ? (
-          <View style={{ gap: 4 }}>
-            <Text style={shared.muted}>What worked</Text>
+          <View style={[styles.list, { backgroundColor: colors.sageTint }]}>
+            <View style={shared.row}>
+              <Ionicons name="leaf-outline" size={16} color={colors.sageDeep} />
+              <Text style={[type.eyebrow, { color: colors.sageDeep }]}>What worked</Text>
+            </View>
             {overall.strengths.map((item) => (
-              <Text key={item} style={shared.body}>
-                • {item}
-              </Text>
+              <View key={item} style={styles.bullet}>
+                <Ionicons name="checkmark-circle" size={16} color={colors.engaging} />
+                <Text style={[type.body, { flex: 1 }]}>{item}</Text>
+              </View>
             ))}
           </View>
         ) : null}
         {overall?.improvements?.length ? (
-          <View style={{ gap: 4 }}>
-            <Text style={shared.muted}>What to change</Text>
+          <View style={[styles.list, { backgroundColor: colors.sunTint }]}>
+            <View style={shared.row}>
+              <Ionicons name="sunny-outline" size={16} color={colors.neutral} />
+              <Text style={[type.eyebrow, { color: colors.neutral }]}>What to change</Text>
+            </View>
             {overall.improvements.map((item) => (
-              <Text key={item} style={shared.body}>
-                • {item}
-              </Text>
+              <View key={item} style={styles.bullet}>
+                <Ionicons name="arrow-forward-circle" size={16} color={colors.neutral} />
+                <Text style={[type.body, { flex: 1 }]}>{item}</Text>
+              </View>
             ))}
           </View>
         ) : null}
-        <Text style={shared.muted}>model: {result.model_version}</Text>
+        <Divider />
+        <View style={shared.row}>
+          <Ionicons name="hardware-chip-outline" size={14} color={colors.muted} />
+          <Text style={type.caption}>model {result.model_version}</Text>
+        </View>
       </View>
 
-      <Text style={shared.heading}>Where it was engaging</Text>
-      {(result.segments ?? []).map((segment) => (
-        <View key={`${segment.start_position}-${segment.end_position}`} style={shared.card}>
-          <View style={[shared.row, { justifyContent: 'space-between' }]}>
-            <Text style={shared.heading}>
-              Messages {segment.start_position + 1}–{segment.end_position + 1}
-            </Text>
-            <Badge text={segment.label} tone={scoreColor(segment.engagement_score)} />
+      <SectionHeader
+        title="Where it was engaging"
+        caption="Stretch by stretch, so you can see where the energy rose and where it dipped."
+      />
+      {segments.map((segment, i) => {
+        const segTone = scoreColor(segment.engagement_score);
+        return (
+          <View key={`${segment.start_position}-${segment.end_position}`} style={shared.card}>
+            <View style={[shared.row, { justifyContent: 'space-between' }]}>
+              <View style={[shared.row, { gap: 10 }]}>
+                <View style={[styles.segIndex, { backgroundColor: `${segTone}22` }]}>
+                  <Text style={[styles.segIndexText, { color: segTone }]}>{i + 1}</Text>
+                </View>
+                <View>
+                  <Text style={type.subheading}>
+                    Messages {segment.start_position + 1}–{segment.end_position + 1}
+                  </Text>
+                  <Text style={type.caption}>{Math.round(segment.engagement_score * 100)}% engagement</Text>
+                </View>
+              </View>
+              <Badge text={segment.label} tone={segTone} />
+            </View>
+            <ScoreBar score={segment.engagement_score} />
+            {segment.comment ? <Text style={type.body}>{segment.comment}</Text> : null}
           </View>
-          <ScoreBar score={segment.engagement_score} />
-          {segment.comment ? <Text style={shared.body}>{segment.comment}</Text> : null}
-        </View>
-      ))}
+        );
+      })}
 
       <View style={shared.card}>
-        <Text style={shared.heading}>What happened next?</Text>
-        <Text style={shared.muted}>
-          Optional, and it stays with your account — outcomes are what let us train a better model.
-        </Text>
-        <View style={[shared.row, { flexWrap: 'wrap' }]}>
-          {OUTCOMES.map((option) => (
-            <Pressable
-              key={option.value}
-              accessibilityRole="radio"
-              accessibilityState={{ selected: outcome === option.value }}
-              onPress={() => void saveLabel(option.value)}
-              style={[styles.chip, outcome === option.value && styles.chipActive]}
-            >
-              <Text style={outcome === option.value ? styles.chipActiveLabel : styles.chipLabel}>
-                {option.label}
-              </Text>
-            </Pressable>
-          ))}
+        <SectionHeader
+          title="What happened next?"
+          caption="Optional, and it stays with your account — outcomes are what let us train a better model."
+          icon="help-buoy-outline"
+          hue="sky"
+        />
+        <View style={styles.outcomes}>
+          {OUTCOMES.map((option) => {
+            const active = outcome === option.value;
+            return (
+              <Pressable
+                key={option.value}
+                accessibilityRole="radio"
+                accessibilityState={{ selected: active }}
+                onPress={() => void saveLabel(option.value)}
+                style={[styles.outcome, active && styles.outcomeActive]}
+              >
+                <Ionicons name={option.icon} size={20} color={active ? colors.primaryDeep : colors.muted} />
+                <Text style={[styles.outcomeLabel, active && { color: colors.primaryDeep }]}>{option.label}</Text>
+              </Pressable>
+            );
+          })}
         </View>
-        {labelStatus ? <Text style={shared.muted}>{labelStatus}</Text> : null}
+        {labelStatus ? (
+          <View style={shared.row}>
+            <Ionicons name="heart-outline" size={14} color={colors.sageDeep} />
+            <Text style={[type.caption, { color: colors.sageDeep }]}>{labelStatus}</Text>
+          </View>
+        ) : null}
       </View>
 
-      <Button label="Refresh" variant="secondary" onPress={() => void poll()} />
+      <Button label="Refresh" icon="refresh-outline" variant="secondary" onPress={() => void poll()} />
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  chip: {
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
-    borderRadius: 999,
-    paddingVertical: 9,
-    paddingHorizontal: 14,
+  pending: { alignItems: 'center', gap: 10, paddingVertical: 24 },
+  hero: { gap: 14 },
+  heroRow: { flexDirection: 'row', alignItems: 'center', gap: 16 },
+  ring: {
+    width: 92,
+    height: 92,
+    borderRadius: 46,
+    borderWidth: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    backgroundColor: colors.surfaceAlt,
   },
-  chipActive: { borderColor: colors.primary, backgroundColor: '#fdf0f4' },
-  chipLabel: { color: colors.muted, fontWeight: '600', fontSize: 13 },
-  chipActiveLabel: { color: colors.primary, fontWeight: '700', fontSize: 13 },
+  ringValue: { fontFamily: fonts.sansBlack, fontSize: 30, letterSpacing: -1 },
+  ringUnit: { fontFamily: fonts.sansBold, fontSize: 13, color: colors.muted, marginTop: 8 },
+  list: { gap: 8, padding: 12, borderRadius: radii.md },
+  bullet: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
+  segIndex: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
+  segIndexText: { fontFamily: fonts.sansBlack, fontSize: 14 },
+  outcomes: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  outcome: {
+    flexGrow: 1,
+    flexBasis: '45%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: radii.md,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceAlt,
+  },
+  outcomeActive: { borderColor: colors.primary, backgroundColor: colors.primaryTint },
+  outcomeLabel: { fontFamily: fonts.sansSemi, fontSize: 14, color: colors.text },
 });
