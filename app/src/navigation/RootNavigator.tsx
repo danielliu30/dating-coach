@@ -157,9 +157,7 @@ function MainTabs(): React.ReactElement {
           : {
               backgroundColor: colors.surface,
               borderTopColor: colors.border,
-              height: 64,
               paddingTop: 6,
-              paddingBottom: 8,
             },
       }}
     >
