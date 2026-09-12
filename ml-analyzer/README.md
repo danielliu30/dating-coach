@@ -117,7 +117,8 @@ echoed back as a score; a review with `rating >= 4` counts as a recommendation.
 Response: `model_version` (`reviews-llm-<provider>-<model>` or
 `reviews-heuristic-v1`), `recommended`, `total`, `summary` (starts with the
 recommendation line, e.g. "3 of 4 clients recommend Ava.") and `strengths[]`
-(2–5 short phrases naming what recommending clients praise). The heuristic
+(0–5 short phrases naming what recommending clients praise; empty when there
+are no recommendations or no written comments). The heuristic
 matches comments against fixed strength themes; the LLM summarises free text
 and falls back to the heuristic on any failure.
 

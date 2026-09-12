@@ -43,8 +43,10 @@ Return STRICT JSON only, no prose, with this shape:
 {"summary": "1-2 sentences", "strengths": ["short noun phrase", ...]}
 
 Rules:
-- "strengths" names what recommending clients most often praise, 2-5 short \
-noun phrases (e.g. "Practical, actionable advice"), most common first.
+- "strengths" names what recommending clients praise, as short noun phrases \
+(e.g. "Practical, actionable advice"), most common first, at most 5. Only \
+include a strength that at least one recommending client actually mentions; \
+an empty list is fine when nobody recommends the coach.
 - "summary" is a neutral 1-2 sentence overview of what clients say. Mention \
 recurring criticism briefly if it exists; never invent anything not in the reviews.
 - Never quote a client verbatim, name a client, or mention scores, stars or \
@@ -120,16 +122,15 @@ class LLMReviewSummarizer(ReviewSummarizer):
 
     async def summarize(self, request: ReviewSummaryRequest) -> ReviewSummaryResponse:
         written = [r for r in request.reviews if r.comment.strip()]
-        if not written:
-            return await self._fallback.summarize(request)
-        try:
-            raw = await self._complete(self._user_prompt(request, written))
-            return self._parse(raw, request)
-        except Exception:  # noqa: BLE001 - degrade instead of failing the page
-            logger.exception("llm review summary failed, falling back to heuristic summariser")
-            response = await self._fallback.summarize(request)
-            response.model_version = f"{self.version}+fallback:{self._fallback.version}"
-            return response
+        if written:
+            try:
+                raw = await self._complete(self._user_prompt(request, written))
+                return self._parse(raw, request)
+            except Exception:  # noqa: BLE001 - degrade instead of failing the page
+                logger.exception("llm review summary failed, falling back to heuristic summariser")
+        response = await self._fallback.summarize(request)
+        response.model_version = f"{self.version}+fallback:{self._fallback.version}"
+        return response
 
     def _user_prompt(self, request: ReviewSummaryRequest, written: Sequence[ReviewComment]) -> str:
         lines = [
@@ -176,17 +177,29 @@ class LLMReviewSummarizer(ReviewSummarizer):
         if text.startswith("```"):
             text = text.split("\n", 1)[1] if "\n" in text else text
             text = text.rsplit("```", 1)[0]
-        payload: Dict[str, Any] = json.loads(text.strip())
+        payload: Any = json.loads(text.strip())
+        if not isinstance(payload, dict):
+            raise ValueError("llm returned a non-object payload")
+        summary = payload.get("summary")
+        raw_strengths = payload.get("strengths")
+        if not isinstance(summary, str) or not summary.strip():
+            raise ValueError("llm returned no summary")
+        if not isinstance(raw_strengths, list) or not all(isinstance(s, str) for s in raw_strengths):
+            raise ValueError("llm returned strengths that are not a list of strings")
+        strengths = [s.strip()[:80] for s in raw_strengths if s.strip()][:5]
         recommended = sum(1 for r in request.reviews if is_recommendation(r))
+        # Strengths are only meaningful when someone recommends the coach; a
+        # missing list then means the model skipped part of the contract.
+        if recommended and not strengths:
+            raise ValueError("llm returned no strengths for a recommended coach")
         total = len(request.reviews)
         headline = recommendation_line(recommended, total, request.coach_name)
-        summary = str(payload.get("summary", "")).strip()[:600]
         return ReviewSummaryResponse(
             model_version=self.version,
             recommended=recommended,
             total=total,
-            summary=f"{headline} {summary}".strip(),
-            strengths=[str(s).strip()[:80] for s in payload.get("strengths", []) if str(s).strip()][:5],
+            summary=f"{headline} {summary.strip()[:600]}".strip(),
+            strengths=strengths,
         )
 
 

@@ -433,6 +433,16 @@ def test_llm_review_summarizer_parse_and_fallback() -> None:
     assert parsed.summary == "Every client so far recommends this coach. Clients praise how well she listens."
     assert parsed.strengths == ["Listening"]
 
+    for bad in ("{}", '{"summary": "ok", "strengths": "Listening"}', '["x"]', '{"summary": "ok", "strengths": []}'):
+        with pytest.raises(ValueError):
+            summarizer._parse(bad, request)
+    # Nobody recommends → an empty strengths list is a valid answer.
+    nobody = ReviewSummaryRequest(reviews=[ReviewComment(rating=1, comment="Rude")])
+    assert summarizer._parse('{"summary": "Clients found sessions unhelpful.", "strengths": []}', nobody).strengths == []
+
     fallen = asyncio.run(summarizer.summarize(request))
     assert fallen.model_version.endswith("+fallback:reviews-heuristic-v1")
     assert fallen.recommended == 1 and fallen.total == 1
+    # No written comments: nothing to prompt with, same provenance as any other fallback.
+    silent = asyncio.run(summarizer.summarize(ReviewSummaryRequest(reviews=[ReviewComment(rating=5)])))
+    assert silent.model_version == fallen.model_version and silent.strengths == []
