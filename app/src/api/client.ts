@@ -336,6 +336,13 @@ export class ApiClient {
     });
   }
 
+  /** Sets (or clears, with '') the session's join link. Coach-only; the server rejects non-http(s) URLs. */
+  setSessionMeetingUrl(sessionID: string, meetingUrl: string) {
+    return this.request<CoachingSession>('POST', `/coach/sessions/${sessionID}/meeting-url`, {
+      meeting_url: meetingUrl,
+    });
+  }
+
   async coachThreads(status = 'active'): Promise<ChatThread[]> {
     const { threads } = await this.request<{ threads: ChatThread[] | null }>(
       'GET',
