@@ -200,16 +200,19 @@ export function Chip({
   onPress,
   tone = colors.primary,
   disabled,
+  role = 'checkbox',
 }: {
   label: string;
   selected: boolean;
   onPress: () => void;
   tone?: string;
   disabled?: boolean;
+  /** `radio` when the chip is one of a mutually exclusive set. */
+  role?: 'checkbox' | 'radio';
 }): React.ReactElement {
   return (
     <Pressable
-      accessibilityRole="checkbox"
+      accessibilityRole={role}
       accessibilityState={{ checked: selected, disabled }}
       onPress={onPress}
       disabled={disabled}
