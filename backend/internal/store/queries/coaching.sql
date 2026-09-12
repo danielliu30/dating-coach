@@ -343,5 +343,5 @@ RETURNING *;
 SELECT rating, comment
 FROM coach_reviews
 WHERE coach_id = $1
-ORDER BY created_at DESC
+ORDER BY updated_at DESC, id
 LIMIT $2;

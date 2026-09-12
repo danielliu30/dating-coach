@@ -1216,8 +1216,13 @@ const maxReviewComment = 2000
 // coach; the app never shows the rating itself.
 const recommendThreshold = 4
 
-// maxSummaryReviews caps how many (newest) reviews are sent to the summariser.
+// maxSummaryReviews caps how many (most recently written) reviews are sent to
+// the summariser.
 const maxSummaryReviews = 200
+
+// summaryTimeout bounds the wait for ml-analyzer before the aggregate fallback
+// is used; the page already has everything it needs locally.
+const summaryTimeout = 8 * time.Second
 
 // CreateReview records (or replaces) the caller's review of a coach. It is
 // gated: the caller must have at least one completed session with the coach,
@@ -1338,7 +1343,9 @@ func (s *Service) ReviewSummary(ctx context.Context, coachID uuid.UUID) (ReviewS
 	for _, r := range rows {
 		req.Reviews = append(req.Reviews, ReviewSummaryItem{Rating: r.Rating, Comment: r.Comment})
 	}
-	out, err := s.reviews.SummarizeReviews(ctx, req)
+	mlCtx, cancel := context.WithTimeout(ctx, summaryTimeout)
+	defer cancel()
+	out, err := s.reviews.SummarizeReviews(mlCtx, req)
 	if err != nil {
 		slog.WarnContext(ctx, "review summary unavailable, using aggregates", "coach_id", coachID, "err", err)
 		return fallback, nil
@@ -1346,6 +1353,11 @@ func (s *Service) ReviewSummary(ctx context.Context, coachID uuid.UUID) (ReviewS
 	if out.Strengths == nil {
 		out.Strengths = []string{}
 	}
+	// The summariser only saw a sample; the stored aggregates own the counts and
+	// the headline built from them.
+	sampleLine := recommendationLine(out.Recommended, out.Total, coach.DisplayName)
+	out.Summary = strings.TrimSpace(fallback.Summary + " " + strings.TrimSpace(strings.TrimPrefix(out.Summary, sampleLine)))
+	out.Recommended, out.Total = fallback.Recommended, fallback.Total
 	return out, nil
 }
 

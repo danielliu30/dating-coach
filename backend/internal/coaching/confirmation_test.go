@@ -722,10 +722,14 @@ func TestReviewsRequireCompletedSession(t *testing.T) {
 
 	// A configured summariser receives the private ratings and comments and its
 	// answer is passed through; when it fails the aggregate line is used instead.
-	fake := &fakeSummarizer{out: ReviewSummaryResult{ModelVersion: "fake", Recommended: 0, Total: 1, Summary: "Clients say…", Strengths: []string{"Honest, direct feedback"}}}
+	// The summariser's own (sample-based) counts and headline are replaced by the
+	// authoritative aggregates; its overview and strengths are kept.
+	fake := &fakeSummarizer{out: ReviewSummaryResult{ModelVersion: "fake", Recommended: 1, Total: 1,
+		Summary: "Every client so far recommends " + c.DisplayName + ". Clients say…", Strengths: []string{"Honest, direct feedback"}}}
 	svc.reviews = fake
 	summary, err = svc.ReviewSummary(ctx, coach)
-	if err != nil || summary.ModelVersion != "fake" || len(summary.Strengths) != 1 {
+	if err != nil || summary.ModelVersion != "fake" || len(summary.Strengths) != 1 || summary.Recommended != 0 || summary.Total != 1 ||
+		summary.Summary != "0 of 1 clients recommend "+c.DisplayName+". Clients say…" {
 		t.Fatalf("summarised = %+v, %v", summary, err)
 	}
 	if len(fake.got.Reviews) != 1 || fake.got.Reviews[0].Rating != 2 || fake.got.CoachName != c.DisplayName {
