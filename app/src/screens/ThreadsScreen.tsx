@@ -66,7 +66,7 @@ export default function ThreadsScreen({
           </View>
         }
         ListEmptyComponent={
-          loading ? null : (
+          loading || error ? null : (
             <EmptyState
               icon="chatbubble-ellipses-outline"
               hue="sky"

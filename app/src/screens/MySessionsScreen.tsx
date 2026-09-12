@@ -148,7 +148,7 @@ export default function MySessionsScreen(): React.ReactElement {
           </View>
         }
         ListEmptyComponent={
-          loading ? null : (
+          loading || error ? null : (
             <EmptyState
               icon="calendar-outline"
               hue="rose"
