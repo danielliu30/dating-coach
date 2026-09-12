@@ -1,5 +1,5 @@
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import React from 'react';
+import React, { useState } from 'react';
 import { FlatList, Text, View } from 'react-native';
 
 import { api } from '../api/client';
@@ -18,9 +18,19 @@ export default function AnalysisHistoryScreen({
   const platforms = new Set(conversations.map((c) => c.platform)).size;
   const named = conversations.filter((c) => c.match_name).length;
 
+  const [openError, setOpenError] = useState<{ conversationID: string; message: string } | null>(null);
+
   const open = async (conversationID: string) => {
-    const result = await api.latestResult(conversationID);
-    navigation.navigate('Result', { analysisID: result.id, conversationID });
+    setOpenError(null);
+    try {
+      const result = await api.latestResult(conversationID);
+      navigation.navigate('Result', { analysisID: result.id, conversationID });
+    } catch (err) {
+      setOpenError({
+        conversationID,
+        message: err instanceof Error ? err.message : 'could not open this analysis',
+      });
+    }
   };
 
   return (
@@ -75,6 +85,7 @@ export default function AnalysisHistoryScreen({
               <MetaRow icon="phone-portrait-outline" text={item.platform} />
               <MetaRow icon="time-outline" text={formatWhen(item.created_at)} />
             </View>
+            {openError?.conversationID === item.id ? <Text style={shared.error}>{openError.message}</Text> : null}
           </ListCard>
         )}
       />
