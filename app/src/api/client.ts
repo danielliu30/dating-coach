@@ -14,6 +14,7 @@ import type {
   DatingProfileInput,
   Outcome,
   Profile,
+  ReviewSummary,
   Role,
   Slot,
   SubmitMessage,
@@ -264,6 +265,11 @@ export class ApiClient {
 
   async listCoachReviews(coachID: string): Promise<CoachReview[]> {
     return (await this.request<CoachReview[] | null>('GET', `/coaching/coaches/${coachID}/reviews`)) ?? [];
+  }
+
+  /** Recommendation line and strengths distilled from the coach's reviews (aggregate-only when ml-analyzer is down). */
+  coachReviewSummary(coachID: string) {
+    return this.request<ReviewSummary>('GET', `/coaching/coaches/${coachID}/reviews/summary`);
   }
 
   /** Creates or replaces the caller's review; the server answers 403 without a completed session with the coach. */

@@ -55,6 +55,7 @@ export default function CoachDetailScreen({
   const availability = useAsync(() => api.coachAvailability(coachID), [coachID]);
   const slots = useAsync(() => api.openSlots(coachID, duration), [coachID, duration]);
   const reviews = useAsync(() => api.listCoachReviews(coachID), [coachID]);
+  const summary = useAsync(() => api.coachReviewSummary(coachID), [coachID]);
   // The form is only offered once the signed-in client has a completed session
   // with this coach; the server enforces the same rule.
   const completed = useAsync(
@@ -81,7 +82,7 @@ export default function CoachDetailScreen({
       setReviewStatus('Thanks — your review is posted.');
       setComment('');
       setRating(null);
-      await Promise.all([reviews.reload(), coach.reload()]);
+      await Promise.all([reviews.reload(), coach.reload(), summary.reload()]);
     } catch (err) {
       setReviewError(err instanceof Error ? err.message : 'could not post review');
     } finally {
@@ -214,6 +215,23 @@ export default function CoachDetailScreen({
           title="Reviews"
           caption="From clients who completed a session"
         />
+        {summary.loading ? (
+          <Skeleton height={40} />
+        ) : summary.data && summary.data.total > 0 ? (
+          <View style={styles.reviewSummary}>
+            {summary.data.summary ? <Text style={type.body}>{summary.data.summary}</Text> : null}
+            {summary.data.strengths.length > 0 ? (
+              <>
+                <Text style={styles.label}>What clients praise</Text>
+                <View style={[shared.row, { flexWrap: 'wrap', gap: 6 }]}>
+                  {summary.data.strengths.map((strength) => (
+                    <Badge key={strength} text={strength} tone={colors.primary} />
+                  ))}
+                </View>
+              </>
+            ) : null}
+          </View>
+        ) : null}
         {reviews.loading ? (
           <Skeleton height={48} />
         ) : reviews.error ? (
@@ -397,6 +415,12 @@ const styles = StyleSheet.create({
     padding: 12,
     borderRadius: radii.md,
     backgroundColor: colors.sageTint,
+  },
+  reviewSummary: {
+    gap: 8,
+    padding: 12,
+    borderRadius: radii.md,
+    backgroundColor: colors.primaryTint,
   },
   window: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   windowDay: {
