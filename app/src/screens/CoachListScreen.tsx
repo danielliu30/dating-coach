@@ -50,7 +50,7 @@ export default function CoachListScreen({
           </View>
         }
         ListEmptyComponent={
-          loading ? null : (
+          loading || error ? null : (
             <EmptyState
               icon="leaf-outline"
               title="No coaches yet"

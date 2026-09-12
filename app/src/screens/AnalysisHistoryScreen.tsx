@@ -54,7 +54,7 @@ export default function AnalysisHistoryScreen({
           </View>
         }
         ListEmptyComponent={
-          loading ? null : (
+          loading || error ? null : (
             <EmptyState
               icon="document-text-outline"
               hue="sky"
