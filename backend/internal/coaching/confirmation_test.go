@@ -606,8 +606,9 @@ func TestMeetingLinkFollowsLifecycleAndUpdatesCalendars(t *testing.T) {
 			t.Fatalf("emails for %s = %v, want a join-link update last", who, got)
 		}
 		ics := icsFor(t, pool, emailOf(t, pool, who), "Join link")
-		if !strings.Contains(ics, "LOCATION:https://meet.test/b") || !strings.Contains(ics, "SEQUENCE:2") {
-			t.Fatalf("join-link invite for %s = %q, want new LOCATION with SEQUENCE:2", who, ics)
+		// Sequence: 1 pending set, 2 confirmation, 3 this replacement.
+		if !strings.Contains(ics, "LOCATION:https://meet.test/b") || !strings.Contains(ics, "SEQUENCE:3") {
+			t.Fatalf("join-link invite for %s = %q, want new LOCATION with SEQUENCE:3", who, ics)
 		}
 	}
 	if _, err := svc.SetStatus(ctx, sid, client, StatusCancelled); err != nil {
