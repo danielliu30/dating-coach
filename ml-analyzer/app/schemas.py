@@ -97,3 +97,25 @@ class ImageAnalyzeResponse(BaseModel):
     model_version: str
     images: List[ImageAssessment] = Field(default_factory=list)
     overall: ImageOverall
+
+
+class ReviewComment(BaseModel):
+    """One client review of a coach: the private 1-5 score plus the written comment."""
+
+    rating: int = Field(ge=1, le=5)
+    comment: str = ""
+
+
+class ReviewSummaryRequest(BaseModel):
+    coach_name: str = ""
+    reviews: List[ReviewComment] = Field(default_factory=list)
+
+
+class ReviewSummaryResponse(BaseModel):
+    """What the coach page shows instead of a star rating: a recommendation line and named strengths."""
+
+    model_version: str
+    recommended: int = Field(ge=0)
+    total: int = Field(ge=0)
+    summary: str = ""
+    strengths: List[str] = Field(default_factory=list)

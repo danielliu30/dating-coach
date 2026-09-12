@@ -9,7 +9,7 @@ from pydantic import ValidationError
 
 from app.config import Settings
 from app.main import app
-from app.schemas import AnalyzeRequest, ImageAnalyzeRequest, ImageRef, Message, Segment
+from app.schemas import AnalyzeRequest, ImageAnalyzeRequest, ImageRef, Message, ReviewComment, ReviewSummaryRequest, Segment
 from app.scoring.base import message_range
 from app.scoring.heuristic import HeuristicScorer, review_self_messages
 from app.scoring.image import HeuristicImageScorer, build_image_scorer, image_dimensions
@@ -378,3 +378,71 @@ def test_heuristic_image_scorer_keeps_focus_warning_when_many_photos_are_unclear
     assert len(response.overall.improvements) <= 5
     assert any("focal point" in hint for hint in response.overall.improvements)
     assert any("6 photos look low-resolution" in hint for hint in response.overall.improvements)
+
+
+def test_summarize_reviews_heuristic() -> None:
+    """POST /summarize/reviews counts recommendations (rating >= 4) and names themes from recommenders only."""
+    body = {
+        "coach_name": "Ava",
+        "reviews": [
+            {"rating": 5, "comment": "Really listened and gave practical, specific tips for my profile photos."},
+            {"rating": 4, "comment": "Honest feedback, very practical steps. Got two dates in a month."},
+            {"rating": 2, "comment": "Practical but did not listen to what I actually wanted."},
+        ],
+    }
+    response = client.post("/summarize/reviews", json=body)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["recommended"] == 2 and data["total"] == 3
+    assert data["summary"].startswith("2 of 3 clients recommend Ava.")
+    assert data["strengths"][0] == "Practical, actionable advice"
+    assert "Listens and understands" in data["strengths"]
+    assert "★" not in data["summary"] and "rating" not in data["summary"].lower()
+
+
+def test_summarize_reviews_empty() -> None:
+    """No reviews yields an empty summary and no strengths rather than an error."""
+    response = client.post("/summarize/reviews", json={"reviews": []})
+    assert response.status_code == 200
+    assert response.json() == {
+        "model_version": "reviews-heuristic-v1",
+        "recommended": 0,
+        "total": 0,
+        "summary": "",
+        "strengths": [],
+    }
+
+
+def test_summarize_reviews_rejects_bad_rating() -> None:
+    """Ratings outside 1-5 are rejected at the schema boundary."""
+    response = client.post("/summarize/reviews", json={"reviews": [{"rating": 6, "comment": "x"}]})
+    assert response.status_code == 422
+
+
+def test_llm_review_summarizer_parse_and_fallback() -> None:
+    """The LLM parser prefixes the recommendation line; a broken completion falls back to the heuristic."""
+    from app.scoring.reviews import LLMReviewSummarizer
+
+    settings = Settings(
+        backend="llm", llm_provider="openai", llm_api_key="k", llm_model="m",
+        llm_base_url="http://127.0.0.1:9", llm_timeout=0.2, model_dir="", segment_size=4,
+    )
+    summarizer = LLMReviewSummarizer(settings)
+    request = ReviewSummaryRequest(reviews=[ReviewComment(rating=5, comment="Great listener")])
+    parsed = summarizer._parse('```json\n{"summary": "Clients praise how well she listens.", "strengths": ["Listening", ""]}\n```', request)
+    assert parsed.summary == "Every client so far recommends this coach. Clients praise how well she listens."
+    assert parsed.strengths == ["Listening"]
+
+    for bad in ("{}", '{"summary": "ok", "strengths": "Listening"}', '["x"]', '{"summary": "ok", "strengths": []}'):
+        with pytest.raises(ValueError):
+            summarizer._parse(bad, request)
+    # Nobody recommends → an empty strengths list is a valid answer.
+    nobody = ReviewSummaryRequest(reviews=[ReviewComment(rating=1, comment="Rude")])
+    assert summarizer._parse('{"summary": "Clients found sessions unhelpful.", "strengths": []}', nobody).strengths == []
+
+    fallen = asyncio.run(summarizer.summarize(request))
+    assert fallen.model_version.endswith("+fallback:reviews-heuristic-v1")
+    assert fallen.recommended == 1 and fallen.total == 1
+    # No written comments: nothing to prompt with, same provenance as any other fallback.
+    silent = asyncio.run(summarizer.summarize(ReviewSummaryRequest(reviews=[ReviewComment(rating=5)])))
+    assert silent.model_version == fallen.model_version and silent.strengths == []

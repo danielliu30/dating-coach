@@ -9,6 +9,7 @@ from .base import Scorer
 from .heuristic import HeuristicScorer
 from .image import HeuristicImageScorer, ImageScorer, LLMImageScorer, build_image_scorer
 from .llm import LLMScorer
+from .reviews import HeuristicReviewSummarizer, LLMReviewSummarizer, ReviewSummarizer, build_review_summarizer
 from .trained import TrainedScorer
 
 logger = logging.getLogger(__name__)
@@ -23,6 +24,10 @@ __all__ = [
     "HeuristicImageScorer",
     "LLMImageScorer",
     "build_image_scorer",
+    "ReviewSummarizer",
+    "HeuristicReviewSummarizer",
+    "LLMReviewSummarizer",
+    "build_review_summarizer",
 ]
 
 

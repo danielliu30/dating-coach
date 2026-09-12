@@ -7,14 +7,22 @@ import logging
 from fastapi import FastAPI
 
 from .config import get_settings
-from .schemas import AnalyzeRequest, AnalyzeResponse, ImageAnalyzeRequest, ImageAnalyzeResponse
-from .scoring import build_image_scorer, build_scorer
+from .schemas import (
+    AnalyzeRequest,
+    AnalyzeResponse,
+    ImageAnalyzeRequest,
+    ImageAnalyzeResponse,
+    ReviewSummaryRequest,
+    ReviewSummaryResponse,
+)
+from .scoring import build_image_scorer, build_review_summarizer, build_scorer
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
 settings = get_settings()
 scorer = build_scorer(settings)
 image_scorer = build_image_scorer(settings)
+review_summarizer = build_review_summarizer(settings)
 
 app = FastAPI(
     title="dating-coach ml-analyzer",
@@ -32,6 +40,7 @@ async def healthz() -> dict[str, str]:
         "model_version": scorer.version,
         "active_image_backend": type(image_scorer).__name__,
         "image_model_version": image_scorer.version,
+        "review_model_version": review_summarizer.version,
     }
 
 
@@ -45,3 +54,9 @@ async def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
 async def analyze_images(request: ImageAnalyzeRequest) -> ImageAnalyzeResponse:
     """Assess profile photos: per-image clarity and whether the customer is the focal point, plus overall hints."""
     return await image_scorer.analyze(request)
+
+
+@app.post("/summarize/reviews", response_model=ReviewSummaryResponse)
+async def summarize_reviews(request: ReviewSummaryRequest) -> ReviewSummaryResponse:
+    """Condense a coach's client reviews into a recommendation line and named strengths (no star ratings)."""
+    return await review_summarizer.summarize(request)
