@@ -5,6 +5,7 @@ import { api } from '../api/client';
 import AnalysisHistoryScreen from './AnalysisHistoryScreen';
 import CoachListScreen from './CoachListScreen';
 import MySessionsScreen from './MySessionsScreen';
+import ThreadsScreen from './ThreadsScreen';
 
 jest.mock('@react-navigation/native', () => {
   const React = require('react');
@@ -19,7 +20,12 @@ jest.mock('../api/client', () => ({
     listCoaches: jest.fn(),
     mySessions: jest.fn(),
     conversations: jest.fn(),
+    threads: jest.fn(),
   },
+}));
+
+jest.mock('../state/auth', () => ({
+  useAuth: () => ({ user: { id: 'u1', display_name: 'Riley', role: 'user' } }),
 }));
 
 const mocked = api as jest.Mocked<typeof api>;
@@ -45,5 +51,12 @@ describe('list screens on load failure', () => {
     render(<AnalysisHistoryScreen {...(stackProps as unknown as React.ComponentProps<typeof AnalysisHistoryScreen>)} />);
     await screen.findByText('history offline');
     expect(screen.queryByText('Nothing analysed yet')).toBeNull();
+  });
+
+  it('Threads shows the error without the "No chats yet" card', async () => {
+    mocked.threads.mockRejectedValue(new Error('chats offline'));
+    render(<ThreadsScreen {...(stackProps as unknown as React.ComponentProps<typeof ThreadsScreen>)} />);
+    await screen.findByText('chats offline');
+    expect(screen.queryByText('No chats yet')).toBeNull();
   });
 });
