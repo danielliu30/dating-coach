@@ -44,7 +44,7 @@ export default function CoachDashboardScreen(): React.ReactElement {
     setActError(null);
     try {
       if (action === 'notes') {
-        await api.setSessionNotes(session.id, notes[session.id] ?? '');
+        await api.setSessionNotes(session.id, notes[session.id] ?? session.coach_notes ?? '');
       } else if (action === 'meeting_url') {
         await api.setSessionMeetingUrl(session.id, (meetingUrls[session.id] ?? session.meeting_url ?? '').trim());
       } else {
