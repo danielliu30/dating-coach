@@ -34,6 +34,7 @@ func (h *Handler) Routes() http.Handler {
 	r.Get("/coaches/{coachID}/availability", h.coachAvailability)
 	r.Get("/coaches/{coachID}/slots", h.coachSlots)
 	r.Get("/coaches/{coachID}/reviews", h.listReviews)
+	r.Get("/coaches/{coachID}/reviews/summary", h.reviewSummary)
 	r.Post("/coaches/{coachID}/reviews", h.createReview)
 	r.Post("/sessions", h.bookSession)
 	r.Get("/sessions", h.listMySessions)
@@ -166,6 +167,21 @@ func (h *Handler) listReviews(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusOK, reviews)
+}
+
+// reviewSummary handles GET /coaches/{coachID}/reviews/summary: the
+// recommendation line and strengths shown in place of a star rating.
+func (h *Handler) reviewSummary(w http.ResponseWriter, r *http.Request) {
+	coachID, ok := pathUUID(w, r, "coachID")
+	if !ok {
+		return
+	}
+	out, err := h.svc.ReviewSummary(r.Context(), coachID)
+	if err != nil {
+		respondErr(w, err, "could not summarise reviews")
+		return
+	}
+	httpx.JSON(w, http.StatusOK, out)
 }
 
 // createReview handles POST /coaches/{coachID}/reviews for the signed-in

@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, type NavigationProp } from '@react-navigation/native';
 import React, { useState } from 'react';
-import { FlatList, StyleSheet, Text, View } from 'react-native';
+import { FlatList, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { api } from '../api/client';
 import type { CoachingSession, Slot } from '../api/types';
@@ -53,6 +53,7 @@ export default function MySessionsScreen(): React.ReactElement {
   const [reschedulingID, setReschedulingID] = useState<string | null>(null);
   const [slots, setSlots] = useState<Slot[] | null>(null);
   const [slotError, setSlotError] = useState<string | null>(null);
+  const [linkError, setLinkError] = useState<string | null>(null);
 
   const sessions = data ?? [];
   const now = Date.now();
@@ -128,6 +129,7 @@ export default function MySessionsScreen(): React.ReactElement {
               </StatRow>
             ) : null}
             {error ? <Text style={shared.error}>{error}</Text> : null}
+            {linkError ? <Text style={shared.error}>{linkError}</Text> : null}
             {loading && !data ? (
               <>
                 <SkeletonCard />
@@ -177,6 +179,24 @@ export default function MySessionsScreen(): React.ReactElement {
                 <MetaRow icon="hourglass-outline" text={`${item.duration_minutes} min`} />
                 {item.topic ? <MetaRow icon="chatbox-ellipses-outline" text={item.topic} /> : null}
               </View>
+              {item.meeting_url ? (
+                <Pressable
+                  style={styles.notes}
+                  accessibilityRole="link"
+                  onPress={() => {
+                    setLinkError(null);
+                    void Linking.openURL(item.meeting_url ?? '').catch(() => setLinkError('Could not open the meeting link.'));
+                  }}
+                >
+                  <Ionicons name="videocam-outline" size={16} color={colors.primaryDeep} />
+                  <View style={{ flex: 1, gap: 2 }}>
+                    <Text style={styles.notesLabel}>Join link</Text>
+                    <Text style={[type.body, styles.link]} numberOfLines={1}>
+                      {item.meeting_url}
+                    </Text>
+                  </View>
+                </Pressable>
+              ) : null}
               {item.coach_notes ? (
                 <View style={styles.notes}>
                   <Ionicons name="reader-outline" size={16} color={colors.sageDeep} />
@@ -272,6 +292,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.sageTint,
   },
   notesLabel: { ...type.eyebrow, fontSize: 11 },
+  link: { color: colors.primaryDeep, textDecorationLine: 'underline' },
   actions: { flexDirection: 'row', gap: 8 },
   reschedule: { gap: 8, padding: 14, borderRadius: radii.md, backgroundColor: colors.surfaceAlt },
 });

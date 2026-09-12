@@ -121,6 +121,8 @@ export interface CoachingSession {
   status: SessionStatus;
   topic: string;
   coach_notes?: string;
+  /** Join link set by the coach; absent until they add one. */
+  meeting_url?: string;
   payment_status: PaymentStatus;
   amount_cents: number;
   currency: string;

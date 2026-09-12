@@ -434,11 +434,13 @@ func (q *Queries) ExpirePendingSessions(ctx context.Context, limit int32) ([]Coa
 const getCoach = `-- name: GetCoach :one
 SELECT c.user_id, c.headline, c.bio, c.specialties, c.hourly_rate_cents, c.timezone, c.years_experience, c.accepting_clients, c.created_at, c.updated_at, c.phases, u.display_name, u.email,
        COALESCE(r.avg_rating, 0)::float8 AS avg_rating,
-       COALESCE(r.review_count, 0)::int AS review_count
+       COALESCE(r.review_count, 0)::int AS review_count,
+       COALESCE(r.recommend_count, 0)::int AS recommend_count
 FROM coaches c
 JOIN users u ON u.id = c.user_id
 LEFT JOIN (
-    SELECT coach_id, AVG(rating) AS avg_rating, COUNT(*) AS review_count
+    SELECT coach_id, AVG(rating) AS avg_rating, COUNT(*) AS review_count,
+           COUNT(*) FILTER (WHERE rating >= 4) AS recommend_count
     FROM coach_reviews
     GROUP BY coach_id
 ) r ON r.coach_id = c.user_id
@@ -461,6 +463,7 @@ type GetCoachRow struct {
 	Email            string    `json:"email"`
 	AvgRating        float64   `json:"avg_rating"`
 	ReviewCount      int32     `json:"review_count"`
+	RecommendCount   int32     `json:"recommend_count"`
 }
 
 func (q *Queries) GetCoach(ctx context.Context, userID uuid.UUID) (GetCoachRow, error) {
@@ -482,6 +485,7 @@ func (q *Queries) GetCoach(ctx context.Context, userID uuid.UUID) (GetCoachRow, 
 		&i.Email,
 		&i.AvgRating,
 		&i.ReviewCount,
+		&i.RecommendCount,
 	)
 	return i, err
 }
@@ -854,6 +858,44 @@ func (q *Queries) ListCoachAvailability(ctx context.Context, coachID uuid.UUID) 
 	return items, nil
 }
 
+const listCoachReviewTexts = `-- name: ListCoachReviewTexts :many
+SELECT rating, comment
+FROM coach_reviews
+WHERE coach_id = $1
+ORDER BY updated_at DESC, id
+LIMIT $2
+`
+
+type ListCoachReviewTextsParams struct {
+	CoachID uuid.UUID `json:"coach_id"`
+	Limit   int32     `json:"limit"`
+}
+
+type ListCoachReviewTextsRow struct {
+	Rating  int16  `json:"rating"`
+	Comment string `json:"comment"`
+}
+
+func (q *Queries) ListCoachReviewTexts(ctx context.Context, arg ListCoachReviewTextsParams) ([]ListCoachReviewTextsRow, error) {
+	rows, err := q.db.Query(ctx, listCoachReviewTexts, arg.CoachID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListCoachReviewTextsRow{}
+	for rows.Next() {
+		var i ListCoachReviewTextsRow
+		if err := rows.Scan(&i.Rating, &i.Comment); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listCoachReviews = `-- name: ListCoachReviews :many
 SELECT r.id, r.coach_id, r.user_id, r.session_id, r.rating, r.comment, r.created_at, r.updated_at, u.display_name AS reviewer_name
 FROM coach_reviews r
@@ -914,11 +956,13 @@ func (q *Queries) ListCoachReviews(ctx context.Context, arg ListCoachReviewsPara
 const listCoaches = `-- name: ListCoaches :many
 SELECT c.user_id, c.headline, c.bio, c.specialties, c.hourly_rate_cents, c.timezone, c.years_experience, c.accepting_clients, c.created_at, c.updated_at, c.phases, u.display_name, u.email,
        COALESCE(r.avg_rating, 0)::float8 AS avg_rating,
-       COALESCE(r.review_count, 0)::int AS review_count
+       COALESCE(r.review_count, 0)::int AS review_count,
+       COALESCE(r.recommend_count, 0)::int AS recommend_count
 FROM coaches c
 JOIN users u ON u.id = c.user_id
 LEFT JOIN (
-    SELECT coach_id, AVG(rating) AS avg_rating, COUNT(*) AS review_count
+    SELECT coach_id, AVG(rating) AS avg_rating, COUNT(*) AS review_count,
+           COUNT(*) FILTER (WHERE rating >= 4) AS recommend_count
     FROM coach_reviews
     GROUP BY coach_id
 ) r ON r.coach_id = c.user_id
@@ -951,6 +995,7 @@ type ListCoachesRow struct {
 	Email            string    `json:"email"`
 	AvgRating        float64   `json:"avg_rating"`
 	ReviewCount      int32     `json:"review_count"`
+	RecommendCount   int32     `json:"recommend_count"`
 }
 
 func (q *Queries) ListCoaches(ctx context.Context, arg ListCoachesParams) ([]ListCoachesRow, error) {
@@ -983,6 +1028,7 @@ func (q *Queries) ListCoaches(ctx context.Context, arg ListCoachesParams) ([]Lis
 			&i.Email,
 			&i.AvgRating,
 			&i.ReviewCount,
+			&i.RecommendCount,
 		); err != nil {
 			return nil, err
 		}

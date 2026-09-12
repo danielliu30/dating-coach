@@ -58,7 +58,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	bookings := coaching.NewService(pg.Pool, pg.Queries, provider, cfg.PaymentHoldTTL, cfg.PublicAppURL, cfg.MailFrom)
+	bookings := coaching.NewService(pg.Pool, pg.Queries, provider, cfg.PaymentHoldTTL, cfg.PublicAppURL, cfg.MailFrom, nil)
 	// The worker revokes the sessions of the accounts it deletes, so it needs
 	// the same denylist the API writes.
 	rdb, err := store.OpenRedis(ctx, cfg.RedisURL)
