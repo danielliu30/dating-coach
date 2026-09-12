@@ -432,9 +432,16 @@ func (q *Queries) ExpirePendingSessions(ctx context.Context, limit int32) ([]Coa
 }
 
 const getCoach = `-- name: GetCoach :one
-SELECT c.user_id, c.headline, c.bio, c.specialties, c.hourly_rate_cents, c.timezone, c.years_experience, c.accepting_clients, c.created_at, c.updated_at, c.phases, u.display_name, u.email
+SELECT c.user_id, c.headline, c.bio, c.specialties, c.hourly_rate_cents, c.timezone, c.years_experience, c.accepting_clients, c.created_at, c.updated_at, c.phases, u.display_name, u.email,
+       COALESCE(r.avg_rating, 0)::float8 AS avg_rating,
+       COALESCE(r.review_count, 0)::int AS review_count
 FROM coaches c
 JOIN users u ON u.id = c.user_id
+LEFT JOIN (
+    SELECT coach_id, AVG(rating) AS avg_rating, COUNT(*) AS review_count
+    FROM coach_reviews
+    GROUP BY coach_id
+) r ON r.coach_id = c.user_id
 WHERE c.user_id = $1
 `
 
@@ -452,6 +459,8 @@ type GetCoachRow struct {
 	Phases           []string  `json:"phases"`
 	DisplayName      string    `json:"display_name"`
 	Email            string    `json:"email"`
+	AvgRating        float64   `json:"avg_rating"`
+	ReviewCount      int32     `json:"review_count"`
 }
 
 func (q *Queries) GetCoach(ctx context.Context, userID uuid.UUID) (GetCoachRow, error) {
@@ -471,6 +480,8 @@ func (q *Queries) GetCoach(ctx context.Context, userID uuid.UUID) (GetCoachRow, 
 		&i.Phases,
 		&i.DisplayName,
 		&i.Email,
+		&i.AvgRating,
+		&i.ReviewCount,
 	)
 	return i, err
 }
@@ -652,6 +663,29 @@ func (q *Queries) GetSessionParties(ctx context.Context, id uuid.UUID) (GetSessi
 	return i, err
 }
 
+const hasCompletedSession = `-- name: HasCompletedSession :one
+SELECT EXISTS (
+    SELECT 1 FROM coaching_sessions
+    WHERE coach_id = $1 AND user_id = $2 AND status = 'completed'
+      AND ($3::uuid IS NULL OR id = $3::uuid)
+)
+`
+
+type HasCompletedSessionParams struct {
+	CoachID   uuid.UUID  `json:"coach_id"`
+	UserID    uuid.UUID  `json:"user_id"`
+	SessionID *uuid.UUID `json:"session_id"`
+}
+
+// Whether the client has at least one completed session with the coach,
+// optionally restricted to one session id.
+func (q *Queries) HasCompletedSession(ctx context.Context, arg HasCompletedSessionParams) (bool, error) {
+	row := q.db.QueryRow(ctx, hasCompletedSession, arg.CoachID, arg.UserID, arg.SessionID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const listAuthorizationsToRelease = `-- name: ListAuthorizationsToRelease :many
 SELECT id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, confirmation_token, respond_by, confirmed_at, calendar_sequence, payment_status, amount_cents, currency, payment_ref, hold_expires_at, meeting_url FROM coaching_sessions
 WHERE payment_status = 'releasing' AND payment_ref IS NOT NULL
@@ -820,13 +854,77 @@ func (q *Queries) ListCoachAvailability(ctx context.Context, coachID uuid.UUID) 
 	return items, nil
 }
 
+const listCoachReviews = `-- name: ListCoachReviews :many
+SELECT r.id, r.coach_id, r.user_id, r.session_id, r.rating, r.comment, r.created_at, r.updated_at, u.display_name AS reviewer_name
+FROM coach_reviews r
+JOIN users u ON u.id = r.user_id
+WHERE r.coach_id = $1
+ORDER BY r.created_at DESC
+LIMIT $2 OFFSET $3
+`
+
+type ListCoachReviewsParams struct {
+	CoachID uuid.UUID `json:"coach_id"`
+	Limit   int32     `json:"limit"`
+	Offset  int32     `json:"offset"`
+}
+
+type ListCoachReviewsRow struct {
+	ID           uuid.UUID  `json:"id"`
+	CoachID      uuid.UUID  `json:"coach_id"`
+	UserID       uuid.UUID  `json:"user_id"`
+	SessionID    *uuid.UUID `json:"session_id"`
+	Rating       int16      `json:"rating"`
+	Comment      string     `json:"comment"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+	ReviewerName string     `json:"reviewer_name"`
+}
+
+func (q *Queries) ListCoachReviews(ctx context.Context, arg ListCoachReviewsParams) ([]ListCoachReviewsRow, error) {
+	rows, err := q.db.Query(ctx, listCoachReviews, arg.CoachID, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListCoachReviewsRow{}
+	for rows.Next() {
+		var i ListCoachReviewsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.CoachID,
+			&i.UserID,
+			&i.SessionID,
+			&i.Rating,
+			&i.Comment,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.ReviewerName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listCoaches = `-- name: ListCoaches :many
-SELECT c.user_id, c.headline, c.bio, c.specialties, c.hourly_rate_cents, c.timezone, c.years_experience, c.accepting_clients, c.created_at, c.updated_at, c.phases, u.display_name, u.email
+SELECT c.user_id, c.headline, c.bio, c.specialties, c.hourly_rate_cents, c.timezone, c.years_experience, c.accepting_clients, c.created_at, c.updated_at, c.phases, u.display_name, u.email,
+       COALESCE(r.avg_rating, 0)::float8 AS avg_rating,
+       COALESCE(r.review_count, 0)::int AS review_count
 FROM coaches c
 JOIN users u ON u.id = c.user_id
+LEFT JOIN (
+    SELECT coach_id, AVG(rating) AS avg_rating, COUNT(*) AS review_count
+    FROM coach_reviews
+    GROUP BY coach_id
+) r ON r.coach_id = c.user_id
 WHERE ($3::boolean IS NOT TRUE OR c.accepting_clients)
   AND ($4::text IS NULL OR $4::text = ANY(c.phases))
-ORDER BY c.years_experience DESC, u.display_name
+ORDER BY COALESCE(r.avg_rating, 0) DESC, c.years_experience DESC, u.display_name
 LIMIT $1 OFFSET $2
 `
 
@@ -851,6 +949,8 @@ type ListCoachesRow struct {
 	Phases           []string  `json:"phases"`
 	DisplayName      string    `json:"display_name"`
 	Email            string    `json:"email"`
+	AvgRating        float64   `json:"avg_rating"`
+	ReviewCount      int32     `json:"review_count"`
 }
 
 func (q *Queries) ListCoaches(ctx context.Context, arg ListCoachesParams) ([]ListCoachesRow, error) {
@@ -881,6 +981,8 @@ func (q *Queries) ListCoaches(ctx context.Context, arg ListCoachesParams) ([]Lis
 			&i.Phases,
 			&i.DisplayName,
 			&i.Email,
+			&i.AvgRating,
+			&i.ReviewCount,
 		); err != nil {
 			return nil, err
 		}
@@ -1532,6 +1634,47 @@ func (q *Queries) UpsertCoachProfile(ctx context.Context, arg UpsertCoachProfile
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Phases,
+	)
+	return i, err
+}
+
+const upsertCoachReview = `-- name: UpsertCoachReview :one
+INSERT INTO coach_reviews (coach_id, user_id, session_id, rating, comment)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (coach_id, user_id) DO UPDATE
+SET session_id = EXCLUDED.session_id,
+    rating = EXCLUDED.rating,
+    comment = EXCLUDED.comment,
+    updated_at = now()
+RETURNING id, coach_id, user_id, session_id, rating, comment, created_at, updated_at
+`
+
+type UpsertCoachReviewParams struct {
+	CoachID   uuid.UUID  `json:"coach_id"`
+	UserID    uuid.UUID  `json:"user_id"`
+	SessionID *uuid.UUID `json:"session_id"`
+	Rating    int16      `json:"rating"`
+	Comment   string     `json:"comment"`
+}
+
+func (q *Queries) UpsertCoachReview(ctx context.Context, arg UpsertCoachReviewParams) (CoachReview, error) {
+	row := q.db.QueryRow(ctx, upsertCoachReview,
+		arg.CoachID,
+		arg.UserID,
+		arg.SessionID,
+		arg.Rating,
+		arg.Comment,
+	)
+	var i CoachReview
+	err := row.Scan(
+		&i.ID,
+		&i.CoachID,
+		&i.UserID,
+		&i.SessionID,
+		&i.Rating,
+		&i.Comment,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
