@@ -176,6 +176,28 @@ func (m mailer) coachRescheduled(ctx context.Context, q *db.Queries, s db.GetSes
 	return m.enqueue(ctx, q, s.UserEmail, fmt.Sprintf("%s moved your session", s.CoachName), body, invite(s, m.mailFrom))
 }
 
+// meetingLinkChanged tells one party (the client, or the coach when toCoach)
+// that the join link of a scheduled session was set, replaced, or removed,
+// attaching an invite whose LOCATION reflects the new value so the existing
+// calendar event is updated in place.
+func (m mailer) meetingLinkChanged(ctx context.Context, q *db.Queries, s db.GetSessionPartiesRow, toCoach bool) error {
+	to, name, other, forCoach := s.UserEmail, s.UserName, s.CoachName, false
+	if toCoach {
+		to, name, other, forCoach = s.CoachEmail, s.CoachName, s.UserName, true
+	}
+	var subject, body string
+	if s.MeetingUrl == "" {
+		subject = fmt.Sprintf("Join link removed: session with %s", other)
+		body = fmt.Sprintf("Hi %s,\n\nThe join link for your session with %s on %s has been removed.\n\nThe attached update clears the location in your calendar.",
+			name, other, when(s, forCoach))
+	} else {
+		subject = fmt.Sprintf("Join link: session with %s", other)
+		body = fmt.Sprintf("Hi %s,\n\nYour session with %s on %s now has a join link.\n\nJoin: %s\n\nThe attached update adds it to the event in your calendar.",
+			name, other, when(s, forCoach), s.MeetingUrl)
+	}
+	return m.enqueue(ctx, q, to, subject, body, invite(s, m.mailFrom))
+}
+
 // orNone substitutes a placeholder for an empty topic.
 func orNone(v string) string {
 	if v == "" {

@@ -288,6 +288,8 @@ RETURNING *;
 
 -- name: UpdateSessionMeetingURL :one
 UPDATE coaching_sessions
-SET meeting_url = $2, updated_at = now()
+SET meeting_url = $2,
+    calendar_sequence = calendar_sequence + 1,
+    updated_at = now()
 WHERE id = $1
 RETURNING *;

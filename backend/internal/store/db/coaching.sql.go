@@ -1349,7 +1349,9 @@ func (q *Queries) RescheduleSession(ctx context.Context, arg RescheduleSessionPa
 
 const updateSessionMeetingURL = `-- name: UpdateSessionMeetingURL :one
 UPDATE coaching_sessions
-SET meeting_url = $2, updated_at = now()
+SET meeting_url = $2,
+    calendar_sequence = calendar_sequence + 1,
+    updated_at = now()
 WHERE id = $1
 RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, confirmation_token, respond_by, confirmed_at, calendar_sequence, payment_status, amount_cents, currency, payment_ref, hold_expires_at, meeting_url
 `

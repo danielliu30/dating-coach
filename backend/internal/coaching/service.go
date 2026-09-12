@@ -1068,8 +1068,13 @@ func (s *Service) SetNotes(ctx context.Context, sessionID, coachID uuid.UUID, no
 }
 
 // SetMeetingURL stores the join link clients use to attend the session; only
-// the session's coach may. The URL must be empty (clearing it) or an absolute
-// http(s) URL with a host, otherwise ErrInvalidInput.
+// the session's coach may, and only while the session is pending or scheduled
+// (a finished or cancelled session yields ErrInvalidInput). The URL must be
+// empty (clearing it) or an absolute http(s) URL with a host, otherwise
+// ErrInvalidInput. Changing the link on a scheduled session bumps the calendar
+// sequence and emails both parties an updated invite so their calendars carry
+// the new location; a pending session is simply updated, since its confirmed
+// invite has not been sent yet. Setting the value it already holds is a no-op.
 func (s *Service) SetMeetingURL(ctx context.Context, sessionID, coachID uuid.UUID, meetingURL string) (Session, error) {
 	meetingURL, err := normaliseMeetingURL(meetingURL)
 	if err != nil {
@@ -1082,9 +1087,38 @@ func (s *Service) SetMeetingURL(ctx context.Context, sessionID, coachID uuid.UUI
 	if session.CoachID != coachID {
 		return Session{}, ErrForbidden
 	}
-	updated, err := s.queries.UpdateSessionMeetingURL(ctx, db.UpdateSessionMeetingURLParams{ID: sessionID, MeetingUrl: meetingURL})
+	if session.Status != StatusPending && session.Status != StatusScheduled {
+		return Session{}, fmt.Errorf("%w: a %s session cannot take a meeting link", ErrInvalidInput, session.Status)
+	}
+	if session.MeetingUrl == meetingURL {
+		return sessionOf(session, ""), nil
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Session{}, fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := s.queries.WithTx(tx)
+
+	updated, err := q.UpdateSessionMeetingURL(ctx, db.UpdateSessionMeetingURLParams{ID: sessionID, MeetingUrl: meetingURL})
 	if err != nil {
 		return Session{}, fmt.Errorf("update meeting url: %w", err)
+	}
+	if updated.Status == StatusScheduled {
+		parties, err := q.GetSessionParties(ctx, sessionID)
+		if err != nil {
+			return Session{}, fmt.Errorf("load session parties: %w", err)
+		}
+		if err := s.mail.meetingLinkChanged(ctx, q, parties, false); err != nil {
+			return Session{}, err
+		}
+		if err := s.mail.meetingLinkChanged(ctx, q, parties, true); err != nil {
+			return Session{}, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Session{}, fmt.Errorf("commit meeting url: %w", err)
 	}
 	return sessionOf(updated, ""), nil
 }
