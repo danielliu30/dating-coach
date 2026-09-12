@@ -657,3 +657,56 @@ func TestNormaliseMeetingURL(t *testing.T) {
 		}
 	}
 }
+
+func TestReviewsRequireCompletedSession(t *testing.T) {
+	svc, pool := testService(t)
+	ctx := context.Background()
+	coach, client, other := insertCoach(t, pool), insertUser(t, pool, "user"), insertUser(t, pool, "user")
+
+	if _, err := svc.CreateReview(ctx, coach, client, CreateReviewInput{Rating: 5}); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("review with no session: err = %v, want ErrForbidden", err)
+	}
+	s, err := svc.BookSession(ctx, client, BookInput{CoachID: coach.String(), ScheduledTime: nextSlot()})
+	if err != nil {
+		t.Fatalf("book: %v", err)
+	}
+	sid := uuid.MustParse(s.ID)
+	if _, err := svc.RespondAsCoach(ctx, sid, coach, "confirm"); err != nil {
+		t.Fatalf("confirm: %v", err)
+	}
+	if _, err := svc.CreateReview(ctx, coach, client, CreateReviewInput{Rating: 5}); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("review of scheduled (not completed) session: err = %v, want ErrForbidden", err)
+	}
+	if _, err := svc.SetStatus(ctx, sid, coach, StatusCompleted); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	if _, err := svc.CreateReview(ctx, coach, other, CreateReviewInput{SessionID: &sid, Rating: 5}); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("stranger citing someone else's session: err = %v, want ErrForbidden", err)
+	}
+	if _, err := svc.CreateReview(ctx, coach, client, CreateReviewInput{Rating: 6}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("rating 6: err = %v, want ErrInvalidInput", err)
+	}
+	first, err := svc.CreateReview(ctx, coach, client, CreateReviewInput{SessionID: &sid, Rating: 4, Comment: "  solid  "})
+	if err != nil {
+		t.Fatalf("review: %v", err)
+	}
+	if first.Rating != 4 || first.Comment != "solid" || first.SessionID != s.ID {
+		t.Fatalf("review = %+v", first)
+	}
+	// A second review by the same client replaces the first rather than adding one.
+	second, err := svc.CreateReview(ctx, coach, client, CreateReviewInput{Rating: 2})
+	if err != nil {
+		t.Fatalf("re-review: %v", err)
+	}
+	if second.ID != first.ID || second.Rating != 2 {
+		t.Fatalf("second review = %+v, want same id with rating 2", second)
+	}
+	reviews, err := svc.ListReviews(ctx, coach, 10, 0)
+	if err != nil || len(reviews) != 1 || reviews[0].Rating != 2 || reviews[0].ReviewerName == "" {
+		t.Fatalf("list = %+v, %v", reviews, err)
+	}
+	c, err := svc.GetCoach(ctx, coach)
+	if err != nil || c.ReviewCount != 1 || c.AvgRating != 2 {
+		t.Fatalf("coach aggregates = %+v, %v", c, err)
+	}
+}

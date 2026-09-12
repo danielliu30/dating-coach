@@ -132,6 +132,30 @@ type Coach struct {
 	Timezone         string   `json:"timezone"`
 	YearsExperience  int32    `json:"years_experience"`
 	AcceptingClients bool     `json:"accepting_clients"`
+	// AvgRating is the mean of client ratings (1-5); 0 when ReviewCount is 0.
+	AvgRating   float64 `json:"avg_rating"`
+	ReviewCount int32   `json:"review_count"`
+}
+
+// Review is a client's rating of a coach, written after a completed session.
+type Review struct {
+	ID           string    `json:"id"`
+	CoachID      string    `json:"coach_id"`
+	UserID       string    `json:"user_id"`
+	ReviewerName string    `json:"reviewer_name"`
+	SessionID    string    `json:"session_id,omitempty"`
+	Rating       int16     `json:"rating"`
+	Comment      string    `json:"comment"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// CreateReviewInput is the client-supplied body of a review. SessionID is
+// optional; when set it must name a completed session between the two parties.
+type CreateReviewInput struct {
+	SessionID *uuid.UUID `json:"session_id"`
+	Rating    int16      `json:"rating"`
+	Comment   string     `json:"comment"`
 }
 
 // Session is the API view of a booking. CounterpartName is the other party's
@@ -234,6 +258,8 @@ func (s *Service) ListCoaches(ctx context.Context, limit, offset int32, acceptin
 			Timezone:         row.Timezone,
 			YearsExperience:  row.YearsExperience,
 			AcceptingClients: row.AcceptingClients,
+			AvgRating:        row.AvgRating,
+			ReviewCount:      row.ReviewCount,
 		})
 	}
 	return out, nil
@@ -259,6 +285,8 @@ func (s *Service) GetCoach(ctx context.Context, coachID uuid.UUID) (Coach, error
 		Timezone:         row.Timezone,
 		YearsExperience:  row.YearsExperience,
 		AcceptingClients: row.AcceptingClients,
+		AvgRating:        row.AvgRating,
+		ReviewCount:      row.ReviewCount,
 	}, nil
 }
 
@@ -1137,4 +1165,97 @@ func normaliseMeetingURL(raw string) (string, error) {
 		return "", fmt.Errorf("%w: meeting_url must be an http(s) URL", ErrInvalidInput)
 	}
 	return raw, nil
+}
+
+// maxReviewComment bounds the free-text comment on a review.
+const maxReviewComment = 2000
+
+// CreateReview records (or replaces) the caller's review of a coach. It is
+// gated: the caller must have at least one completed session with the coach,
+// or, when in.SessionID is set, that session must be theirs, with that coach,
+// and completed — otherwise ErrForbidden. Rating must be 1-5 and the comment at
+// most maxReviewComment characters, otherwise ErrInvalidInput. A second review
+// for the same coach overwrites the first (one review per client per coach).
+func (s *Service) CreateReview(ctx context.Context, coachID, userID uuid.UUID, in CreateReviewInput) (Review, error) {
+	if in.Rating < 1 || in.Rating > 5 {
+		return Review{}, fmt.Errorf("%w: rating must be between 1 and 5", ErrInvalidInput)
+	}
+	comment := strings.TrimSpace(in.Comment)
+	if len(comment) > maxReviewComment {
+		return Review{}, fmt.Errorf("%w: comment exceeds %d characters", ErrInvalidInput, maxReviewComment)
+	}
+	if _, err := s.queries.GetCoach(ctx, coachID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Review{}, ErrNotFound
+		}
+		return Review{}, fmt.Errorf("load coach: %w", err)
+	}
+	completed, err := s.queries.HasCompletedSession(ctx, db.HasCompletedSessionParams{
+		CoachID:   coachID,
+		UserID:    userID,
+		SessionID: in.SessionID,
+	})
+	if err != nil {
+		return Review{}, fmt.Errorf("check completed session: %w", err)
+	}
+	if !completed {
+		return Review{}, ErrForbidden
+	}
+	row, err := s.queries.UpsertCoachReview(ctx, db.UpsertCoachReviewParams{
+		CoachID:   coachID,
+		UserID:    userID,
+		SessionID: in.SessionID,
+		Rating:    in.Rating,
+		Comment:   comment,
+	})
+	if err != nil {
+		return Review{}, fmt.Errorf("upsert review: %w", err)
+	}
+	reviewer, err := s.queries.GetUserByID(ctx, userID)
+	if err != nil {
+		return Review{}, fmt.Errorf("load reviewer: %w", err)
+	}
+	return reviewOf(row, reviewer.DisplayName), nil
+}
+
+// ListReviews returns the coach's reviews, newest first. It is public to any
+// authenticated caller and returns ErrNotFound for an unknown coach.
+func (s *Service) ListReviews(ctx context.Context, coachID uuid.UUID, limit, offset int32) ([]Review, error) {
+	if _, err := s.queries.GetCoach(ctx, coachID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("load coach: %w", err)
+	}
+	rows, err := s.queries.ListCoachReviews(ctx, db.ListCoachReviewsParams{CoachID: coachID, Limit: limit, Offset: offset})
+	if err != nil {
+		return nil, fmt.Errorf("list reviews: %w", err)
+	}
+	out := make([]Review, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, reviewOf(db.CoachReview{
+			ID: r.ID, CoachID: r.CoachID, UserID: r.UserID, SessionID: r.SessionID,
+			Rating: r.Rating, Comment: r.Comment, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
+		}, r.ReviewerName))
+	}
+	return out, nil
+}
+
+// reviewOf converts a stored review plus its reviewer's display name into the
+// API shape; a nil session id becomes an omitted field.
+func reviewOf(r db.CoachReview, reviewerName string) Review {
+	out := Review{
+		ID:           r.ID.String(),
+		CoachID:      r.CoachID.String(),
+		UserID:       r.UserID.String(),
+		ReviewerName: reviewerName,
+		Rating:       r.Rating,
+		Comment:      r.Comment,
+		CreatedAt:    r.CreatedAt,
+		UpdatedAt:    r.UpdatedAt,
+	}
+	if r.SessionID != nil {
+		out.SessionID = r.SessionID.String()
+	}
+	return out
 }

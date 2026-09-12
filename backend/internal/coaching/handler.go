@@ -33,6 +33,8 @@ func (h *Handler) Routes() http.Handler {
 	r.Get("/coaches/{coachID}", h.getCoach)
 	r.Get("/coaches/{coachID}/availability", h.coachAvailability)
 	r.Get("/coaches/{coachID}/slots", h.coachSlots)
+	r.Get("/coaches/{coachID}/reviews", h.listReviews)
+	r.Post("/coaches/{coachID}/reviews", h.createReview)
 	r.Post("/sessions", h.bookSession)
 	r.Get("/sessions", h.listMySessions)
 	r.Post("/sessions/{sessionID}/cancel", h.cancelSession)
@@ -147,6 +149,49 @@ func (h *Handler) getCoach(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusOK, coach)
+}
+
+// listReviews handles GET /coaches/{coachID}/reviews with optional limit/offset
+// paging, newest first.
+func (h *Handler) listReviews(w http.ResponseWriter, r *http.Request) {
+	coachID, ok := pathUUID(w, r, "coachID")
+	if !ok {
+		return
+	}
+	limit := httpx.QueryInt(r, "limit", 25, 100)
+	offset := httpx.QueryInt(r, "offset", 1, 10_000) - 1
+	reviews, err := h.svc.ListReviews(r.Context(), coachID, limit, offset)
+	if err != nil {
+		respondErr(w, err, "could not load reviews")
+		return
+	}
+	httpx.JSON(w, http.StatusOK, reviews)
+}
+
+// createReview handles POST /coaches/{coachID}/reviews for the signed-in
+// client; the service refuses (403) unless they have completed a session with
+// the coach.
+func (h *Handler) createReview(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFrom(r.Context())
+	if !ok {
+		httpx.Error(w, http.StatusUnauthorized, "unauthenticated")
+		return
+	}
+	coachID, ok := pathUUID(w, r, "coachID")
+	if !ok {
+		return
+	}
+	var in CreateReviewInput
+	if err := httpx.Decode(r, &in); err != nil {
+		httpx.Error(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	review, err := h.svc.CreateReview(r.Context(), coachID, principal.UserID, in)
+	if err != nil {
+		respondErr(w, err, "could not save review")
+		return
+	}
+	httpx.JSON(w, http.StatusCreated, review)
 }
 
 // coachAvailability handles GET /coaches/{coachID}/availability, returning the
