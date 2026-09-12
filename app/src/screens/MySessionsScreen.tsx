@@ -184,6 +184,7 @@ export default function MySessionsScreen(): React.ReactElement {
                   style={styles.notes}
                   accessibilityRole="link"
                   onPress={() => {
+                    setLinkError(null);
                     void Linking.openURL(item.meeting_url ?? '').catch(() => setLinkError('Could not open the meeting link.'));
                   }}
                 >
