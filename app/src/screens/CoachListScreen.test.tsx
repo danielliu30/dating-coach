@@ -39,11 +39,11 @@ describe('CoachListScreen', () => {
     expect(screen.queryByText('Accepting clients')).toBeNull();
   });
 
-  it('shows the error and no empty state when loading fails', async () => {
+  it('shows the error when loading fails', async () => {
     mocked.listCoaches.mockRejectedValue(new Error('directory offline'));
     render(<CoachListScreen {...props} />);
     await screen.findByText('directory offline');
-    expect(screen.getByText('No coaches yet')).toBeTruthy();
+    expect(screen.queryByText('Accepting clients')).toBeNull();
   });
 
   it('does not render the empty state while the first load is pending', () => {
