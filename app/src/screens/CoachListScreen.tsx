@@ -7,6 +7,7 @@ import { Avatar, EmptyState, ListCard, MetaRow, PageHeader, SkeletonCard, StatRo
 import { Badge, Screen } from '../components/ui';
 import { useAsync } from '../hooks/useAsync';
 import { PHASE_LABELS } from '../lib/phases';
+import { recommendLabel } from '../lib/reviews';
 import type { CoachesStackParams } from '../navigation/types';
 import { colors, fonts, shared, type } from '../theme';
 
@@ -75,7 +76,7 @@ export default function CoachListScreen({
             {item.specialties.length > 0 || item.phases.length > 0 || item.review_count > 0 ? (
               <View style={[shared.row, { flexWrap: 'wrap', gap: 6 }]}>
                 {item.review_count > 0 ? (
-                  <Badge text={`★ ${item.avg_rating.toFixed(1)} (${item.review_count})`} tone={colors.primary} />
+                  <Badge text={recommendLabel(item)} tone={colors.primary} />
                 ) : null}
                 {item.phases.map((phase) => (
                   <Badge key={`phase-${phase}`} text={PHASE_LABELS[phase]} tone={colors.primary} />

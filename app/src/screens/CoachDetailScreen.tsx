@@ -10,6 +10,7 @@ import { Avatar, Divider, GradientCard, IconDisc, MetaRow, SectionHeader, Skelet
 import { Badge, Button, Chip, Field, Loading, Screen } from '../components/ui';
 import { useAsync } from '../hooks/useAsync';
 import { PHASE_LABELS } from '../lib/phases';
+import { RECOMMEND_OPTIONS, recommendLabel } from '../lib/reviews';
 import type { CoachesStackParams, RootTabParams } from '../navigation/types';
 import { colors, fonts, radii, shared, type } from '../theme';
 
@@ -37,14 +38,6 @@ const slotParts = (slot: Slot): { day: string; time: string } => {
   };
 };
 
-/** "4.5 · 12 reviews" (or "No reviews yet") for the rating badge. */
-const ratingLabel = (c: Pick<Coach, 'avg_rating' | 'review_count'>): string =>
-  c.review_count > 0
-    ? `★ ${c.avg_rating.toFixed(1)} · ${c.review_count} review${c.review_count === 1 ? '' : 's'}`
-    : 'No reviews yet';
-
-const STARS = [1, 2, 3, 4, 5];
-
 export default function CoachDetailScreen({
   route,
 }: NativeStackScreenProps<CoachesStackParams, 'CoachDetail'>): React.ReactElement {
@@ -69,15 +62,15 @@ export default function CoachDetailScreen({
     [coachID],
   );
 
-  const [rating, setRating] = useState(0);
+  const [rating, setRating] = useState<number | null>(null);
   const [comment, setComment] = useState('');
   const [reviewBusy, setReviewBusy] = useState(false);
   const [reviewError, setReviewError] = useState<string | null>(null);
   const [reviewStatus, setReviewStatus] = useState<string | null>(null);
 
   const submitReview = async () => {
-    if (rating < 1) {
-      setReviewError('Pick a star rating first.');
+    if (rating === null) {
+      setReviewError('Say whether you would recommend them first.');
       return;
     }
     setReviewBusy(true);
@@ -87,7 +80,7 @@ export default function CoachDetailScreen({
       await api.submitCoachReview(coachID, { rating, comment: comment.trim() });
       setReviewStatus('Thanks — your review is posted.');
       setComment('');
-      setRating(0);
+      setRating(null);
       await Promise.all([reviews.reload(), coach.reload()]);
     } catch (err) {
       setReviewError(err instanceof Error ? err.message : 'could not post review');
@@ -203,7 +196,7 @@ export default function CoachDetailScreen({
           </>
         ) : null}
         <View style={[shared.row, { flexWrap: 'wrap', gap: 6 }]}>
-          <Badge text={ratingLabel(c)} tone={colors.primary} />
+          <Badge text={c.review_count > 0 ? recommendLabel(c) : 'No reviews yet'} tone={colors.primary} />
         </View>
         <Divider />
         <View style={styles.chatRow}>
@@ -219,7 +212,7 @@ export default function CoachDetailScreen({
       <View style={shared.card}>
         <SectionHeader
           title="Reviews"
-          caption={c.review_count > 0 ? `${c.avg_rating.toFixed(1)} average from ${c.review_count}` : 'From clients who completed a session'}
+          caption="From clients who completed a session"
         />
         {reviews.loading ? (
           <Skeleton height={48} />
@@ -230,7 +223,10 @@ export default function CoachDetailScreen({
             <View key={review.id} style={styles.review}>
               <View style={shared.row}>
                 <Text style={type.subheading}>{review.reviewer_name}</Text>
-                <Badge text={`★ ${review.rating}`} tone={colors.primary} />
+                <Badge
+                  text={review.recommended ? 'Recommends' : "Doesn't recommend"}
+                  tone={review.recommended ? colors.primary : colors.bark}
+                />
               </View>
               {review.comment ? <Text style={type.body}>{review.comment}</Text> : null}
               <Text style={type.caption}>{new Date(review.created_at).toLocaleDateString()}</Text>
@@ -248,15 +244,15 @@ export default function CoachDetailScreen({
         {completed.data ? (
           <>
             <Divider />
-            <Text style={styles.label}>Rate your sessions</Text>
+            <Text style={styles.label}>Would you recommend {c.display_name}?</Text>
             <View style={[shared.row, { flexWrap: 'wrap', gap: 6 }]}>
-              {STARS.map((star) => (
+              {RECOMMEND_OPTIONS.map((option) => (
                 <Chip
-                  key={star}
-                  label={`${star} ★`}
-                  selected={star <= rating}
+                  key={option.rating}
+                  label={option.label}
+                  selected={rating === option.rating}
                   tone={colors.primary}
-                  onPress={() => setRating(star)}
+                  onPress={() => setRating(option.rating)}
                 />
               ))}
             </View>
@@ -274,7 +270,7 @@ export default function CoachDetailScreen({
               </View>
             ) : null}
             {reviewError ? <Text style={shared.error}>{reviewError}</Text> : null}
-            <Button label="Post review" icon="star-outline" variant="secondary" loading={reviewBusy} onPress={submitReview} />
+            <Button label="Post review" icon="thumbs-up-outline" variant="secondary" loading={reviewBusy} onPress={submitReview} />
           </>
         ) : null}
       </View>

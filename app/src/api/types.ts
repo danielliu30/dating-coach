@@ -72,9 +72,11 @@ export interface Coach {
   timezone: string;
   years_experience: number;
   accepting_clients: boolean;
-  /** Mean client rating 1-5; 0 when review_count is 0. */
+  /** Mean client rating 1-5; 0 when review_count is 0. Used for ranking, never shown. */
   avg_rating: number;
   review_count: number;
+  /** Reviews whose rating counts as recommending the coach; what the app displays. */
+  recommend_count: number;
 }
 
 /** A client's rating of a coach; only clients with a completed session may leave one. */
@@ -84,7 +86,9 @@ export interface CoachReview {
   user_id: string;
   reviewer_name: string;
   session_id?: string;
+  /** Private 1-5 score used for ranking; render `recommended` instead. */
   rating: number;
+  recommended: boolean;
   comment: string;
   created_at: string;
   updated_at: string;
