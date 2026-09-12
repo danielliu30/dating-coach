@@ -16,7 +16,7 @@ import {
   StatTile,
   StatusPill,
 } from '../components/kit';
-import { Button, Screen } from '../components/ui';
+import { Button, Field, Screen } from '../components/ui';
 import { useAsync } from '../hooks/useAsync';
 import type { RootTabParams } from '../navigation/types';
 import { useAuth } from '../state/auth';
@@ -35,17 +35,24 @@ export default function CoachDashboardScreen(): React.ReactElement {
   const sessions = useAsync(() => api.coachSessions('scheduled'));
   const threads = useAsync(() => api.coachThreads('active'));
   const [notes, setNotes] = useState<Record<string, string>>({});
+  const [meetingUrls, setMeetingUrls] = useState<Record<string, string>>({});
+  const [actError, setActError] = useState<string | null>(null);
   const [busyID, setBusyID] = useState<string | null>(null);
 
-  const act = async (session: CoachingSession, action: 'complete' | 'no_show' | 'notes') => {
+  const act = async (session: CoachingSession, action: 'complete' | 'no_show' | 'notes' | 'meeting_url') => {
     setBusyID(session.id);
+    setActError(null);
     try {
       if (action === 'notes') {
         await api.setSessionNotes(session.id, notes[session.id] ?? '');
+      } else if (action === 'meeting_url') {
+        await api.setSessionMeetingUrl(session.id, (meetingUrls[session.id] ?? session.meeting_url ?? '').trim());
       } else {
         await api.setSessionStatus(session.id, action === 'complete' ? 'completed' : 'no_show');
       }
       await sessions.reload();
+    } catch (err) {
+      setActError(err instanceof Error ? err.message : 'could not update session');
     } finally {
       setBusyID(null);
     }
@@ -125,6 +132,7 @@ export default function CoachDashboardScreen(): React.ReactElement {
       <SectionHeader title="Upcoming sessions" caption="Add notes before or after, then mark how it went." />
       {sessions.loading && !sessions.data ? <SkeletonCard /> : null}
       {sessions.error ? <Text style={shared.error}>{sessions.error}</Text> : null}
+      {actError ? <Text style={shared.error}>{actError}</Text> : null}
       {sessionList.length === 0 && !sessions.loading && !sessions.error ? (
         <EmptyState
           icon="calendar-clear-outline"
@@ -159,6 +167,22 @@ export default function CoachDashboardScreen(): React.ReactElement {
               {session.topic ? <MetaRow icon="chatbox-ellipses-outline" text={session.topic} /> : null}
             </View>
             <Divider />
+            <Field
+              label="Meeting link"
+              value={meetingUrls[session.id] ?? session.meeting_url ?? ''}
+              onChangeText={(text) => setMeetingUrls((current) => ({ ...current, [session.id]: text }))}
+              placeholder="https://meet.example.com/your-room"
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="url"
+            />
+            <Button
+              label="Save meeting link"
+              icon="videocam-outline"
+              variant="secondary"
+              loading={busyID === session.id}
+              onPress={() => void act(session, 'meeting_url')}
+            />
             <Text style={styles.label}>Session notes</Text>
             <TextInput
               value={notes[session.id] ?? session.coach_notes ?? ''}
