@@ -16,9 +16,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors, elevation, fonts, radii, type } from '../theme';
 import { Landing } from './Landing';
 
-// Two people, sunlit, among trees.
+// A couple embracing at sunset, hills behind them.
 const HERO_IMAGE_URL =
-  'https://images.unsplash.com/photo-1529333166437-7750a6dd5a70?auto=format&fit=crop&w=2000&q=80';
+  'https://images.unsplash.com/photo-1494774157365-9e04c6720e47?auto=format&fit=crop&w=2000&q=80';
 
 const PROOF: { icon: React.ComponentProps<typeof Ionicons>['name']; text: string }[] = [
   { icon: 'compass-outline', text: 'You lead, we walk alongside' },
@@ -98,7 +98,7 @@ export function AuthLayout({
             <View style={[styles.heroBody, wide && styles.heroBodyWide]}>
               {wide ? (
                 <View style={styles.heroCopy}>
-                  <Text style={styles.eyebrow}>Coaching for the part after the match</Text>
+                  <Text style={styles.eyebrow}>Coaching for every stage of dating</Text>
                   <Text style={styles.headline}>Own your dating life.{'\n'}We'll walk it with you.</Text>
                   <Text style={styles.tagline}>
                     Honest feedback and real human coaches for every step of the journey — so the growth, the choices
