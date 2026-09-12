@@ -16,11 +16,13 @@ RETURNING *;
 -- name: ListCoaches :many
 SELECT c.*, u.display_name, u.email,
        COALESCE(r.avg_rating, 0)::float8 AS avg_rating,
-       COALESCE(r.review_count, 0)::int AS review_count
+       COALESCE(r.review_count, 0)::int AS review_count,
+       COALESCE(r.recommend_count, 0)::int AS recommend_count
 FROM coaches c
 JOIN users u ON u.id = c.user_id
 LEFT JOIN (
-    SELECT coach_id, AVG(rating) AS avg_rating, COUNT(*) AS review_count
+    SELECT coach_id, AVG(rating) AS avg_rating, COUNT(*) AS review_count,
+           COUNT(*) FILTER (WHERE rating >= 4) AS recommend_count
     FROM coach_reviews
     GROUP BY coach_id
 ) r ON r.coach_id = c.user_id
@@ -32,11 +34,13 @@ LIMIT $1 OFFSET $2;
 -- name: GetCoach :one
 SELECT c.*, u.display_name, u.email,
        COALESCE(r.avg_rating, 0)::float8 AS avg_rating,
-       COALESCE(r.review_count, 0)::int AS review_count
+       COALESCE(r.review_count, 0)::int AS review_count,
+       COALESCE(r.recommend_count, 0)::int AS recommend_count
 FROM coaches c
 JOIN users u ON u.id = c.user_id
 LEFT JOIN (
-    SELECT coach_id, AVG(rating) AS avg_rating, COUNT(*) AS review_count
+    SELECT coach_id, AVG(rating) AS avg_rating, COUNT(*) AS review_count,
+           COUNT(*) FILTER (WHERE rating >= 4) AS recommend_count
     FROM coach_reviews
     GROUP BY coach_id
 ) r ON r.coach_id = c.user_id
@@ -334,3 +338,10 @@ SET meeting_url = $2,
     updated_at = now()
 WHERE id = $1
 RETURNING *;
+
+-- name: ListCoachReviewTexts :many
+SELECT rating, comment
+FROM coach_reviews
+WHERE coach_id = $1
+ORDER BY created_at DESC
+LIMIT $2;

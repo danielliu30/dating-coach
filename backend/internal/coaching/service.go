@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"net/url"
 	"slices"
@@ -94,6 +95,38 @@ type Service struct {
 	holdTTL time.Duration
 	// appURL is where the payment provider sends the client back to.
 	appURL string
+	// reviews condenses written reviews into strengths; nil means only the
+	// deterministic recommendation line is produced.
+	reviews ReviewSummarizer
+}
+
+// ReviewSummarizer is the ml-analyzer's review-summary capability as the
+// coaching service needs it; analysis.MLClient satisfies it.
+type ReviewSummarizer interface {
+	SummarizeReviews(ctx context.Context, in ReviewSummaryRequest) (ReviewSummaryResult, error)
+}
+
+// ReviewSummaryRequest is what the summariser is given: the coach's name and
+// each review's private rating plus written comment.
+type ReviewSummaryRequest struct {
+	CoachName string              `json:"coach_name"`
+	Reviews   []ReviewSummaryItem `json:"reviews"`
+}
+
+// ReviewSummaryItem is one review as the summariser sees it.
+type ReviewSummaryItem struct {
+	Rating  int16  `json:"rating"`
+	Comment string `json:"comment"`
+}
+
+// ReviewSummaryResult is the summariser's answer, exposed as-is by
+// Service.ReviewSummary.
+type ReviewSummaryResult struct {
+	ModelVersion string   `json:"model_version"`
+	Recommended  int32    `json:"recommended"`
+	Total        int32    `json:"total"`
+	Summary      string   `json:"summary"`
+	Strengths    []string `json:"strengths"`
 }
 
 // NewService wires the service dependencies; called once from cmd/api and
@@ -102,7 +135,7 @@ type Service struct {
 // a pending_payment booking keeps its slot. appURL is the public app origin
 // the confirmation links in coach emails and the payment return URLs point at
 // and mailFrom the organizer address on calendar invites.
-func NewService(pool *pgxpool.Pool, queries *db.Queries, provider payments.Provider, holdTTL time.Duration, appURL, mailFrom string) *Service {
+func NewService(pool *pgxpool.Pool, queries *db.Queries, provider payments.Provider, holdTTL time.Duration, appURL, mailFrom string, reviews ReviewSummarizer) *Service {
 	return &Service{
 		pool:     pool,
 		queries:  queries,
@@ -110,6 +143,7 @@ func NewService(pool *pgxpool.Pool, queries *db.Queries, provider payments.Provi
 		payments: provider,
 		holdTTL:  holdTTL,
 		appURL:   appURL,
+		reviews:  reviews,
 	}
 }
 
@@ -136,19 +170,24 @@ type Coach struct {
 	// AvgRating is the mean of client ratings (1-5); 0 when ReviewCount is 0.
 	AvgRating   float64 `json:"avg_rating"`
 	ReviewCount int32   `json:"review_count"`
+	// RecommendCount is how many reviews meet recommendThreshold; the client
+	// shows this instead of the numeric rating.
+	RecommendCount int32 `json:"recommend_count"`
 }
 
 // Review is a client's rating of a coach, written after a completed session.
 type Review struct {
-	ID           string    `json:"id"`
-	CoachID      string    `json:"coach_id"`
-	UserID       string    `json:"user_id"`
-	ReviewerName string    `json:"reviewer_name"`
-	SessionID    string    `json:"session_id,omitempty"`
-	Rating       int16     `json:"rating"`
-	Comment      string    `json:"comment"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID           string `json:"id"`
+	CoachID      string `json:"coach_id"`
+	UserID       string `json:"user_id"`
+	ReviewerName string `json:"reviewer_name"`
+	SessionID    string `json:"session_id,omitempty"`
+	Rating       int16  `json:"rating"`
+	// Recommended is Rating >= recommendThreshold; what clients see.
+	Recommended bool      `json:"recommended"`
+	Comment     string    `json:"comment"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 // CreateReviewInput is the client-supplied body of a review. SessionID is
@@ -261,6 +300,7 @@ func (s *Service) ListCoaches(ctx context.Context, limit, offset int32, acceptin
 			AcceptingClients: row.AcceptingClients,
 			AvgRating:        row.AvgRating,
 			ReviewCount:      row.ReviewCount,
+			RecommendCount:   row.RecommendCount,
 		})
 	}
 	return out, nil
@@ -288,6 +328,7 @@ func (s *Service) GetCoach(ctx context.Context, coachID uuid.UUID) (Coach, error
 		AcceptingClients: row.AcceptingClients,
 		AvgRating:        row.AvgRating,
 		ReviewCount:      row.ReviewCount,
+		RecommendCount:   row.RecommendCount,
 	}, nil
 }
 
@@ -1171,6 +1212,13 @@ func normaliseMeetingURL(raw string) (string, error) {
 // maxReviewComment bounds the free-text comment on a review.
 const maxReviewComment = 2000
 
+// recommendThreshold is the lowest rating that counts as recommending the
+// coach; the app never shows the rating itself.
+const recommendThreshold = 4
+
+// maxSummaryReviews caps how many (newest) reviews are sent to the summariser.
+const maxSummaryReviews = 200
+
 // CreateReview records (or replaces) the caller's review of a coach. It is
 // gated: the caller must have at least one completed session with the coach,
 // or, when in.SessionID is set, that session must be theirs, with that coach,
@@ -1251,6 +1299,7 @@ func reviewOf(r db.CoachReview, reviewerName string) Review {
 		UserID:       r.UserID.String(),
 		ReviewerName: reviewerName,
 		Rating:       r.Rating,
+		Recommended:  r.Rating >= recommendThreshold,
 		Comment:      r.Comment,
 		CreatedAt:    r.CreatedAt,
 		UpdatedAt:    r.UpdatedAt,
@@ -1259,4 +1308,55 @@ func reviewOf(r db.CoachReview, reviewerName string) Review {
 		out.SessionID = r.SessionID.String()
 	}
 	return out
+}
+
+// ReviewSummary condenses the coach's reviews into a recommendation line and
+// named strengths for the coach page. Unknown coach → ErrNotFound. With no
+// summariser configured, or when it fails, it degrades to the deterministic
+// recommendation line (from the stored aggregates) with no strengths, so the
+// page never breaks because ml-analyzer is down.
+func (s *Service) ReviewSummary(ctx context.Context, coachID uuid.UUID) (ReviewSummaryResult, error) {
+	coach, err := s.GetCoach(ctx, coachID)
+	if err != nil {
+		return ReviewSummaryResult{}, err
+	}
+	fallback := ReviewSummaryResult{
+		ModelVersion: "aggregate",
+		Recommended:  coach.RecommendCount,
+		Total:        coach.ReviewCount,
+		Summary:      recommendationLine(coach.RecommendCount, coach.ReviewCount, coach.DisplayName),
+		Strengths:    []string{},
+	}
+	if s.reviews == nil || coach.ReviewCount == 0 {
+		return fallback, nil
+	}
+	rows, err := s.queries.ListCoachReviewTexts(ctx, db.ListCoachReviewTextsParams{CoachID: coachID, Limit: maxSummaryReviews})
+	if err != nil {
+		return ReviewSummaryResult{}, fmt.Errorf("load reviews: %w", err)
+	}
+	req := ReviewSummaryRequest{CoachName: coach.DisplayName, Reviews: make([]ReviewSummaryItem, 0, len(rows))}
+	for _, r := range rows {
+		req.Reviews = append(req.Reviews, ReviewSummaryItem{Rating: r.Rating, Comment: r.Comment})
+	}
+	out, err := s.reviews.SummarizeReviews(ctx, req)
+	if err != nil {
+		slog.WarnContext(ctx, "review summary unavailable, using aggregates", "coach_id", coachID, "err", err)
+		return fallback, nil
+	}
+	if out.Strengths == nil {
+		out.Strengths = []string{}
+	}
+	return out, nil
+}
+
+// recommendationLine phrases the recommend/total counts without numbers of
+// stars; empty when there are no reviews.
+func recommendationLine(recommended, total int32, coachName string) string {
+	if total == 0 {
+		return ""
+	}
+	if recommended == total {
+		return fmt.Sprintf("Every client so far recommends %s.", coachName)
+	}
+	return fmt.Sprintf("%d of %d clients recommend %s.", recommended, total, coachName)
 }

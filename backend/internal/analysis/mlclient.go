@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/danielliu30/dating-coach/backend/internal/coaching"
 )
 
 // MLRequest is the payload sent to the Python analyzer. It is intentionally
@@ -51,6 +53,17 @@ type MLOverall struct {
 	Summary         string   `json:"summary"`
 	Strengths       []string `json:"strengths"`
 	Improvements    []string `json:"improvements"`
+}
+
+// SummarizeReviews asks ml-analyzer's /summarize/reviews to condense a coach's
+// reviews; it satisfies coaching.ReviewSummarizer. Errors carry the response
+// snippet like Analyze.
+func (c *MLClient) SummarizeReviews(ctx context.Context, in coaching.ReviewSummaryRequest) (coaching.ReviewSummaryResult, error) {
+	var out coaching.ReviewSummaryResult
+	if err := c.post(ctx, "/summarize/reviews", in, &out); err != nil {
+		return coaching.ReviewSummaryResult{}, err
+	}
+	return out, nil
 }
 
 // MLClient talks to the ml-analyzer service over HTTP only, so the ML component

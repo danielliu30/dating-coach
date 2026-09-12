@@ -124,7 +124,7 @@ func testService(t *testing.T) (*Service, *pgxpool.Pool) {
 		t.Fatalf("connect postgres: %v", err)
 	}
 	t.Cleanup(pool.Close)
-	return NewService(pool, db.New(pool), payments.Disabled{}, 15*time.Minute, "http://app.test", "no-reply@example.test"), pool
+	return NewService(pool, db.New(pool), payments.Disabled{}, 15*time.Minute, "http://app.test", "no-reply@example.test", nil), pool
 }
 
 // insertUser creates a user with the given role and registers its removal,
@@ -706,7 +706,50 @@ func TestReviewsRequireCompletedSession(t *testing.T) {
 		t.Fatalf("list = %+v, %v", reviews, err)
 	}
 	c, err := svc.GetCoach(ctx, coach)
-	if err != nil || c.ReviewCount != 1 || c.AvgRating != 2 {
+	if err != nil || c.ReviewCount != 1 || c.AvgRating != 2 || c.RecommendCount != 0 {
 		t.Fatalf("coach aggregates = %+v, %v", c, err)
 	}
+	if reviews[0].Recommended {
+		t.Fatalf("a rating of 2 must not count as a recommendation: %+v", reviews[0])
+	}
+
+	// Without a summariser the summary is the deterministic aggregate line.
+	summary, err := svc.ReviewSummary(ctx, coach)
+	if err != nil || summary.ModelVersion != "aggregate" || summary.Total != 1 || summary.Recommended != 0 ||
+		summary.Summary != "0 of 1 clients recommend "+c.DisplayName+"." || len(summary.Strengths) != 0 {
+		t.Fatalf("aggregate summary = %+v, %v", summary, err)
+	}
+
+	// A configured summariser receives the private ratings and comments and its
+	// answer is passed through; when it fails the aggregate line is used instead.
+	fake := &fakeSummarizer{out: ReviewSummaryResult{ModelVersion: "fake", Recommended: 0, Total: 1, Summary: "Clients say…", Strengths: []string{"Honest, direct feedback"}}}
+	svc.reviews = fake
+	summary, err = svc.ReviewSummary(ctx, coach)
+	if err != nil || summary.ModelVersion != "fake" || len(summary.Strengths) != 1 {
+		t.Fatalf("summarised = %+v, %v", summary, err)
+	}
+	if len(fake.got.Reviews) != 1 || fake.got.Reviews[0].Rating != 2 || fake.got.CoachName != c.DisplayName {
+		t.Fatalf("summariser input = %+v", fake.got)
+	}
+	fake.err = errors.New("ml down")
+	summary, err = svc.ReviewSummary(ctx, coach)
+	if err != nil || summary.ModelVersion != "aggregate" {
+		t.Fatalf("fallback summary = %+v, %v", summary, err)
+	}
+	if _, err := svc.ReviewSummary(ctx, uuid.New()); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown coach summary err = %v, want ErrNotFound", err)
+	}
+}
+
+// fakeSummarizer records the request it was given and replies with a canned
+// result or error.
+type fakeSummarizer struct {
+	got ReviewSummaryRequest
+	out ReviewSummaryResult
+	err error
+}
+
+func (f *fakeSummarizer) SummarizeReviews(_ context.Context, in ReviewSummaryRequest) (ReviewSummaryResult, error) {
+	f.got = in
+	return f.out, f.err
 }
