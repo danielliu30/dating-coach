@@ -12,6 +12,7 @@ import {
 } from '../api/types';
 import { Avatar, Divider, GradientCard, SectionHeader, StatusPill } from '../components/kit';
 import { Badge, Button, Chip, Field, Screen } from '../components/ui';
+import { PHASE_LABELS, toggle } from '../lib/phases';
 import { useAuth } from '../state/auth';
 import { colors, fonts, radii, shared, type } from '../theme';
 
@@ -32,28 +33,9 @@ const STYLE_LABELS: Record<DatingStyle, string> = {
   friends_intro: 'Through friends',
 };
 
-const PHASE_LABELS: Record<DatingPhase, string> = {
-  opening: 'Opening line',
-  first_messages: 'First messages',
-  building_rapport: 'Building rapport',
-  flirting: 'Flirting',
-  asking_out: 'Asking them out',
-  first_date: 'First date',
-  follow_up: 'Following up after a date',
-  defining_relationship: 'Defining the relationship',
-};
-
 // Where a phase sits for the user: a strength, something being worked on, or
 // neither. The backend refuses a phase on both sides, so the UI never offers it.
 type PhaseStanding = 'strong' | 'working_on' | null;
-
-/** Toggles `value` in `list`, keeping the vocabulary's order. */
-function toggle<T extends string>(list: readonly T[], value: T, vocabulary: readonly T[]): T[] {
-  const next = new Set(list);
-  if (next.has(value)) next.delete(value);
-  else next.add(value);
-  return vocabulary.filter((v) => next.has(v));
-}
 
 /** Order-insensitive equality of two selections. */
 function sameSet(a: readonly string[], b: readonly string[]): boolean {
