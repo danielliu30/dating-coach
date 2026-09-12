@@ -15,3 +15,9 @@ ml-analyzer/models/
 .DS_Store
 .idea/
 .vscode/
+
+# E2E (Playwright)
+!/e2e/.env
+/e2e/node_modules/
+/e2e/playwright-report/
+/e2e/test-results/
