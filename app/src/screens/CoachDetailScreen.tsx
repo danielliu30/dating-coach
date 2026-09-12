@@ -5,11 +5,12 @@ import React, { useState } from 'react';
 import { Linking, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { api } from '../api/client';
-import type { Slot } from '../api/types';
+import type { Coach, Slot } from '../api/types';
 import { Avatar, Divider, GradientCard, IconDisc, MetaRow, SectionHeader, Skeleton, SkeletonCard } from '../components/kit';
-import { Badge, Button, Field, Loading, Screen } from '../components/ui';
+import { Badge, Button, Chip, Field, Loading, Screen } from '../components/ui';
 import { useAsync } from '../hooks/useAsync';
 import { PHASE_LABELS } from '../lib/phases';
+import { RECOMMEND_OPTIONS, recommendLabel } from '../lib/reviews';
 import type { CoachesStackParams, RootTabParams } from '../navigation/types';
 import { colors, fonts, radii, shared, type } from '../theme';
 
@@ -54,6 +55,40 @@ export default function CoachDetailScreen({
   const coach = useAsync(() => api.getCoach(coachID), [coachID]);
   const availability = useAsync(() => api.coachAvailability(coachID), [coachID]);
   const slots = useAsync(() => api.openSlots(coachID, duration), [coachID, duration]);
+  const reviews = useAsync(() => api.listCoachReviews(coachID), [coachID]);
+  // The form is only offered once the signed-in client has a completed session
+  // with this coach; the server enforces the same rule.
+  const completed = useAsync(
+    async () => (await api.mySessions('completed')).some((s) => s.coach_id === coachID),
+    [coachID],
+  );
+
+  const [rating, setRating] = useState<number | null>(null);
+  const [comment, setComment] = useState('');
+  const [reviewBusy, setReviewBusy] = useState(false);
+  const [reviewError, setReviewError] = useState<string | null>(null);
+  const [reviewStatus, setReviewStatus] = useState<string | null>(null);
+
+  const submitReview = async () => {
+    if (rating === null) {
+      setReviewError('Say whether you would recommend them first.');
+      return;
+    }
+    setReviewBusy(true);
+    setReviewError(null);
+    setReviewStatus(null);
+    try {
+      await api.submitCoachReview(coachID, { rating, comment: comment.trim() });
+      setReviewStatus('Thanks — your review is posted.');
+      setComment('');
+      setRating(null);
+      await Promise.all([reviews.reload(), coach.reload()]);
+    } catch (err) {
+      setReviewError(err instanceof Error ? err.message : 'could not post review');
+    } finally {
+      setReviewBusy(false);
+    }
+  };
 
   /**
    * Hands the user to the provider checkout. On web this navigates the current
@@ -186,6 +221,9 @@ export default function CoachDetailScreen({
             </View>
           </>
         ) : null}
+        <View style={[shared.row, { flexWrap: 'wrap', gap: 6 }]}>
+          <Badge text={c.review_count > 0 ? recommendLabel(c) : 'No reviews yet'} tone={colors.primary} />
+        </View>
         <Divider />
         <View style={styles.chatRow}>
           <IconDisc icon="chatbubbles-outline" hue="sky" size={44} />
@@ -195,6 +233,73 @@ export default function CoachDetailScreen({
           </View>
         </View>
         <Button label="Start a live chat" icon="chatbubble-outline" variant="secondary" onPress={startChat} />
+      </View>
+
+      <View style={shared.card}>
+        <SectionHeader
+          title="Reviews"
+          caption="From clients who completed a session"
+        />
+        {reviews.loading ? (
+          <Skeleton height={48} />
+        ) : reviews.error ? (
+          <Text style={shared.error}>{reviews.error}</Text>
+        ) : reviews.data && reviews.data.length > 0 ? (
+          reviews.data.map((review) => (
+            <View key={review.id} style={styles.review}>
+              <View style={shared.row}>
+                <Text style={type.subheading}>{review.reviewer_name}</Text>
+                <Badge
+                  text={review.recommended ? 'Recommends' : "Doesn't recommend"}
+                  tone={review.recommended ? colors.primary : colors.bark}
+                />
+              </View>
+              {review.comment ? <Text style={type.body}>{review.comment}</Text> : null}
+              <Text style={type.caption}>{new Date(review.created_at).toLocaleDateString()}</Text>
+            </View>
+          ))
+        ) : (
+          <Text style={type.caption}>No reviews yet.</Text>
+        )}
+        {completed.error ? (
+          <View style={shared.row}>
+            <Text style={[shared.error, { flex: 1 }]}>Could not check your sessions: {completed.error}</Text>
+            <Button label="Retry" variant="secondary" onPress={() => void completed.reload()} />
+          </View>
+        ) : null}
+        {completed.data ? (
+          <>
+            <Divider />
+            <Text style={styles.label}>Would you recommend {c.display_name}?</Text>
+            <View style={[shared.row, { flexWrap: 'wrap', gap: 6 }]}>
+              {RECOMMEND_OPTIONS.map((option) => (
+                <Chip
+                  key={option.rating}
+                  label={option.label}
+                  selected={rating === option.rating}
+                  tone={colors.primary}
+                  role="radio"
+                  onPress={() => setRating(option.rating)}
+                />
+              ))}
+            </View>
+            <Field
+              label="Comment (optional)"
+              value={comment}
+              onChangeText={setComment}
+              placeholder="What helped most?"
+              multiline
+            />
+            {reviewStatus ? (
+              <View style={shared.row}>
+                <Ionicons name="checkmark-circle" size={16} color={colors.engaging} />
+                <Text style={[type.caption, { color: colors.engaging }]}>{reviewStatus}</Text>
+              </View>
+            ) : null}
+            {reviewError ? <Text style={shared.error}>{reviewError}</Text> : null}
+            <Button label="Post review" icon="thumbs-up-outline" variant="secondary" loading={reviewBusy} onPress={submitReview} />
+          </>
+        ) : null}
       </View>
 
       <View style={shared.card}>
@@ -317,6 +422,12 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   chatRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  review: {
+    gap: 4,
+    padding: 12,
+    borderRadius: radii.md,
+    backgroundColor: colors.sageTint,
+  },
   window: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   windowDay: {
     width: 44,
