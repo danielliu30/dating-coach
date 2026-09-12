@@ -198,11 +198,15 @@ func rfc3339(t *time.Time) string {
 }
 
 // ListCoaches returns a page of the coach directory. A non-nil phase keeps
-// only coaches who list that dating phase; it must be one of auth.DatingPhases
-// or ErrInvalidInput is returned.
+// only coaches who list that dating phase; it is trimmed and lowercased like
+// stored phases and must then be one of auth.DatingPhases, else ErrInvalidInput.
 func (s *Service) ListCoaches(ctx context.Context, limit, offset int32, acceptingOnly bool, phase *string) ([]Coach, error) {
-	if phase != nil && !slices.Contains(auth.DatingPhases, *phase) {
-		return nil, fmt.Errorf("%w: unknown phase %q", ErrInvalidInput, *phase)
+	if phase != nil {
+		p := strings.ToLower(strings.TrimSpace(*phase))
+		if !slices.Contains(auth.DatingPhases, p) {
+			return nil, fmt.Errorf("%w: unknown phase %q", ErrInvalidInput, *phase)
+		}
+		phase = &p
 	}
 	rows, err := s.queries.ListCoaches(ctx, db.ListCoachesParams{
 		Limit:         limit,
