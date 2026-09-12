@@ -35,6 +35,7 @@ const session: CoachingSession = {
   scheduled_time: '2030-01-07T18:00:00Z',
   duration_minutes: 45,
   status: 'scheduled',
+  topic: 'Opening lines',
   coach_notes: 'Existing notes from last time',
   payment_status: 'not_required',
   amount_cents: 0,
