@@ -201,10 +201,10 @@ export default function CoachProfileScreen(): React.ReactElement {
         {specialtyList.length || phases.length ? (
           <View style={styles.previewPills}>
             {phases.map((phase) => (
-              <Badge key={phase} text={PHASE_LABELS[phase]} tone={colors.primaryText} />
+              <Badge key={`phase-${phase}`} text={PHASE_LABELS[phase]} tone={colors.primaryText} />
             ))}
             {specialtyList.map((item) => (
-              <Badge key={item} text={item} tone={colors.primaryText} />
+              <Badge key={`specialty-${item}`} text={item} tone={colors.primaryText} />
             ))}
           </View>
         ) : null}

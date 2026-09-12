@@ -75,10 +75,10 @@ export default function CoachListScreen({
             {item.specialties.length > 0 || item.phases.length > 0 ? (
               <View style={[shared.row, { flexWrap: 'wrap', gap: 6 }]}>
                 {item.phases.map((phase) => (
-                  <Badge key={phase} text={PHASE_LABELS[phase]} tone={colors.primary} />
+                  <Badge key={`phase-${phase}`} text={PHASE_LABELS[phase]} tone={colors.primary} />
                 ))}
                 {item.specialties.map((specialty) => (
-                  <Badge key={specialty} text={specialty} tone={colors.primaryDeep} />
+                  <Badge key={`specialty-${specialty}`} text={specialty} tone={colors.primaryDeep} />
                 ))}
               </View>
             ) : null}

@@ -152,10 +152,10 @@ export default function CoachDetailScreen({
             <Text style={styles.label}>Specialties</Text>
             <View style={[shared.row, { flexWrap: 'wrap', gap: 6 }]}>
               {c.phases.map((phase) => (
-                <Badge key={phase} text={PHASE_LABELS[phase]} tone={colors.primary} />
+                <Badge key={`phase-${phase}`} text={PHASE_LABELS[phase]} tone={colors.primary} />
               ))}
               {c.specialties.map((specialty) => (
-                <Badge key={specialty} text={specialty} tone={colors.primaryDeep} />
+                <Badge key={`specialty-${specialty}`} text={specialty} tone={colors.primaryDeep} />
               ))}
             </View>
           </>
