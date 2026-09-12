@@ -425,7 +425,7 @@ func (q *Queries) ExpirePendingSessions(ctx context.Context, limit int32) ([]Coa
 }
 
 const getCoach = `-- name: GetCoach :one
-SELECT c.user_id, c.headline, c.bio, c.specialties, c.hourly_rate_cents, c.timezone, c.years_experience, c.accepting_clients, c.created_at, c.updated_at, u.display_name, u.email
+SELECT c.user_id, c.headline, c.bio, c.specialties, c.hourly_rate_cents, c.timezone, c.years_experience, c.accepting_clients, c.created_at, c.updated_at, c.phases, u.display_name, u.email
 FROM coaches c
 JOIN users u ON u.id = c.user_id
 WHERE c.user_id = $1
@@ -442,6 +442,7 @@ type GetCoachRow struct {
 	AcceptingClients bool      `json:"accepting_clients"`
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
+	Phases           []string  `json:"phases"`
 	DisplayName      string    `json:"display_name"`
 	Email            string    `json:"email"`
 }
@@ -460,6 +461,7 @@ func (q *Queries) GetCoach(ctx context.Context, userID uuid.UUID) (GetCoachRow, 
 		&i.AcceptingClients,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Phases,
 		&i.DisplayName,
 		&i.Email,
 	)
@@ -805,18 +807,20 @@ func (q *Queries) ListCoachAvailability(ctx context.Context, coachID uuid.UUID) 
 }
 
 const listCoaches = `-- name: ListCoaches :many
-SELECT c.user_id, c.headline, c.bio, c.specialties, c.hourly_rate_cents, c.timezone, c.years_experience, c.accepting_clients, c.created_at, c.updated_at, u.display_name, u.email
+SELECT c.user_id, c.headline, c.bio, c.specialties, c.hourly_rate_cents, c.timezone, c.years_experience, c.accepting_clients, c.created_at, c.updated_at, c.phases, u.display_name, u.email
 FROM coaches c
 JOIN users u ON u.id = c.user_id
 WHERE ($3::boolean IS NOT TRUE OR c.accepting_clients)
+  AND ($4::text IS NULL OR $4::text = ANY(c.phases))
 ORDER BY c.years_experience DESC, u.display_name
 LIMIT $1 OFFSET $2
 `
 
 type ListCoachesParams struct {
-	Limit         int32 `json:"limit"`
-	Offset        int32 `json:"offset"`
-	AcceptingOnly *bool `json:"accepting_only"`
+	Limit         int32   `json:"limit"`
+	Offset        int32   `json:"offset"`
+	AcceptingOnly *bool   `json:"accepting_only"`
+	Phase         *string `json:"phase"`
 }
 
 type ListCoachesRow struct {
@@ -830,12 +834,18 @@ type ListCoachesRow struct {
 	AcceptingClients bool      `json:"accepting_clients"`
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
+	Phases           []string  `json:"phases"`
 	DisplayName      string    `json:"display_name"`
 	Email            string    `json:"email"`
 }
 
 func (q *Queries) ListCoaches(ctx context.Context, arg ListCoachesParams) ([]ListCoachesRow, error) {
-	rows, err := q.db.Query(ctx, listCoaches, arg.Limit, arg.Offset, arg.AcceptingOnly)
+	rows, err := q.db.Query(ctx, listCoaches,
+		arg.Limit,
+		arg.Offset,
+		arg.AcceptingOnly,
+		arg.Phase,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -854,6 +864,7 @@ func (q *Queries) ListCoaches(ctx context.Context, arg ListCoachesParams) ([]Lis
 			&i.AcceptingClients,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Phases,
 			&i.DisplayName,
 			&i.Email,
 		); err != nil {
@@ -1399,18 +1410,19 @@ func (q *Queries) UpdateSessionStatus(ctx context.Context, arg UpdateSessionStat
 }
 
 const upsertCoachProfile = `-- name: UpsertCoachProfile :one
-INSERT INTO coaches (user_id, headline, bio, specialties, hourly_rate_cents, timezone, years_experience, accepting_clients)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+INSERT INTO coaches (user_id, headline, bio, specialties, phases, hourly_rate_cents, timezone, years_experience, accepting_clients)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 ON CONFLICT (user_id) DO UPDATE
 SET headline = EXCLUDED.headline,
     bio = EXCLUDED.bio,
     specialties = EXCLUDED.specialties,
+    phases = EXCLUDED.phases,
     hourly_rate_cents = EXCLUDED.hourly_rate_cents,
     timezone = EXCLUDED.timezone,
     years_experience = EXCLUDED.years_experience,
     accepting_clients = EXCLUDED.accepting_clients,
     updated_at = now()
-RETURNING user_id, headline, bio, specialties, hourly_rate_cents, timezone, years_experience, accepting_clients, created_at, updated_at
+RETURNING user_id, headline, bio, specialties, hourly_rate_cents, timezone, years_experience, accepting_clients, created_at, updated_at, phases
 `
 
 type UpsertCoachProfileParams struct {
@@ -1418,6 +1430,7 @@ type UpsertCoachProfileParams struct {
 	Headline         string    `json:"headline"`
 	Bio              string    `json:"bio"`
 	Specialties      []string  `json:"specialties"`
+	Phases           []string  `json:"phases"`
 	HourlyRateCents  int32     `json:"hourly_rate_cents"`
 	Timezone         string    `json:"timezone"`
 	YearsExperience  int32     `json:"years_experience"`
@@ -1430,6 +1443,7 @@ func (q *Queries) UpsertCoachProfile(ctx context.Context, arg UpsertCoachProfile
 		arg.Headline,
 		arg.Bio,
 		arg.Specialties,
+		arg.Phases,
 		arg.HourlyRateCents,
 		arg.Timezone,
 		arg.YearsExperience,
@@ -1447,6 +1461,7 @@ func (q *Queries) UpsertCoachProfile(ctx context.Context, arg UpsertCoachProfile
 		&i.AcceptingClients,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Phases,
 	)
 	return i, err
 }

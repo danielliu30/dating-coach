@@ -2,7 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, type NavigationProp } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import React, { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Linking, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { api } from '../api/client';
 import type { Slot } from '../api/types';
@@ -49,10 +49,30 @@ export default function CoachDetailScreen({
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [checkoutUrl, setCheckoutUrl] = useState<string | null>(null);
 
   const coach = useAsync(() => api.getCoach(coachID), [coachID]);
   const availability = useAsync(() => api.coachAvailability(coachID), [coachID]);
   const slots = useAsync(() => api.openSlots(coachID, duration), [coachID, duration]);
+
+  /**
+   * Hands the user to the provider checkout. On web this navigates the current
+   * tab (a delayed `window.open` is popup-blocked after the booking request has
+   * finished); native platforms open the system browser. Failures keep the URL
+   * in state so the "Continue to payment" button can retry from a fresh tap.
+   */
+  const openCheckout = async (url: string) => {
+    setError(null);
+    try {
+      if (Platform.OS === 'web') {
+        window.location.assign(url);
+      } else {
+        await Linking.openURL(url);
+      }
+    } catch {
+      setError('Could not open the payment page. Tap "Continue to payment" to try again.');
+    }
+  };
 
   const book = async () => {
     if (!selected) {
@@ -63,14 +83,20 @@ export default function CoachDetailScreen({
     setError(null);
     setStatus(null);
     try {
-      await api.bookSession({
+      const session = await api.bookSession({
         coach_id: coachID,
         scheduled_time: selected,
         duration_minutes: duration,
         topic: topic.trim(),
       });
-      setStatus('Session booked — see it under Sessions.');
       setSelected(null);
+      setCheckoutUrl(session.checkout_url ?? null);
+      if (session.checkout_url) {
+        setStatus('Session held — complete payment to confirm it.');
+        await openCheckout(session.checkout_url);
+      } else {
+        setStatus('Session booked — see it under Sessions.');
+      }
       await slots.reload();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'could not book');
@@ -260,6 +286,9 @@ export default function CoachDetailScreen({
           </View>
         ) : null}
         {error ? <Text style={shared.error}>{error}</Text> : null}
+        {checkoutUrl ? (
+          <Button label="Continue to payment" icon="card-outline" onPress={() => void openCheckout(checkoutUrl)} />
+        ) : null}
         <Button label="Book session" icon="calendar-outline" onPress={book} loading={busy} />
       </View>
     </Screen>
