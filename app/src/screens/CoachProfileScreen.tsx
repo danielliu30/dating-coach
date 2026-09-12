@@ -3,9 +3,10 @@ import React, { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { ApiError, api } from '../api/client';
-import type { AvailabilityWindow } from '../api/types';
+import { DATING_PHASES, type AvailabilityWindow, type DatingPhase } from '../api/types';
 import { Avatar, GradientCard, SectionHeader, SkeletonCard, StatusPill } from '../components/kit';
-import { Badge, Button, Field, Screen } from '../components/ui';
+import { Badge, Button, Chip, Field, Screen } from '../components/ui';
+import { PHASE_LABELS, toggle } from '../lib/phases';
 import { useAuth } from '../state/auth';
 import { colors, fonts, radii, shared, type } from '../theme';
 
@@ -43,6 +44,7 @@ export default function CoachProfileScreen(): React.ReactElement {
   const [headline, setHeadline] = useState('');
   const [bio, setBio] = useState('');
   const [specialties, setSpecialties] = useState('');
+  const [phases, setPhases] = useState<DatingPhase[]>([]);
   const [rate, setRate] = useState('120');
   const [timezone, setTimezone] = useState('UTC');
   const [years, setYears] = useState('3');
@@ -75,6 +77,7 @@ export default function CoachProfileScreen(): React.ReactElement {
         setHeadline(profile.value.headline);
         setBio(profile.value.bio);
         setSpecialties(profile.value.specialties.join(', '));
+        setPhases(profile.value.phases ?? []);
         setRate(String(profile.value.hourly_rate_cents / 100));
         setTimezone(profile.value.timezone);
         setYears(String(profile.value.years_experience));
@@ -125,6 +128,7 @@ export default function CoachProfileScreen(): React.ReactElement {
           .split(',')
           .map((item) => item.trim())
           .filter(Boolean),
+        phases,
         hourly_rate_cents: Math.round(Number(rate) * 100) || 0,
         timezone: timezone.trim() || 'UTC',
         years_experience: Number(years) || 0,
@@ -194,8 +198,11 @@ export default function CoachProfileScreen(): React.ReactElement {
           <StatusPill text={`$${Number(rate) || 0}/hr`} tone={colors.primaryText} onDark />
           <StatusPill text={`${Number(years) || 0} yrs`} tone={colors.primaryText} onDark />
         </View>
-        {specialtyList.length ? (
+        {specialtyList.length || phases.length ? (
           <View style={styles.previewPills}>
+            {phases.map((phase) => (
+              <Badge key={phase} text={PHASE_LABELS[phase]} tone={colors.primaryText} />
+            ))}
             {specialtyList.map((item) => (
               <Badge key={item} text={item} tone={colors.primaryText} />
             ))}
@@ -218,6 +225,18 @@ export default function CoachProfileScreen(): React.ReactElement {
           onChangeText={setSpecialties}
           placeholder="openers, profile review, texting"
         />
+        <Text style={type.eyebrow}>Dating phases you coach</Text>
+        <View style={[shared.row, { flexWrap: 'wrap' }]}>
+          {DATING_PHASES.map((phase) => (
+            <Chip
+              key={phase}
+              label={PHASE_LABELS[phase]}
+              selected={phases.includes(phase)}
+              tone={colors.primary}
+              onPress={() => setPhases((prev) => toggle(prev, phase, DATING_PHASES))}
+            />
+          ))}
+        </View>
         <View style={shared.row}>
           <View style={{ flex: 1 }}>
             <Field label="Hourly rate (USD)" value={rate} onChangeText={setRate} keyboardType="numeric" />
