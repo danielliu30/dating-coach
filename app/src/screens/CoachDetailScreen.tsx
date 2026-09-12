@@ -81,7 +81,6 @@ export default function CoachDetailScreen({
     setBusy(true);
     setError(null);
     setStatus(null);
-    setCheckoutUrl(null);
     try {
       const session = await api.bookSession({
         coach_id: coachID,
@@ -90,14 +89,14 @@ export default function CoachDetailScreen({
         topic: topic.trim(),
       });
       setSelected(null);
-      void slots.reload();
+      setCheckoutUrl(session.checkout_url ?? null);
       if (session.checkout_url) {
-        setCheckoutUrl(session.checkout_url);
         setStatus('Session held — complete payment to confirm it.');
         await openCheckout(session.checkout_url);
       } else {
         setStatus('Session booked — see it under Sessions.');
       }
+      await slots.reload();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'could not book');
     } finally {
