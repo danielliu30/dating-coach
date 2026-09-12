@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -1181,7 +1182,7 @@ func (s *Service) CreateReview(ctx context.Context, coachID, userID uuid.UUID, i
 		return Review{}, fmt.Errorf("%w: rating must be between 1 and 5", ErrInvalidInput)
 	}
 	comment := strings.TrimSpace(in.Comment)
-	if len(comment) > maxReviewComment {
+	if utf8.RuneCountInString(comment) > maxReviewComment {
 		return Review{}, fmt.Errorf("%w: comment exceeds %d characters", ErrInvalidInput, maxReviewComment)
 	}
 	if _, err := s.queries.GetCoach(ctx, coachID); err != nil {
