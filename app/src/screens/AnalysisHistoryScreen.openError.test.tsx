@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import React from 'react';
 
 import { api } from '../api/client';
@@ -56,5 +56,29 @@ describe('AnalysisHistoryScreen open failure', () => {
       expect(navigation.navigate).toHaveBeenCalledWith('Result', { analysisID: 'a2', conversationID: 'conv2' }),
     );
     expect(screen.queryByText('no analysis yet')).toBeNull();
+  });
+
+  it('ignores an older open that fails after a newer one succeeded', async () => {
+    let rejectFirst!: (err: Error) => void;
+    mocked.latestResult
+      .mockReturnValueOnce(new Promise((_, reject) => (rejectFirst = reject)))
+      .mockResolvedValueOnce({
+        id: 'a2',
+        conversation_id: 'conv2',
+        status: 'succeeded',
+        model_version: 'v1',
+        segments: null,
+        overall: null,
+        created_at: '2030-01-02T00:00:00Z',
+      });
+    render(<AnalysisHistoryScreen {...props} />);
+
+    fireEvent.press(await screen.findByText('Sourdough'));
+    fireEvent.press(screen.getByText('Hiking'));
+    await waitFor(() => expect(navigation.navigate).toHaveBeenCalledWith('Result', { analysisID: 'a2', conversationID: 'conv2' }));
+
+    await act(async () => rejectFirst(new Error('stale failure')));
+    expect(screen.queryByText('stale failure')).toBeNull();
+    expect(navigation.navigate).toHaveBeenCalledTimes(1);
   });
 });

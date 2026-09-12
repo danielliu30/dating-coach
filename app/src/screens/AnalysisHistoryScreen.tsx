@@ -1,5 +1,5 @@
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { FlatList, Text, View } from 'react-native';
 
 import { api } from '../api/client';
@@ -19,13 +19,19 @@ export default function AnalysisHistoryScreen({
   const named = conversations.filter((c) => c.match_name).length;
 
   const [openError, setOpenError] = useState<{ conversationID: string; message: string } | null>(null);
+  // Cards stay pressable while an open is in flight; only the latest tap may
+  // navigate or report a failure.
+  const openRequest = useRef(0);
 
   const open = async (conversationID: string) => {
+    const request = ++openRequest.current;
     setOpenError(null);
     try {
       const result = await api.latestResult(conversationID);
+      if (request !== openRequest.current) return;
       navigation.navigate('Result', { analysisID: result.id, conversationID });
     } catch (err) {
+      if (request !== openRequest.current) return;
       setOpenError({
         conversationID,
         message: err instanceof Error ? err.message : 'could not open this analysis',
