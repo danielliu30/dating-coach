@@ -85,8 +85,12 @@ func (m mailer) clientRequested(ctx context.Context, q *db.Queries, s db.GetSess
 
 // clientConfirmed tells the client the coach accepted, with a confirmed invite.
 func (m mailer) clientConfirmed(ctx context.Context, q *db.Queries, s db.GetSessionPartiesRow) error {
-	body := fmt.Sprintf("Hi %s,\n\n%s has confirmed your session.\n\nWhen: %s\nTopic: %s\n\nA calendar invite is attached.",
+	body := fmt.Sprintf("Hi %s,\n\n%s has confirmed your session.\n\nWhen: %s\nTopic: %s\n",
 		s.UserName, s.CoachName, when(s, false), orNone(s.Topic))
+	if s.MeetingUrl != "" {
+		body += "Join: " + s.MeetingUrl + "\n"
+	}
+	body += "\nA calendar invite is attached."
 	return m.enqueue(ctx, q, s.UserEmail, fmt.Sprintf("%s confirmed your session", s.CoachName), body, invite(s, m.mailFrom))
 }
 
@@ -170,6 +174,28 @@ func (m mailer) coachRescheduled(ctx context.Context, q *db.Queries, s db.GetSes
 	body := fmt.Sprintf("Hi %s,\n\n%s has moved your session.\n\nNew time: %s\nTopic: %s\n\nAn updated calendar invite is attached.",
 		s.UserName, s.CoachName, when(s, false), orNone(s.Topic))
 	return m.enqueue(ctx, q, s.UserEmail, fmt.Sprintf("%s moved your session", s.CoachName), body, invite(s, m.mailFrom))
+}
+
+// meetingLinkChanged tells one party (the client, or the coach when toCoach)
+// that the join link of a scheduled session was set, replaced, or removed,
+// attaching an invite whose LOCATION reflects the new value so the existing
+// calendar event is updated in place.
+func (m mailer) meetingLinkChanged(ctx context.Context, q *db.Queries, s db.GetSessionPartiesRow, toCoach bool) error {
+	to, name, other, forCoach := s.UserEmail, s.UserName, s.CoachName, false
+	if toCoach {
+		to, name, other, forCoach = s.CoachEmail, s.CoachName, s.UserName, true
+	}
+	var subject, body string
+	if s.MeetingUrl == "" {
+		subject = fmt.Sprintf("Join link removed: session with %s", other)
+		body = fmt.Sprintf("Hi %s,\n\nThe join link for your session with %s on %s has been removed.\n\nThe attached update clears the location in your calendar.",
+			name, other, when(s, forCoach))
+	} else {
+		subject = fmt.Sprintf("Join link: session with %s", other)
+		body = fmt.Sprintf("Hi %s,\n\nYour session with %s on %s now has a join link.\n\nJoin: %s\n\nThe attached update adds it to the event in your calendar.",
+			name, other, when(s, forCoach), s.MeetingUrl)
+	}
+	return m.enqueue(ctx, q, to, subject, body, invite(s, m.mailFrom))
 }
 
 // orNone substitutes a placeholder for an empty topic.

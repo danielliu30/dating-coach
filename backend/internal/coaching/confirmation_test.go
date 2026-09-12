@@ -556,3 +556,104 @@ func TestCancellationUpdatesBothCalendars(t *testing.T) {
 		t.Fatalf("coach's own cancel update should cancel their event:\n%s", ics)
 	}
 }
+
+func TestMeetingLinkFollowsLifecycleAndUpdatesCalendars(t *testing.T) {
+	svc, pool := testService(t)
+	ctx := context.Background()
+	coach, client, stranger := insertCoach(t, pool), insertUser(t, pool, "user"), insertCoach(t, pool)
+
+	s, err := svc.BookSession(ctx, client, BookInput{CoachID: coach.String(), ScheduledTime: nextSlot()})
+	if err != nil {
+		t.Fatalf("book: %v", err)
+	}
+	sid := uuid.MustParse(s.ID)
+	if _, err := svc.SetMeetingURL(ctx, sid, stranger, "https://meet.test/a"); !errors.Is(err, ErrForbidden) && !errors.Is(err, ErrNotFound) {
+		t.Fatalf("another coach setting link: err = %v", err)
+	}
+	if _, err := svc.SetMeetingURL(ctx, sid, coach, "meet.test/a"); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("relative url: err = %v, want ErrInvalidInput", err)
+	}
+	// While pending only the row changes; the confirmed invite carries the link later.
+	if _, err := svc.SetMeetingURL(ctx, sid, coach, "https://meet.test/a"); err != nil {
+		t.Fatalf("set while pending: %v", err)
+	}
+	if got := outboxFor(t, pool, emailOf(t, pool, client)); len(got) != 1 {
+		t.Fatalf("client emails while pending = %v, want only the receipt", got)
+	}
+	if _, err := svc.RespondAsCoach(ctx, sid, coach, "confirm"); err != nil {
+		t.Fatalf("confirm: %v", err)
+	}
+	if ics := icsFor(t, pool, emailOf(t, pool, client), "confirmed"); !strings.Contains(ics, "LOCATION:https://meet.test/a") {
+		t.Fatalf("confirmation invite = %q, want LOCATION with the link", ics)
+	}
+	// Unchanged value is a no-op: no extra mail, no sequence bump.
+	if _, err := svc.SetMeetingURL(ctx, sid, coach, "https://meet.test/a"); err != nil {
+		t.Fatalf("set same: %v", err)
+	}
+	if got := outboxFor(t, pool, emailOf(t, pool, client)); len(got) != 2 {
+		t.Fatalf("client emails after no-op = %v, want receipt and confirmation", got)
+	}
+	updated, err := svc.SetMeetingURL(ctx, sid, coach, "https://meet.test/b")
+	if err != nil {
+		t.Fatalf("replace while scheduled: %v", err)
+	}
+	if updated.MeetingURL != "https://meet.test/b" {
+		t.Fatalf("meeting url = %q, want the new link", updated.MeetingURL)
+	}
+	for _, who := range []uuid.UUID{client, coach} {
+		got := outboxFor(t, pool, emailOf(t, pool, who))
+		if len(got) != 3 || !strings.Contains(got[2], "Join link") {
+			t.Fatalf("emails for %s = %v, want a join-link update last", who, got)
+		}
+		ics := icsFor(t, pool, emailOf(t, pool, who), "Join link")
+		// Sequence: 1 pending set, 2 confirmation, 3 this replacement.
+		if !strings.Contains(ics, "LOCATION:https://meet.test/b") || !strings.Contains(ics, "SEQUENCE:3") {
+			t.Fatalf("join-link invite for %s = %q, want new LOCATION with SEQUENCE:3", who, ics)
+		}
+	}
+	if _, err := svc.SetStatus(ctx, sid, client, StatusCancelled); err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+	if _, err := svc.SetMeetingURL(ctx, sid, coach, "https://meet.test/c"); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("set on cancelled: err = %v, want ErrInvalidInput", err)
+	}
+}
+
+func TestInviteCarriesMeetingURL(t *testing.T) {
+	row := db.GetSessionPartiesRow{
+		ID:              uuid.New(),
+		Status:          StatusScheduled,
+		ScheduledTime:   time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC),
+		DurationMinutes: 45,
+		UserName:        "Ana",
+		CoachName:       "Coach",
+		MeetingUrl:      "https://meet.example.test/abc,1",
+	}
+	ics := invite(row, "no-reply@example.test")
+	if !strings.Contains(ics, `LOCATION:https://meet.example.test/abc\,1`+"\r\n") {
+		t.Errorf("invite lacks escaped LOCATION: %q", ics)
+	}
+	if !strings.Contains(ics, `Join: https://meet.example.test/abc\,1`) {
+		t.Errorf("invite DESCRIPTION lacks join link: %q", ics)
+	}
+	row.MeetingUrl = ""
+	if strings.Contains(invite(row, "no-reply@example.test"), "LOCATION:") {
+		t.Error("invite has LOCATION without a meeting url")
+	}
+}
+
+func TestNormaliseMeetingURL(t *testing.T) {
+	for _, ok := range []string{"", "  ", "https://zoom.us/j/1", "http://meet.example.test/x?y=1"} {
+		if _, err := normaliseMeetingURL(ok); err != nil {
+			t.Errorf("%q: unexpected error %v", ok, err)
+		}
+	}
+	if got, _ := normaliseMeetingURL("  "); got != "" {
+		t.Errorf("blank should clear, got %q", got)
+	}
+	for _, bad := range []string{"zoom.us/j/1", "ftp://x.test", "javascript:alert(1)", "https://", "not a url"} {
+		if _, err := normaliseMeetingURL(bad); !errors.Is(err, ErrInvalidInput) {
+			t.Errorf("%q: expected ErrInvalidInput, got %v", bad, err)
+		}
+	}
+}

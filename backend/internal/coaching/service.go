@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -145,11 +146,13 @@ type Session struct {
 	Status          string `json:"status"`
 	Topic           string `json:"topic"`
 	CoachNotes      string `json:"coach_notes,omitempty"`
-	RespondBy       string `json:"respond_by,omitempty"`
-	PaymentStatus   string `json:"payment_status"`
-	AmountCents     int32  `json:"amount_cents"`
-	Currency        string `json:"currency"`
-	HoldExpiresAt   string `json:"hold_expires_at,omitempty"`
+	// MeetingURL is the join link the coach set for the session, if any.
+	MeetingURL    string `json:"meeting_url,omitempty"`
+	RespondBy     string `json:"respond_by,omitempty"`
+	PaymentStatus string `json:"payment_status"`
+	AmountCents   int32  `json:"amount_cents"`
+	Currency      string `json:"currency"`
+	HoldExpiresAt string `json:"hold_expires_at,omitempty"`
 	// CheckoutURL is only set on the response to a booking that must be paid
 	// for; it is where the client authorises the payment.
 	CheckoutURL string `json:"checkout_url,omitempty"`
@@ -181,6 +184,7 @@ func sessionOf(s db.CoachingSession, counterpart string) Session {
 		Status:          s.Status,
 		Topic:           s.Topic,
 		CoachNotes:      s.CoachNotes,
+		MeetingURL:      s.MeetingUrl,
 		RespondBy:       rfc3339(s.RespondBy),
 		PaymentStatus:   s.PaymentStatus,
 		AmountCents:     s.AmountCents,
@@ -835,6 +839,7 @@ func (s *Service) ListForUser(ctx context.Context, userID uuid.UUID, status *str
 			Status:          row.Status,
 			Topic:           row.Topic,
 			CoachNotes:      row.CoachNotes,
+			MeetingURL:      row.MeetingUrl,
 			RespondBy:       rfc3339(row.RespondBy),
 			PaymentStatus:   row.PaymentStatus,
 			AmountCents:     row.AmountCents,
@@ -868,6 +873,7 @@ func (s *Service) ListForCoach(ctx context.Context, coachID uuid.UUID, status *s
 			Status:          row.Status,
 			Topic:           row.Topic,
 			CoachNotes:      row.CoachNotes,
+			MeetingURL:      row.MeetingUrl,
 			RespondBy:       rfc3339(row.RespondBy),
 			PaymentStatus:   row.PaymentStatus,
 			AmountCents:     row.AmountCents,
@@ -1059,4 +1065,101 @@ func (s *Service) SetNotes(ctx context.Context, sessionID, coachID uuid.UUID, no
 		return Session{}, fmt.Errorf("update notes: %w", err)
 	}
 	return sessionOf(updated, ""), nil
+}
+
+// SetMeetingURL stores the join link clients use to attend the session; only
+// the session's coach may, and only while the session is pending or scheduled
+// (a finished or cancelled session yields ErrInvalidInput). The URL must be
+// empty (clearing it) or an absolute http(s) URL with a host, otherwise
+// ErrInvalidInput. Changing the link on a scheduled session bumps the calendar
+// sequence and emails both parties an updated invite so their calendars carry
+// the new location; a pending session is simply updated, since its confirmed
+// invite has not been sent yet. Setting the value it already holds is a no-op.
+func (s *Service) SetMeetingURL(ctx context.Context, sessionID, coachID uuid.UUID, meetingURL string) (Session, error) {
+	meetingURL, err := normaliseMeetingURL(meetingURL)
+	if err != nil {
+		return Session{}, err
+	}
+	session, err := s.participant(ctx, sessionID, coachID)
+	if err != nil {
+		return Session{}, err
+	}
+	if session.CoachID != coachID {
+		return Session{}, ErrForbidden
+	}
+	if err := meetingLinkAllowed(session); err != nil {
+		return Session{}, err
+	}
+	if session.MeetingUrl == meetingURL {
+		return sessionOf(session, ""), nil
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Session{}, fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := s.queries.WithTx(tx)
+
+	updated, err := q.UpdateSessionMeetingURL(ctx, db.UpdateSessionMeetingURLParams{ID: sessionID, MeetingUrl: meetingURL})
+	if err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return Session{}, fmt.Errorf("update meeting url: %w", err)
+		}
+		// The conditional UPDATE matched nothing: a concurrent change moved the
+		// session to a terminal status or already stored this value. Re-read
+		// and report whichever it was.
+		current, err := q.GetCoachingSession(ctx, sessionID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return Session{}, ErrNotFound
+			}
+			return Session{}, fmt.Errorf("reload session: %w", err)
+		}
+		if err := meetingLinkAllowed(current); err != nil {
+			return Session{}, err
+		}
+		return sessionOf(current, ""), nil
+	}
+	if updated.Status == StatusScheduled {
+		parties, err := q.GetSessionParties(ctx, sessionID)
+		if err != nil {
+			return Session{}, fmt.Errorf("load session parties: %w", err)
+		}
+		if err := s.mail.meetingLinkChanged(ctx, q, parties, false); err != nil {
+			return Session{}, err
+		}
+		if err := s.mail.meetingLinkChanged(ctx, q, parties, true); err != nil {
+			return Session{}, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Session{}, fmt.Errorf("commit meeting url: %w", err)
+	}
+	return sessionOf(updated, ""), nil
+}
+
+// meetingLinkAllowed reports ErrInvalidInput when the session's status no
+// longer admits a meeting link (only pending and scheduled sessions do).
+func meetingLinkAllowed(session db.CoachingSession) error {
+	if session.Status != StatusPending && session.Status != StatusScheduled {
+		return fmt.Errorf("%w: a %s session cannot take a meeting link", ErrInvalidInput, session.Status)
+	}
+	return nil
+}
+
+// normaliseMeetingURL trims raw and returns it unchanged when empty or when it
+// parses as an absolute http or https URL with a host; anything else is
+// ErrInvalidInput so a bare "zoom.us/j/1" or a javascript: link is never
+// stored and later rendered as a tappable link.
+func normaliseMeetingURL(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return "", fmt.Errorf("%w: meeting_url must be an http(s) URL", ErrInvalidInput)
+	}
+	return raw, nil
 }

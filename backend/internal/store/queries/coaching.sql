@@ -285,3 +285,15 @@ UPDATE coaching_sessions
 SET coach_notes = $2, updated_at = now()
 WHERE id = $1
 RETURNING *;
+
+-- name: UpdateSessionMeetingURL :one
+-- Matches no row when the session is not pending/scheduled or already holds
+-- the value, so the lifecycle and no-op decisions are atomic with the write.
+UPDATE coaching_sessions
+SET meeting_url = $2,
+    calendar_sequence = calendar_sequence + 1,
+    updated_at = now()
+WHERE id = $1
+  AND status IN ('pending', 'scheduled')
+  AND meeting_url <> $2
+RETURNING *;
