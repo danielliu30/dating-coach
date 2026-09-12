@@ -58,6 +58,7 @@ type Coach struct {
 	AcceptingClients bool      `json:"accepting_clients"`
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
+	Phases           []string  `json:"phases"`
 }
 
 type CoachAvailability struct {

@@ -10,12 +10,15 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/danielliu30/dating-coach/backend/internal/auth"
 	"github.com/danielliu30/dating-coach/backend/internal/payments"
 	"github.com/danielliu30/dating-coach/backend/internal/store/db"
 )
@@ -116,11 +119,14 @@ func (s *Service) PaymentsEnabled() bool {
 
 // Coach is the public directory view of a coach profile.
 type Coach struct {
-	ID               string   `json:"id"`
-	DisplayName      string   `json:"display_name"`
-	Headline         string   `json:"headline"`
-	Bio              string   `json:"bio"`
-	Specialties      []string `json:"specialties"`
+	ID          string   `json:"id"`
+	DisplayName string   `json:"display_name"`
+	Headline    string   `json:"headline"`
+	Bio         string   `json:"bio"`
+	Specialties []string `json:"specialties"`
+	// Phases are the dating-cycle stages the coach specialises in, drawn from
+	// auth.DatingPhases.
+	Phases           []string `json:"phases"`
 	HourlyRateCents  int32    `json:"hourly_rate_cents"`
 	Timezone         string   `json:"timezone"`
 	YearsExperience  int32    `json:"years_experience"`
@@ -191,12 +197,22 @@ func rfc3339(t *time.Time) string {
 	return t.UTC().Format(time.RFC3339)
 }
 
-// ListCoaches returns a page of the coach directory.
-func (s *Service) ListCoaches(ctx context.Context, limit, offset int32, acceptingOnly bool) ([]Coach, error) {
+// ListCoaches returns a page of the coach directory. A non-nil phase keeps
+// only coaches who list that dating phase; it is trimmed and lowercased like
+// stored phases and must then be one of auth.DatingPhases, else ErrInvalidInput.
+func (s *Service) ListCoaches(ctx context.Context, limit, offset int32, acceptingOnly bool, phase *string) ([]Coach, error) {
+	if phase != nil {
+		p := strings.ToLower(strings.TrimSpace(*phase))
+		if !slices.Contains(auth.DatingPhases, p) {
+			return nil, fmt.Errorf("%w: unknown phase %q", ErrInvalidInput, *phase)
+		}
+		phase = &p
+	}
 	rows, err := s.queries.ListCoaches(ctx, db.ListCoachesParams{
 		Limit:         limit,
 		Offset:        offset,
 		AcceptingOnly: &acceptingOnly,
+		Phase:         phase,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list coaches: %w", err)
@@ -209,6 +225,7 @@ func (s *Service) ListCoaches(ctx context.Context, limit, offset int32, acceptin
 			Headline:         row.Headline,
 			Bio:              row.Bio,
 			Specialties:      row.Specialties,
+			Phases:           row.Phases,
 			HourlyRateCents:  row.HourlyRateCents,
 			Timezone:         row.Timezone,
 			YearsExperience:  row.YearsExperience,
@@ -233,6 +250,7 @@ func (s *Service) GetCoach(ctx context.Context, coachID uuid.UUID) (Coach, error
 		Headline:         row.Headline,
 		Bio:              row.Bio,
 		Specialties:      row.Specialties,
+		Phases:           row.Phases,
 		HourlyRateCents:  row.HourlyRateCents,
 		Timezone:         row.Timezone,
 		YearsExperience:  row.YearsExperience,
@@ -245,14 +263,40 @@ type UpsertProfileInput struct {
 	Headline         string   `json:"headline"`
 	Bio              string   `json:"bio"`
 	Specialties      []string `json:"specialties"`
+	Phases           []string `json:"phases"`
 	HourlyRateCents  int32    `json:"hourly_rate_cents"`
 	Timezone         string   `json:"timezone"`
 	YearsExperience  int32    `json:"years_experience"`
 	AcceptingClients bool     `json:"accepting_clients"`
 }
 
+// normalisePhases validates phases against auth.DatingPhases and returns them
+// deduplicated in vocabulary order; blanks are dropped and a nil list yields an
+// empty (never nil) slice. An unknown value yields ErrInvalidInput.
+func normalisePhases(phases []string) ([]string, error) {
+	chosen := make(map[string]bool, len(phases))
+	for _, p := range phases {
+		p = strings.ToLower(strings.TrimSpace(p))
+		if p == "" {
+			continue
+		}
+		if !slices.Contains(auth.DatingPhases, p) {
+			return nil, fmt.Errorf("%w: phases contains unknown value %q", ErrInvalidInput, p)
+		}
+		chosen[p] = true
+	}
+	out := make([]string, 0, len(chosen))
+	for _, p := range auth.DatingPhases {
+		if chosen[p] {
+			out = append(out, p)
+		}
+	}
+	return out, nil
+}
+
 // UpsertProfile creates or replaces the caller's coach profile. The timezone is
-// validated here because every slot calculation is done in it.
+// validated here because every slot calculation is done in it, and phases
+// against auth.DatingPhases so the directory filter has a fixed vocabulary.
 func (s *Service) UpsertProfile(ctx context.Context, coachID uuid.UUID, in UpsertProfileInput) (Coach, error) {
 	if in.Timezone == "" {
 		in.Timezone = "UTC"
@@ -266,11 +310,16 @@ func (s *Service) UpsertProfile(ctx context.Context, coachID uuid.UUID, in Upser
 	if in.Specialties == nil {
 		in.Specialties = []string{}
 	}
+	phases, err := normalisePhases(in.Phases)
+	if err != nil {
+		return Coach{}, err
+	}
 	row, err := s.queries.UpsertCoachProfile(ctx, db.UpsertCoachProfileParams{
 		UserID:           coachID,
 		Headline:         in.Headline,
 		Bio:              in.Bio,
 		Specialties:      in.Specialties,
+		Phases:           phases,
 		HourlyRateCents:  in.HourlyRateCents,
 		Timezone:         in.Timezone,
 		YearsExperience:  in.YearsExperience,
