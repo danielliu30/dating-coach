@@ -285,3 +285,9 @@ UPDATE coaching_sessions
 SET coach_notes = $2, updated_at = now()
 WHERE id = $1
 RETURNING *;
+
+-- name: UpdateSessionMeetingURL :one
+UPDATE coaching_sessions
+SET meeting_url = $2, updated_at = now()
+WHERE id = $1
+RETURNING *;

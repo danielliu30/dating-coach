@@ -49,6 +49,7 @@ func (h *Handler) CoachRoutes() http.Handler {
 	r.Post("/sessions/{sessionID}/respond", h.respondAsCoach)
 	r.Post("/sessions/{sessionID}/status", h.setSessionStatus)
 	r.Post("/sessions/{sessionID}/notes", h.setSessionNotes)
+	r.Post("/sessions/{sessionID}/meeting-url", h.setSessionMeetingURL)
 	return r
 }
 
@@ -408,6 +409,33 @@ func (h *Handler) setSessionNotes(w http.ResponseWriter, r *http.Request) {
 	session, err := h.svc.SetNotes(r.Context(), sessionID, principal.UserID, in.CoachNotes)
 	if err != nil {
 		respondErr(w, err, "could not update notes")
+		return
+	}
+	httpx.JSON(w, http.StatusOK, session)
+}
+
+// setSessionMeetingURL handles POST /coach/sessions/{sessionID}/meeting-url
+// with body {meeting_url}; an empty value clears the link.
+func (h *Handler) setSessionMeetingURL(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFrom(r.Context())
+	if !ok {
+		httpx.Error(w, http.StatusUnauthorized, "unauthenticated")
+		return
+	}
+	sessionID, ok := pathUUID(w, r, "sessionID")
+	if !ok {
+		return
+	}
+	var in struct {
+		MeetingURL string `json:"meeting_url"`
+	}
+	if err := httpx.Decode(r, &in); err != nil {
+		httpx.Error(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	session, err := h.svc.SetMeetingURL(r.Context(), sessionID, principal.UserID, in.MeetingURL)
+	if err != nil {
+		respondErr(w, err, "could not update meeting url")
 		return
 	}
 	httpx.JSON(w, http.StatusOK, session)

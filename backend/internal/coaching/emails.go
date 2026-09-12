@@ -85,8 +85,12 @@ func (m mailer) clientRequested(ctx context.Context, q *db.Queries, s db.GetSess
 
 // clientConfirmed tells the client the coach accepted, with a confirmed invite.
 func (m mailer) clientConfirmed(ctx context.Context, q *db.Queries, s db.GetSessionPartiesRow) error {
-	body := fmt.Sprintf("Hi %s,\n\n%s has confirmed your session.\n\nWhen: %s\nTopic: %s\n\nA calendar invite is attached.",
+	body := fmt.Sprintf("Hi %s,\n\n%s has confirmed your session.\n\nWhen: %s\nTopic: %s\n",
 		s.UserName, s.CoachName, when(s, false), orNone(s.Topic))
+	if s.MeetingUrl != "" {
+		body += "Join: " + s.MeetingUrl + "\n"
+	}
+	body += "\nA calendar invite is attached."
 	return m.enqueue(ctx, q, s.UserEmail, fmt.Sprintf("%s confirmed your session", s.CoachName), body, invite(s, m.mailFrom))
 }
 

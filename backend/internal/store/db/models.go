@@ -89,6 +89,7 @@ type CoachingSession struct {
 	Currency          string     `json:"currency"`
 	PaymentRef        *string    `json:"payment_ref"`
 	HoldExpiresAt     *time.Time `json:"hold_expires_at"`
+	MeetingUrl        string     `json:"meeting_url"`
 }
 
 type Conversation struct {

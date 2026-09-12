@@ -556,3 +556,42 @@ func TestCancellationUpdatesBothCalendars(t *testing.T) {
 		t.Fatalf("coach's own cancel update should cancel their event:\n%s", ics)
 	}
 }
+
+func TestInviteCarriesMeetingURL(t *testing.T) {
+	row := db.GetSessionPartiesRow{
+		ID:              uuid.New(),
+		Status:          StatusScheduled,
+		ScheduledTime:   time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC),
+		DurationMinutes: 45,
+		UserName:        "Ana",
+		CoachName:       "Coach",
+		MeetingUrl:      "https://meet.example.test/abc,1",
+	}
+	ics := invite(row, "no-reply@example.test")
+	if !strings.Contains(ics, `LOCATION:https://meet.example.test/abc\,1`+"\r\n") {
+		t.Errorf("invite lacks escaped LOCATION: %q", ics)
+	}
+	if !strings.Contains(ics, `Join: https://meet.example.test/abc\,1`) {
+		t.Errorf("invite DESCRIPTION lacks join link: %q", ics)
+	}
+	row.MeetingUrl = ""
+	if strings.Contains(invite(row, "no-reply@example.test"), "LOCATION:") {
+		t.Error("invite has LOCATION without a meeting url")
+	}
+}
+
+func TestNormaliseMeetingURL(t *testing.T) {
+	for _, ok := range []string{"", "  ", "https://zoom.us/j/1", "http://meet.example.test/x?y=1"} {
+		if _, err := normaliseMeetingURL(ok); err != nil {
+			t.Errorf("%q: unexpected error %v", ok, err)
+		}
+	}
+	if got, _ := normaliseMeetingURL("  "); got != "" {
+		t.Errorf("blank should clear, got %q", got)
+	}
+	for _, bad := range []string{"zoom.us/j/1", "ftp://x.test", "javascript:alert(1)", "https://", "not a url"} {
+		if _, err := normaliseMeetingURL(bad); !errors.Is(err, ErrInvalidInput) {
+			t.Errorf("%q: expected ErrInvalidInput, got %v", bad, err)
+		}
+	}
+}
