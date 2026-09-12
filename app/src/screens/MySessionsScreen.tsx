@@ -54,6 +54,7 @@ export default function MySessionsScreen(): React.ReactElement {
   const [slots, setSlots] = useState<Slot[] | null>(null);
   const [slotError, setSlotError] = useState<string | null>(null);
   const [linkError, setLinkError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const sessions = data ?? [];
   const now = Date.now();
@@ -91,20 +92,28 @@ export default function MySessionsScreen(): React.ReactElement {
 
   const cancel = async (sessionID: string) => {
     setBusyID(sessionID);
+    setActionError(null);
     try {
       await api.cancelSession(sessionID);
       await reload();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'could not cancel the session');
     } finally {
       setBusyID(null);
     }
   };
 
   const chat = async (session: CoachingSession) => {
-    const thread = await api.startThread(session.coach_id, session.id);
-    navigation.navigate('Chats', {
-      screen: 'Chat',
-      params: { threadID: thread.id, title: session.counterpart_name ?? 'Coach' },
-    });
+    setActionError(null);
+    try {
+      const thread = await api.startThread(session.coach_id, session.id);
+      navigation.navigate('Chats', {
+        screen: 'Chat',
+        params: { threadID: thread.id, title: session.counterpart_name ?? 'Coach' },
+      });
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'could not open the chat');
+    }
   };
 
   return (
@@ -130,6 +139,7 @@ export default function MySessionsScreen(): React.ReactElement {
             ) : null}
             {error ? <Text style={shared.error}>{error}</Text> : null}
             {linkError ? <Text style={shared.error}>{linkError}</Text> : null}
+            {actionError ? <Text style={shared.error}>{actionError}</Text> : null}
             {loading && !data ? (
               <>
                 <SkeletonCard />
