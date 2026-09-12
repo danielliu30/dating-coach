@@ -2,7 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, type NavigationProp } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import React, { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { api } from '../api/client';
 import type { Slot } from '../api/types';
@@ -62,15 +62,25 @@ export default function CoachDetailScreen({
     setError(null);
     setStatus(null);
     try {
-      await api.bookSession({
+      const session = await api.bookSession({
         coach_id: coachID,
         scheduled_time: selected,
         duration_minutes: duration,
         topic: topic.trim(),
       });
-      setStatus('Session booked — see it under Sessions.');
       setSelected(null);
       await slots.reload();
+      if (session.checkout_url) {
+        setStatus('Session held — redirecting to payment…');
+        try {
+          await Linking.openURL(session.checkout_url);
+        } catch {
+          setStatus(null);
+          setError('Could not open the payment page. Find the session under Sessions to complete payment.');
+        }
+      } else {
+        setStatus('Session booked — see it under Sessions.');
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'could not book');
     } finally {
