@@ -1,6 +1,7 @@
 package coaching
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -42,5 +43,24 @@ func TestOverlapsBookedHonoursExclusion(t *testing.T) {
 	after := start.Add(45 * time.Minute)
 	if overlapsBooked(after, 45, rows, nil) {
 		t.Fatal("a slot starting when the session ends does not overlap")
+	}
+}
+
+func TestNormalisePhases(t *testing.T) {
+	got, err := normalisePhases([]string{" First_Date ", "opening", "first_date", ""})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 2 || got[0] != "opening" || got[1] != "first_date" {
+		t.Fatalf("expected deduplicated vocabulary order [opening first_date], got %v", got)
+	}
+
+	got, err = normalisePhases(nil)
+	if err != nil || got == nil || len(got) != 0 {
+		t.Fatalf("expected empty non-nil slice for nil input, got %v, %v", got, err)
+	}
+
+	if _, err := normalisePhases([]string{"opening", "ghosting"}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("expected ErrInvalidInput for unknown phase, got %v", err)
 	}
 }

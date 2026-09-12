@@ -1,0 +1,2 @@
+ALTER TABLE coaches
+    DROP COLUMN IF EXISTS phases;
