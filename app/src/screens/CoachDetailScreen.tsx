@@ -270,6 +270,7 @@ export default function CoachDetailScreen({
                   label={option.label}
                   selected={rating === option.rating}
                   tone={colors.primary}
+                  role="radio"
                   onPress={() => setRating(option.rating)}
                 />
               ))}
