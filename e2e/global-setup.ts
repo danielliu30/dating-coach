@@ -1,4 +1,4 @@
-import { compose, dbOne, waitForApi, waitForMl } from './helpers/stack';
+import { compose, db, dbOne, waitForApi, waitForMl } from './helpers/stack';
 
 /** Compose services the suite depends on; every one must be running before tests start. */
 const REQUIRED = ['postgres', 'redis', 'rabbitmq', 'api', 'worker', 'ml-analyzer', 'web', 'nginx'];
@@ -34,4 +34,11 @@ export default async function globalSetup(): Promise<void> {
     throw new Error(`schema_migrations is at version ${version} (dirty=${dirty}); expected a clean schema >= 7`);
   }
   console.log(`schema_migrations version=${version}`);
+
+  // Accounts from earlier runs (makeAccount() uses this domain) would otherwise
+  // accumulate and push fresh coaches past the directory's default page of 25.
+  const purged = await db(
+    "with gone as (delete from users where email like 'e2e-%@example.com' returning 1) select count(*) from gone",
+  );
+  console.log(`purged ${purged.trim()} stale e2e account(s)`);
 }

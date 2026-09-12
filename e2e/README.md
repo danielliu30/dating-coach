@@ -16,11 +16,11 @@ docker compose --env-file e2e/.env --profile gateway up -d --build
 cd e2e
 npm ci
 npx playwright install chromium
-npx playwright test               # whole suite, ~10 min
-npx playwright test tests/booking.spec.ts
+npx playwright test               # whole suite
+npx playwright test tests/happy-path.spec.ts
 npx playwright show-report        # after a failure: traces, video, screenshots
 
-npm run stack:down                # docker compose … down -v
+npm run stack:down                # docker compose … down -v (stack:up also exists)
 ```
 
 `e2e/.env` is derived from `.env.example` with `ML_BACKEND=heuristic`, a fast bcrypt
@@ -42,14 +42,10 @@ through nginx, checks every gateway-profile service is running and that
 | `helpers/api.ts` | thin `fetch` wrapper for the few steps the spec allows to skip the UI (coach confirm, slot listing) |
 | `helpers/ui.ts` | locators for icon-prefixed buttons/tabs, slot chips, sign-out assertions |
 | `tests/happy-path.spec.ts` | signup → coach profile/availability → booking → confirm → live chat → analysis |
-| `tests/booking.spec.ts` | 409 race, out-of-availability rejection, reschedule via `exclude_session_id`, `respond_by` expiry sweep |
-| `tests/resilience.spec.ts` | chat send while API is stopped replays exactly once; analysis "Try again" after worker+API outage |
-| `tests/session.spec.ts` | corrupt/expired `dating-coach.session`, refresh rotation, `JWT_TTL=30s` expiry notices, explicit Sign out |
-| `tests/deletion.spec.ts` | type-to-confirm deletion (202, worker removes rows, control account untouched) incl. rabbitmq-down relay |
 
 Each role gets its own Playwright `BrowserContext` so JWTs in `localStorage` never clash.
-Tests run with one worker; specs that stop/restart services restore them in `afterEach`,
-and `session.spec.ts` recreates the `api` container with short TTLs then puts it back.
+Tests run with one worker so specs may stop/restart services; any spec that does so must
+restore them in `afterEach`/`afterAll`.
 
 ## CI
 

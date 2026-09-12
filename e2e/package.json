@@ -4,8 +4,8 @@
   "private": true,
   "description": "Browser-driven end-to-end suite against the real docker compose stack.",
   "scripts": {
-    "stack:up": "docker compose --env-file e2e/.env --profile gateway up -d --build",
-    "stack:down": "docker compose --env-file e2e/.env --profile gateway down -v",
+    "stack:up": "docker compose -f ../docker-compose.yml --env-file .env --profile gateway up -d --build",
+    "stack:down": "docker compose -f ../docker-compose.yml --env-file .env --profile gateway down -v",
     "test": "playwright test",
     "test:headed": "playwright test --headed",
     "report": "playwright show-report",
