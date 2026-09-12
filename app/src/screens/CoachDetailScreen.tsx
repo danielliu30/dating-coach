@@ -223,6 +223,8 @@ export default function CoachDetailScreen({
         />
         {reviews.loading ? (
           <Skeleton height={48} />
+        ) : reviews.error ? (
+          <Text style={shared.error}>{reviews.error}</Text>
         ) : reviews.data && reviews.data.length > 0 ? (
           reviews.data.map((review) => (
             <View key={review.id} style={styles.review}>
@@ -237,6 +239,12 @@ export default function CoachDetailScreen({
         ) : (
           <Text style={type.caption}>No reviews yet.</Text>
         )}
+        {completed.error ? (
+          <View style={shared.row}>
+            <Text style={shared.error}>Could not check your sessions: {completed.error}</Text>
+            <Button label="Retry" variant="secondary" onPress={() => void completed.reload()} />
+          </View>
+        ) : null}
         {completed.data ? (
           <>
             <Divider />
