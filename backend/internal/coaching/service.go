@@ -1157,8 +1157,8 @@ func (s *Service) SetMeetingURL(ctx context.Context, sessionID, coachID uuid.UUI
 	if session.CoachID != coachID {
 		return Session{}, ErrForbidden
 	}
-	if session.Status != StatusPending && session.Status != StatusScheduled {
-		return Session{}, fmt.Errorf("%w: a %s session cannot take a meeting link", ErrInvalidInput, session.Status)
+	if err := meetingLinkAllowed(session); err != nil {
+		return Session{}, err
 	}
 	if session.MeetingUrl == meetingURL {
 		return sessionOf(session, ""), nil
@@ -1173,7 +1173,23 @@ func (s *Service) SetMeetingURL(ctx context.Context, sessionID, coachID uuid.UUI
 
 	updated, err := q.UpdateSessionMeetingURL(ctx, db.UpdateSessionMeetingURLParams{ID: sessionID, MeetingUrl: meetingURL})
 	if err != nil {
-		return Session{}, fmt.Errorf("update meeting url: %w", err)
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return Session{}, fmt.Errorf("update meeting url: %w", err)
+		}
+		// The conditional UPDATE matched nothing: a concurrent change moved the
+		// session to a terminal status or already stored this value. Re-read
+		// and report whichever it was.
+		current, err := q.GetCoachingSession(ctx, sessionID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return Session{}, ErrNotFound
+			}
+			return Session{}, fmt.Errorf("reload session: %w", err)
+		}
+		if err := meetingLinkAllowed(current); err != nil {
+			return Session{}, err
+		}
+		return sessionOf(current, ""), nil
 	}
 	if updated.Status == StatusScheduled {
 		parties, err := q.GetSessionParties(ctx, sessionID)
@@ -1191,6 +1207,15 @@ func (s *Service) SetMeetingURL(ctx context.Context, sessionID, coachID uuid.UUI
 		return Session{}, fmt.Errorf("commit meeting url: %w", err)
 	}
 	return sessionOf(updated, ""), nil
+}
+
+// meetingLinkAllowed reports ErrInvalidInput when the session's status no
+// longer admits a meeting link (only pending and scheduled sessions do).
+func meetingLinkAllowed(session db.CoachingSession) error {
+	if session.Status != StatusPending && session.Status != StatusScheduled {
+		return fmt.Errorf("%w: a %s session cannot take a meeting link", ErrInvalidInput, session.Status)
+	}
+	return nil
 }
 
 // normaliseMeetingURL trims raw and returns it unchanged when empty or when it

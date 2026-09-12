@@ -1501,6 +1501,8 @@ SET meeting_url = $2,
     calendar_sequence = calendar_sequence + 1,
     updated_at = now()
 WHERE id = $1
+  AND status IN ('pending', 'scheduled')
+  AND meeting_url <> $2
 RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, confirmation_token, respond_by, confirmed_at, calendar_sequence, payment_status, amount_cents, currency, payment_ref, hold_expires_at, meeting_url
 `
 
@@ -1509,6 +1511,8 @@ type UpdateSessionMeetingURLParams struct {
 	MeetingUrl string    `json:"meeting_url"`
 }
 
+// Matches no row when the session is not pending/scheduled or already holds
+// the value, so the lifecycle and no-op decisions are atomic with the write.
 func (q *Queries) UpdateSessionMeetingURL(ctx context.Context, arg UpdateSessionMeetingURLParams) (CoachingSession, error) {
 	row := q.db.QueryRow(ctx, updateSessionMeetingURL, arg.ID, arg.MeetingUrl)
 	var i CoachingSession
