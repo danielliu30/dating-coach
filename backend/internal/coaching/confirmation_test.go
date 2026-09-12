@@ -666,6 +666,9 @@ func TestReviewsRequireCompletedSession(t *testing.T) {
 	if _, err := svc.CreateReview(ctx, coach, client, CreateReviewInput{Rating: 5}); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("review with no session: err = %v, want ErrForbidden", err)
 	}
+	if _, err := svc.CreateReview(ctx, coach, coach, CreateReviewInput{Rating: 5}); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("coach reviewing themselves: err = %v, want ErrForbidden", err)
+	}
 	s, err := svc.BookSession(ctx, client, BookInput{CoachID: coach.String(), ScheduledTime: nextSlot()})
 	if err != nil {
 		t.Fatalf("book: %v", err)

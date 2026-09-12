@@ -1119,9 +1119,6 @@ func (s *Service) SetMeetingURL(ctx context.Context, sessionID, coachID uuid.UUI
 	if err := meetingLinkAllowed(session); err != nil {
 		return Session{}, err
 	}
-	if session.MeetingUrl == meetingURL {
-		return sessionOf(session, ""), nil
-	}
 
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -1202,7 +1199,11 @@ const maxReviewComment = 2000
 // and completed — otherwise ErrForbidden. Rating must be 1-5 and the comment at
 // most maxReviewComment characters, otherwise ErrInvalidInput. A second review
 // for the same coach overwrites the first (one review per client per coach).
+// A coach may not review themselves (ErrForbidden), even via a self-booking.
 func (s *Service) CreateReview(ctx context.Context, coachID, userID uuid.UUID, in CreateReviewInput) (Review, error) {
+	if coachID == userID {
+		return Review{}, ErrForbidden
+	}
 	if in.Rating < 1 || in.Rating > 5 {
 		return Review{}, fmt.Errorf("%w: rating must be between 1 and 5", ErrInvalidInput)
 	}
