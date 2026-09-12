@@ -67,6 +67,7 @@ export interface Coach {
   headline: string;
   bio: string;
   specialties: string[];
+  phases: DatingPhase[];
   hourly_rate_cents: number;
   timezone: string;
   years_experience: number;

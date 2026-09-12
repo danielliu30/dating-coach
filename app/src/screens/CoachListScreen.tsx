@@ -6,6 +6,7 @@ import { api } from '../api/client';
 import { Avatar, EmptyState, ListCard, MetaRow, PageHeader, SkeletonCard, StatRow, StatTile } from '../components/kit';
 import { Badge, Screen } from '../components/ui';
 import { useAsync } from '../hooks/useAsync';
+import { PHASE_LABELS } from '../lib/phases';
 import type { CoachesStackParams } from '../navigation/types';
 import { colors, fonts, shared, type } from '../theme';
 
@@ -71,10 +72,13 @@ export default function CoachListScreen({
               </View>
             }
           >
-            {item.specialties.length > 0 ? (
+            {item.specialties.length > 0 || item.phases.length > 0 ? (
               <View style={[shared.row, { flexWrap: 'wrap', gap: 6 }]}>
+                {item.phases.map((phase) => (
+                  <Badge key={`phase-${phase}`} text={PHASE_LABELS[phase]} tone={colors.primary} />
+                ))}
                 {item.specialties.map((specialty) => (
-                  <Badge key={specialty} text={specialty} tone={colors.primaryDeep} />
+                  <Badge key={`specialty-${specialty}`} text={specialty} tone={colors.primaryDeep} />
                 ))}
               </View>
             ) : null}

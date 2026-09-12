@@ -9,6 +9,7 @@ import type { Slot } from '../api/types';
 import { Avatar, Divider, GradientCard, IconDisc, MetaRow, SectionHeader, Skeleton, SkeletonCard } from '../components/kit';
 import { Badge, Button, Field, Loading, Screen } from '../components/ui';
 import { useAsync } from '../hooks/useAsync';
+import { PHASE_LABELS } from '../lib/phases';
 import type { CoachesStackParams, RootTabParams } from '../navigation/types';
 import { colors, fonts, radii, shared, type } from '../theme';
 
@@ -146,12 +147,15 @@ export default function CoachDetailScreen({
         ) : (
           <Text style={type.caption}>This coach has not written a bio yet.</Text>
         )}
-        {c.specialties.length > 0 ? (
+        {c.specialties.length > 0 || c.phases.length > 0 ? (
           <>
             <Text style={styles.label}>Specialties</Text>
             <View style={[shared.row, { flexWrap: 'wrap', gap: 6 }]}>
+              {c.phases.map((phase) => (
+                <Badge key={`phase-${phase}`} text={PHASE_LABELS[phase]} tone={colors.primary} />
+              ))}
               {c.specialties.map((specialty) => (
-                <Badge key={specialty} text={specialty} tone={colors.primaryDeep} />
+                <Badge key={`specialty-${specialty}`} text={specialty} tone={colors.primaryDeep} />
               ))}
             </View>
           </>
