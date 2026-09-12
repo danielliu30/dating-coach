@@ -144,7 +144,12 @@ describe('deep links', () => {
     await screen.findByText(/^Account:/);
   });
 
-  it('dashboard and profile open the coach tabs', async () => {
+  it('dashboard opens the coach Dashboard tab', async () => {
+    await open('datingcoach://dashboard', coach);
+    await screen.findByText(/^Dashboard:/);
+  });
+
+  it('profile opens the coach Profile tab', async () => {
     await open('datingcoach://profile', coach);
     await screen.findByText(/^CoachProfile:/);
   });
