@@ -72,8 +72,11 @@ export default function CoachListScreen({
               </View>
             }
           >
-            {item.specialties.length > 0 || item.phases.length > 0 ? (
+            {item.specialties.length > 0 || item.phases.length > 0 || item.review_count > 0 ? (
               <View style={[shared.row, { flexWrap: 'wrap', gap: 6 }]}>
+                {item.review_count > 0 ? (
+                  <Badge text={`★ ${item.avg_rating.toFixed(1)} (${item.review_count})`} tone={colors.primary} />
+                ) : null}
                 {item.phases.map((phase) => (
                   <Badge key={`phase-${phase}`} text={PHASE_LABELS[phase]} tone={colors.primary} />
                 ))}

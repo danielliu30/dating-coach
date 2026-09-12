@@ -5,9 +5,9 @@ import React, { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { api } from '../api/client';
-import type { Slot } from '../api/types';
+import type { Coach, Slot } from '../api/types';
 import { Avatar, Divider, GradientCard, IconDisc, MetaRow, SectionHeader, Skeleton, SkeletonCard } from '../components/kit';
-import { Badge, Button, Field, Loading, Screen } from '../components/ui';
+import { Badge, Button, Chip, Field, Loading, Screen } from '../components/ui';
 import { useAsync } from '../hooks/useAsync';
 import { PHASE_LABELS } from '../lib/phases';
 import type { CoachesStackParams, RootTabParams } from '../navigation/types';
@@ -37,6 +37,14 @@ const slotParts = (slot: Slot): { day: string; time: string } => {
   };
 };
 
+/** "4.5 · 12 reviews" (or "No reviews yet") for the rating badge. */
+const ratingLabel = (c: Pick<Coach, 'avg_rating' | 'review_count'>): string =>
+  c.review_count > 0
+    ? `★ ${c.avg_rating.toFixed(1)} · ${c.review_count} review${c.review_count === 1 ? '' : 's'}`
+    : 'No reviews yet';
+
+const STARS = [1, 2, 3, 4, 5];
+
 export default function CoachDetailScreen({
   route,
 }: NativeStackScreenProps<CoachesStackParams, 'CoachDetail'>): React.ReactElement {
@@ -53,6 +61,40 @@ export default function CoachDetailScreen({
   const coach = useAsync(() => api.getCoach(coachID), [coachID]);
   const availability = useAsync(() => api.coachAvailability(coachID), [coachID]);
   const slots = useAsync(() => api.openSlots(coachID, duration), [coachID, duration]);
+  const reviews = useAsync(() => api.listCoachReviews(coachID), [coachID]);
+  // The form is only offered once the signed-in client has a completed session
+  // with this coach; the server enforces the same rule.
+  const completed = useAsync(
+    async () => (await api.mySessions('completed')).some((s) => s.coach_id === coachID),
+    [coachID],
+  );
+
+  const [rating, setRating] = useState(0);
+  const [comment, setComment] = useState('');
+  const [reviewBusy, setReviewBusy] = useState(false);
+  const [reviewError, setReviewError] = useState<string | null>(null);
+  const [reviewStatus, setReviewStatus] = useState<string | null>(null);
+
+  const submitReview = async () => {
+    if (rating < 1) {
+      setReviewError('Pick a star rating first.');
+      return;
+    }
+    setReviewBusy(true);
+    setReviewError(null);
+    setReviewStatus(null);
+    try {
+      await api.submitCoachReview(coachID, { rating, comment: comment.trim() });
+      setReviewStatus('Thanks — your review is posted.');
+      setComment('');
+      setRating(0);
+      await Promise.all([reviews.reload(), coach.reload()]);
+    } catch (err) {
+      setReviewError(err instanceof Error ? err.message : 'could not post review');
+    } finally {
+      setReviewBusy(false);
+    }
+  };
 
   const book = async () => {
     if (!selected) {
@@ -160,6 +202,9 @@ export default function CoachDetailScreen({
             </View>
           </>
         ) : null}
+        <View style={[shared.row, { flexWrap: 'wrap', gap: 6 }]}>
+          <Badge text={ratingLabel(c)} tone={colors.primary} />
+        </View>
         <Divider />
         <View style={styles.chatRow}>
           <IconDisc icon="chatbubbles-outline" hue="sky" size={44} />
@@ -169,6 +214,61 @@ export default function CoachDetailScreen({
           </View>
         </View>
         <Button label="Start a live chat" icon="chatbubble-outline" variant="secondary" onPress={startChat} />
+      </View>
+
+      <View style={shared.card}>
+        <SectionHeader
+          title="Reviews"
+          caption={c.review_count > 0 ? `${c.avg_rating.toFixed(1)} average from ${c.review_count}` : 'From clients who completed a session'}
+        />
+        {reviews.loading ? (
+          <Skeleton height={48} />
+        ) : reviews.data && reviews.data.length > 0 ? (
+          reviews.data.map((review) => (
+            <View key={review.id} style={styles.review}>
+              <View style={shared.row}>
+                <Text style={type.subheading}>{review.reviewer_name}</Text>
+                <Badge text={`★ ${review.rating}`} tone={colors.primary} />
+              </View>
+              {review.comment ? <Text style={type.body}>{review.comment}</Text> : null}
+              <Text style={type.caption}>{new Date(review.created_at).toLocaleDateString()}</Text>
+            </View>
+          ))
+        ) : (
+          <Text style={type.caption}>No reviews yet.</Text>
+        )}
+        {completed.data ? (
+          <>
+            <Divider />
+            <Text style={styles.label}>Rate your sessions</Text>
+            <View style={[shared.row, { flexWrap: 'wrap', gap: 6 }]}>
+              {STARS.map((star) => (
+                <Chip
+                  key={star}
+                  label={`${star} ★`}
+                  selected={star <= rating}
+                  tone={colors.primary}
+                  onPress={() => setRating(star)}
+                />
+              ))}
+            </View>
+            <Field
+              label="Comment (optional)"
+              value={comment}
+              onChangeText={setComment}
+              placeholder="What helped most?"
+              multiline
+            />
+            {reviewStatus ? (
+              <View style={shared.row}>
+                <Ionicons name="checkmark-circle" size={16} color={colors.engaging} />
+                <Text style={[type.caption, { color: colors.engaging }]}>{reviewStatus}</Text>
+              </View>
+            ) : null}
+            {reviewError ? <Text style={shared.error}>{reviewError}</Text> : null}
+            <Button label="Post review" icon="star-outline" variant="secondary" loading={reviewBusy} onPress={submitReview} />
+          </>
+        ) : null}
       </View>
 
       <View style={shared.card}>
@@ -288,6 +388,12 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   chatRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  review: {
+    gap: 4,
+    padding: 12,
+    borderRadius: radii.md,
+    backgroundColor: colors.sageTint,
+  },
   window: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   windowDay: {
     width: 44,

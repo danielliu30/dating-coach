@@ -72,6 +72,22 @@ export interface Coach {
   timezone: string;
   years_experience: number;
   accepting_clients: boolean;
+  /** Mean client rating 1-5; 0 when review_count is 0. */
+  avg_rating: number;
+  review_count: number;
+}
+
+/** A client's rating of a coach; only clients with a completed session may leave one. */
+export interface CoachReview {
+  id: string;
+  coach_id: string;
+  user_id: string;
+  reviewer_name: string;
+  session_id?: string;
+  rating: number;
+  comment: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface AvailabilityWindow {
