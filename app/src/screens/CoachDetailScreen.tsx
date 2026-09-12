@@ -219,7 +219,7 @@ export default function CoachDetailScreen({
           <Skeleton height={40} />
         ) : summary.error ? (
           <View style={shared.row}>
-            <Text style={shared.error}>Could not load what clients praise.</Text>
+            <Text style={[shared.error, { flex: 1 }]}>Could not load what clients praise.</Text>
             <Button label="Retry" variant="secondary" onPress={() => void summary.reload()} />
           </View>
         ) : summary.data && summary.data.total > 0 ? (
