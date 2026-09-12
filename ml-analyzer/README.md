@@ -7,6 +7,7 @@ contract below.
 ```
 POST /analyze          → message track: critique of the customer's own messages
 POST /analyze/images   → image track: clarity + focal-point verdict per profile photo
+POST /summarize/reviews → coach reviews → recommendation line + named strengths (no stars)
 GET  /healthz          → status, active backend, model version
 ```
 
@@ -107,6 +108,18 @@ Response:
 | `model_version` | string | `image-llm-<provider>-<model>` or `image-heuristic-v1`. |
 | `images[]` | array | One per request image, by `index`: `clarity_score` (0–1), `is_clear`, `subject_focus_score` (0–1), `is_customer_focal_point`, `feedback`. |
 | `overall` | object | `summary`, `strengths[]`, `improvements[]`. |
+
+### `POST /summarize/reviews` (coach reviews)
+
+Request: `{coach_name?, reviews: [{rating: 1-5, comment}]}`. The rating is never
+echoed back as a score; a review with `rating >= 4` counts as a recommendation.
+
+Response: `model_version` (`reviews-llm-<provider>-<model>` or
+`reviews-heuristic-v1`), `recommended`, `total`, `summary` (starts with the
+recommendation line, e.g. "3 of 4 clients recommend Ava.") and `strengths[]`
+(2–5 short phrases naming what recommending clients praise). The heuristic
+matches comments against fixed strength themes; the LLM summarises free text
+and falls back to the heuristic on any failure.
 
 The response is synchronous and the service stores nothing.
 
