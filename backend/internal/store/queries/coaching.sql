@@ -1,10 +1,11 @@
 -- name: UpsertCoachProfile :one
-INSERT INTO coaches (user_id, headline, bio, specialties, hourly_rate_cents, timezone, years_experience, accepting_clients)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+INSERT INTO coaches (user_id, headline, bio, specialties, phases, hourly_rate_cents, timezone, years_experience, accepting_clients)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 ON CONFLICT (user_id) DO UPDATE
 SET headline = EXCLUDED.headline,
     bio = EXCLUDED.bio,
     specialties = EXCLUDED.specialties,
+    phases = EXCLUDED.phases,
     hourly_rate_cents = EXCLUDED.hourly_rate_cents,
     timezone = EXCLUDED.timezone,
     years_experience = EXCLUDED.years_experience,
@@ -17,6 +18,7 @@ SELECT c.*, u.display_name, u.email
 FROM coaches c
 JOIN users u ON u.id = c.user_id
 WHERE (sqlc.narg('accepting_only')::boolean IS NOT TRUE OR c.accepting_clients)
+  AND (sqlc.narg('phase')::text IS NULL OR sqlc.narg('phase')::text = ANY(c.phases))
 ORDER BY c.years_experience DESC, u.display_name
 LIMIT $1 OFFSET $2;
 

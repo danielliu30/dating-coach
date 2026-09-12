@@ -119,16 +119,16 @@ func (h *Handler) respondAsCoach(w http.ResponseWriter, r *http.Request) {
 }
 
 // listCoaches handles GET /coaches, hiding coaches that are not accepting
-// clients unless accepting_only=false.
+// clients unless accepting_only=false. An optional phase narrows the list to
+// coaches specialising in that dating phase.
 func (h *Handler) listCoaches(w http.ResponseWriter, r *http.Request) {
 	limit := httpx.QueryInt(r, "limit", 25, 100)
 	offset := httpx.QueryInt(r, "offset", 1, 10_000) - 1
 	acceptingOnly := r.URL.Query().Get("accepting_only") != "false"
 
-	coaches, err := h.svc.ListCoaches(r.Context(), limit, offset, acceptingOnly)
+	coaches, err := h.svc.ListCoaches(r.Context(), limit, offset, acceptingOnly, optionalQuery(r, "phase"))
 	if err != nil {
-		slog.Error("list coaches", "error", err)
-		httpx.Error(w, http.StatusInternalServerError, "could not list coaches")
+		respondErr(w, err, "could not list coaches")
 		return
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{"coaches": coaches})
