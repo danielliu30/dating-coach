@@ -260,7 +260,7 @@ export default function CoachDetailScreen({
         )}
         {completed.error ? (
           <View style={shared.row}>
-            <Text style={shared.error}>Could not check your sessions: {completed.error}</Text>
+            <Text style={[shared.error, { flex: 1 }]}>Could not check your sessions: {completed.error}</Text>
             <Button label="Retry" variant="secondary" onPress={() => void completed.reload()} />
           </View>
         ) : null}
