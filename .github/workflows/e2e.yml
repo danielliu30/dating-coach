@@ -1,0 +1,101 @@
+name: E2E (Playwright against the full stack)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "backend/**"
+      - "ml-analyzer/**"
+      - "nginx/**"
+      - "docker-compose.yml"
+      - "e2e/**"
+      - ".github/workflows/e2e.yml"
+  pull_request:
+    paths:
+      - "app/**"
+      - "backend/**"
+      - "ml-analyzer/**"
+      - "nginx/**"
+      - "docker-compose.yml"
+      - "e2e/**"
+      - ".github/workflows/e2e.yml"
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # The suite runs fully offline with the heuristic scorer; e2e/.env is the
+      # single source of truth so compose never picks up a stray root .env.
+      - name: Use the E2E environment
+        run: cp e2e/.env .env
+
+      - name: Bring up the gateway stack
+        run: docker compose --env-file e2e/.env --profile gateway up -d --build
+
+      - name: Wait for /healthz through nginx
+        run: |
+          for i in $(seq 1 90); do
+            if curl -fsS http://localhost:80/healthz >/dev/null 2>&1 \
+              && curl -fsS http://localhost:80/ml/healthz >/dev/null 2>&1; then
+              echo "stack ready after ${i} attempts"; exit 0
+            fi
+            sleep 2
+          done
+          echo "stack did not become healthy"; docker compose --env-file e2e/.env --profile gateway ps; exit 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+
+      - name: Install test dependencies
+        working-directory: e2e
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Typecheck
+        working-directory: e2e
+        run: npm run typecheck
+
+      - name: Run Playwright
+        working-directory: e2e
+        run: npx playwright test
+
+      - name: Upload Playwright report + traces
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            e2e/playwright-report
+            e2e/test-results
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Collect compose logs
+        if: failure()
+        run: docker compose --env-file e2e/.env --profile gateway logs --no-color > compose-logs.txt 2>&1 || true
+
+      - name: Upload compose logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compose-logs
+          path: compose-logs.txt
+          retention-days: 14
+
+      - name: Tear down
+        if: always()
+        run: docker compose --env-file e2e/.env --profile gateway down -v
