@@ -13,15 +13,30 @@ async function passwordToken(account: Pick<Account, 'email' | 'password'>): Prom
   return res.body.token;
 }
 
-/** Tries to book the coach's first open slot as `clientToken`; returns the HTTP status. */
-async function tryBooking(clientToken: string, coachID: string): Promise<number> {
+/**
+ * Tries to book the coach's first open slot as `clientToken`. Returns the HTTP
+ * status and, on success, the new session's id so a later test can check it
+ * still exists.
+ */
+async function tryBooking(clientToken: string, coachID: string): Promise<{ status: number; sessionID?: string }> {
   const start = (await openSlots(clientToken, coachID))[0]?.start;
   if (!start) throw new Error('no open slots');
-  const res = await api('POST', '/coaching/sessions', {
+  const res = await api<{ id: string }>('POST', '/coaching/sessions', {
     token: clientToken,
     body: { coach_id: coachID, scheduled_time: start, duration_minutes: 45 },
   });
-  return res.status;
+  return { status: res.status, sessionID: res.body?.id };
+}
+
+/** The client's sessions with `coachID` as seen by GET /coaching/sessions. */
+async function sessionsWith(clientToken: string, coachID: string): Promise<{ id: string; status: string }[]> {
+  const res = await api<{ sessions: { id: string; coach_id: string; status: string }[] }>(
+    'GET',
+    '/coaching/sessions',
+    { token: clientToken },
+  );
+  expect(res.status).toBe(200);
+  return (res.body?.sessions ?? []).filter((s) => s.coach_id === coachID);
 }
 
 /**
@@ -40,6 +55,7 @@ test.describe('coach approval', () => {
   let coachToken: string;
   let coachID: string;
   let adminToken: string;
+  let bookedSessionID: string;
   const client = makeAccount('appr-client', 'user');
   const coach = makeAccount('appr-coach', 'coach');
   const admin = makeAccount('appr-admin', 'user');
@@ -68,7 +84,7 @@ test.describe('coach approval', () => {
     const clientPage = clientCtx.pages()[0]!;
     await openTab(clientPage, 'Coaches');
     await expect(clientPage.getByText(coach.displayName)).toHaveCount(0);
-    expect(await tryBooking(clientToken, coachID)).toBe(409);
+    expect((await tryBooking(clientToken, coachID)).status).toBe(409);
   });
 
   test('only an admin may use /admin: user and coach get 403, admin sees the pending coach', async () => {
@@ -78,13 +94,14 @@ test.describe('coach approval', () => {
     }
     expect(await dbOne(`select approval_status from coaches where user_id = '${coachID}'`)).toBe('pending');
 
-    const queue = await api<{ coaches: { id: string; approval_status: string }[] }>(
+    const queue = await api<{ coaches: { id: string; email: string; display_name: string; approval_status: string }[] }>(
       'GET',
       '/admin/coaches?status=pending&limit=100',
       { token: adminToken },
     );
     expect(queue.status).toBe(200);
-    expect(queue.body?.coaches.map((c) => c.id)).toContain(coachID);
+    const entry = queue.body?.coaches.find((c) => c.id === coachID);
+    expect(entry).toMatchObject({ email: coach.email, display_name: coach.displayName, approval_status: 'pending' });
   });
 
   test('admin approval makes the coach visible and bookable', async () => {
@@ -99,7 +116,9 @@ test.describe('coach approval', () => {
     await openTab(clientPage, 'Account');
     await openTab(clientPage, 'Coaches');
     await expect(clientPage.getByText(coach.displayName)).toBeVisible({ timeout: 20_000 });
-    expect(await tryBooking(clientToken, coachID)).toBe(201);
+    const booked = await tryBooking(clientToken, coachID);
+    expect(booked.status).toBe(201);
+    bookedSessionID = booked.sessionID!;
   });
 
   test('admin rejection hides the coach again and blocks new bookings', async () => {
@@ -113,7 +132,12 @@ test.describe('coach approval', () => {
     await openTab(clientPage, 'Account');
     await openTab(clientPage, 'Coaches');
     await expect(clientPage.getByText(coach.displayName)).toHaveCount(0);
-    expect(await tryBooking(clientToken, coachID)).toBe(409);
+    expect((await tryBooking(clientToken, coachID)).status).toBe(409);
+
+    // Rejection only stops new business; the session booked while approved is untouched.
+    const kept = (await sessionsWith(clientToken, coachID)).find((s) => s.id === bookedSessionID);
+    expect(kept).toBeDefined();
+    expect(kept!.status).not.toBe('cancelled');
   });
 
   test('unknown coach ids and bad statuses are rejected', async () => {
