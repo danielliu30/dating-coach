@@ -6,12 +6,15 @@ import type {
   ChatMessage,
   ChatThread,
   Coach,
+  CoachReview,
   CoachingConfig,
   CoachingSession,
   Conversation,
+  DatingPhase,
   DatingProfileInput,
   Outcome,
   Profile,
+  ReviewSummary,
   Role,
   Slot,
   SubmitMessage,
@@ -260,6 +263,20 @@ export class ApiClient {
     return this.request<CoachingSession>('POST', '/coaching/sessions', input);
   }
 
+  async listCoachReviews(coachID: string): Promise<CoachReview[]> {
+    return (await this.request<CoachReview[] | null>('GET', `/coaching/coaches/${coachID}/reviews`)) ?? [];
+  }
+
+  /** Recommendation line and strengths distilled from the coach's reviews (aggregate-only when ml-analyzer is down). */
+  coachReviewSummary(coachID: string) {
+    return this.request<ReviewSummary>('GET', `/coaching/coaches/${coachID}/reviews/summary`);
+  }
+
+  /** Creates or replaces the caller's review; the server answers 403 without a completed session with the coach. */
+  submitCoachReview(coachID: string, input: { rating: number; comment: string; session_id?: string }) {
+    return this.request<CoachReview>('POST', `/coaching/coaches/${coachID}/reviews`, input);
+  }
+
   async mySessions(status?: string): Promise<CoachingSession[]> {
     const query = status ? `?status=${encodeURIComponent(status)}` : '';
     const { sessions } = await this.request<{ sessions: CoachingSession[] | null }>(
@@ -285,6 +302,7 @@ export class ApiClient {
     headline: string;
     bio: string;
     specialties: string[];
+    phases: DatingPhase[];
     hourly_rate_cents: number;
     timezone: string;
     years_experience: number;
