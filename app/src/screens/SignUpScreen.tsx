@@ -7,6 +7,7 @@ import { AuthLayout } from '../components/AuthLayout';
 import { Divider } from '../components/kit';
 import { Button, Field } from '../components/ui';
 import type { Role } from '../api/types';
+import { googleSignInAvailable } from '../lib/googleIdentity';
 import type { AuthStackParams } from '../navigation/types';
 import { useAuth } from '../state/auth';
 import { colors, fonts, radii, shared, type } from '../theme';
@@ -24,13 +25,28 @@ const ROLE_OPTIONS: {
 export default function SignUpScreen({
   navigation,
 }: NativeStackScreenProps<AuthStackParams, 'SignUp'>): React.ReactElement {
-  const { signUp } = useAuth();
+  const { signUp, signInWithGoogle } = useAuth();
   const [email, setEmail] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [password, setPassword] = useState('');
   const [role, setRole] = useState<Role>('user');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [googleBusy, setGoogleBusy] = useState(false);
+
+  // Google has already verified the address, so the verified session this
+  // returns takes the navigator straight into the app: no Verify screen.
+  const submitGoogle = async () => {
+    setGoogleBusy(true);
+    setError(null);
+    try {
+      await signInWithGoogle(role);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'could not sign up with Google');
+    } finally {
+      setGoogleBusy(false);
+    }
+  };
 
   const submit = async () => {
     setBusy(true);
@@ -50,7 +66,11 @@ export default function SignUpScreen({
       <View style={{ gap: 6 }}>
         <Text style={type.eyebrow}>Join Dating Humane</Text>
         <Text style={type.title}>Create your account</Text>
-        <Text style={type.caption}>We email a verification code right after sign-up.</Text>
+        <Text style={type.caption}>
+          {googleSignInAvailable
+            ? 'Use your Google account, or sign up with email and we’ll send a verification code.'
+            : 'We email a verification code right after sign-up.'}
+        </Text>
       </View>
       <View style={{ gap: 14 }}>
         <Field label="Name" value={displayName} onChangeText={setDisplayName} placeholder="Alex" />
@@ -96,7 +116,17 @@ export default function SignUpScreen({
           </View>
         </View>
         {error ? <Text style={shared.error}>{error}</Text> : null}
-        <Button label="Create account" onPress={submit} loading={busy} icon="sparkles-outline" />
+        <Button label="Create account" onPress={submit} loading={busy} disabled={googleBusy} icon="sparkles-outline" />
+        {googleSignInAvailable ? (
+          <Button
+            label={`Continue with Google as ${role === 'coach' ? 'a coach' : 'someone dating'}`}
+            variant="secondary"
+            onPress={submitGoogle}
+            loading={googleBusy}
+            disabled={busy}
+            icon="logo-google"
+          />
+        ) : null}
       </View>
       <Divider />
       <View style={styles.footer}>
