@@ -863,6 +863,9 @@ func (s *Service) assertBookable(ctx context.Context, coachID uuid.UUID, start t
 	if err != nil {
 		return err
 	}
+	if coach.ApprovalStatus != ApprovalApproved {
+		return fmt.Errorf("%w: coach is not approved", ErrUnavailable)
+	}
 	if requireAccepting && !coach.AcceptingClients {
 		return fmt.Errorf("%w: coach is not accepting clients", ErrUnavailable)
 	}

@@ -129,6 +129,18 @@ func (q *Queries) GetChatThread(ctx context.Context, id uuid.UUID) (ChatThread, 
 	return i, err
 }
 
+const getCoachApprovalStatus = `-- name: GetCoachApprovalStatus :one
+SELECT approval_status FROM coaches WHERE user_id = $1
+`
+
+// The coach's admin review state; no row when the user has no coach profile.
+func (q *Queries) GetCoachApprovalStatus(ctx context.Context, userID uuid.UUID) (string, error) {
+	row := q.db.QueryRow(ctx, getCoachApprovalStatus, userID)
+	var approval_status string
+	err := row.Scan(&approval_status)
+	return approval_status, err
+}
+
 const listChatMessages = `-- name: ListChatMessages :many
 SELECT id, thread_id, sender_id, body, created_at FROM chat_messages
 WHERE thread_id = $1

@@ -2,6 +2,7 @@ package coaching
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/google/uuid"
@@ -70,5 +71,24 @@ func TestNewCoachIsPendingAndHiddenUntilApproved(t *testing.T) {
 	}
 	if got, err := svc.GetCoach(ctx, coachID); err != nil || got.ApprovalStatus != ApprovalRejected {
 		t.Fatalf("GetCoach = %+v, %v; want approval_status rejected", got, err)
+	}
+}
+
+func TestOnlyApprovedCoachesAreBookable(t *testing.T) {
+	svc, pool := testService(t)
+	ctx := context.Background()
+	coach, client := insertCoach(t, pool), insertUser(t, pool, "user")
+	start := nextSlot()
+
+	for _, status := range []string{ApprovalPending, ApprovalRejected} {
+		setApproval(t, pool, coach, status)
+		if _, err := svc.BookSession(ctx, client, BookInput{CoachID: coach.String(), ScheduledTime: start}); !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("booking a %s coach: err = %v, want ErrUnavailable", status, err)
+		}
+	}
+
+	setApproval(t, pool, coach, ApprovalApproved)
+	if _, err := svc.BookSession(ctx, client, BookInput{CoachID: coach.String(), ScheduledTime: start}); err != nil {
+		t.Fatalf("booking an approved coach: %v", err)
 	}
 }
