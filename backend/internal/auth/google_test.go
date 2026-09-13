@@ -97,6 +97,7 @@ func TestGoogleVerifierAcceptsValidToken(t *testing.T) {
 func TestGoogleVerifierRejectsBadTokens(t *testing.T) {
 	g := newFakeGoogle(t, "k1")
 	other := newFakeGoogle(t, "k1")
+	unpublished := newFakeGoogle(t, "k9")
 	v := NewGoogleVerifier("client-1", g.server.URL, nil)
 
 	cases := map[string]string{
@@ -110,6 +111,7 @@ func TestGoogleVerifierRejectsBadTokens(t *testing.T) {
 		"unverified":  g.token(t, "k1", func() jwt.MapClaims { c := goodClaims("client-1"); c["email_verified"] = false; return c }()),
 		"no email":    g.token(t, "k1", func() jwt.MapClaims { c := goodClaims("client-1"); delete(c, "email"); return c }()),
 		"foreign key": other.token(t, "k1", goodClaims("client-1")),
+		"unknown kid": unpublished.token(t, "k9", goodClaims("client-1")),
 		"garbage":     "not.a.jwt",
 	}
 	hs := jwt.NewWithClaims(jwt.SigningMethodHS256, goodClaims("client-1"))
@@ -158,7 +160,7 @@ func TestGoogleVerifierReportsUnreachableJWKS(t *testing.T) {
 	g.server.Close()
 	v := NewGoogleVerifier("client-1", g.server.URL, nil)
 	_, err := v.Verify(context.Background(), tok)
-	if err == nil || errors.Is(err, ErrInvalidGoogleToken) {
-		t.Fatalf("err = %v, want a fetch error distinct from ErrInvalidGoogleToken", err)
+	if !errors.Is(err, ErrGoogleKeysUnavailable) || errors.Is(err, ErrInvalidGoogleToken) {
+		t.Fatalf("err = %v, want ErrGoogleKeysUnavailable and not ErrInvalidGoogleToken", err)
 	}
 }

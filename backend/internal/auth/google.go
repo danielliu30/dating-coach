@@ -28,6 +28,11 @@ var googleIssuers = []string{"https://accounts.google.com", "accounts.google.com
 // has not verified. The wrapped detail is for logs, not clients.
 var ErrInvalidGoogleToken = errors.New("invalid google id token")
 
+// ErrGoogleKeysUnavailable is returned when Google's key set could not be
+// fetched or decoded, so the token could not be checked either way. Callers
+// should answer with a 5xx rather than treat the token as bad.
+var ErrGoogleKeysUnavailable = errors.New("google signing keys unavailable")
+
 // GoogleIdentity is what a verified Google ID token vouches for: the address
 // Google confirmed, plus the profile fields used to seed a new account.
 type GoogleIdentity struct {
@@ -77,9 +82,10 @@ func NewGoogleVerifier(clientID, jwksURL string, client *http.Client) *GoogleVer
 
 // Verify parses and validates idToken: RS256 signature by a current Google key,
 // Google issuer, audience equal to the configured client ID, unexpired, and
-// email_verified true. Any failure yields an error wrapping
-// ErrInvalidGoogleToken; a key-set fetch failure is returned as is so callers
-// can tell a bad token from an unreachable Google.
+// email_verified true. Any token failure, including a kid Google does not
+// publish, yields an error wrapping ErrInvalidGoogleToken; a key-set fetch
+// failure wraps ErrGoogleKeysUnavailable instead so callers can tell a bad
+// token from an unreachable Google.
 func (v *GoogleVerifier) Verify(ctx context.Context, idToken string) (GoogleIdentity, error) {
 	claims := &googleClaims{}
 	var fetchErr error
@@ -89,7 +95,7 @@ func (v *GoogleVerifier) Verify(ctx context.Context, idToken string) (GoogleIden
 			return nil, errors.New("token has no kid header")
 		}
 		key, err := v.key(ctx, kid)
-		if err != nil {
+		if errors.Is(err, ErrGoogleKeysUnavailable) {
 			fetchErr = err
 		}
 		return key, err
@@ -126,8 +132,9 @@ func issuedByGoogle(iss string) bool {
 }
 
 // key returns the public key for kid, refetching the key set when kid is
-// unknown or the cache is older than cacheTTL. Unknown after a fresh fetch is an
-// error: the token was signed with a key Google no longer publishes.
+// unknown or the cache is older than cacheTTL. A failed fetch wraps
+// ErrGoogleKeysUnavailable; a kid still unknown after a fresh fetch is a plain
+// error, since the token was signed with a key Google does not publish.
 func (v *GoogleVerifier) key(ctx context.Context, kid string) (*rsa.PublicKey, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -136,7 +143,7 @@ func (v *GoogleVerifier) key(ctx context.Context, kid string) (*rsa.PublicKey, e
 	}
 	keys, err := v.fetch(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("fetch google keys: %w", err)
+		return nil, fmt.Errorf("%w: %v", ErrGoogleKeysUnavailable, err)
 	}
 	v.keys, v.fetchedAt = keys, time.Now()
 	key, ok := keys[kid]
