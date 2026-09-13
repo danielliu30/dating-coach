@@ -139,6 +139,14 @@ describe('CoachProfileScreen approval banner', () => {
     expect(screen.queryByText(REVIEW)).toBeNull();
   });
 
+  it('keeps the banner from a successful initial load when the first focus refresh fails', async () => {
+    // Mount load and first focus read start together; the newer (focus) one fails.
+    mocked.getCoach.mockResolvedValueOnce(coach('pending')).mockRejectedValueOnce(new ApiError(503, 'unavailable'));
+    render(<CoachProfileScreen />);
+    await screen.findByText(REVIEW);
+    await screen.findByText(/Could not refresh your review status/);
+  });
+
   it('says so when the focus refresh fails, keeping the last known status', async () => {
     mocked.getCoach.mockResolvedValue(coach('pending'));
     render(<CoachProfileScreen />);

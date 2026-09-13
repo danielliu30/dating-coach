@@ -90,13 +90,20 @@ export default function CoachProfileScreen(): React.ReactElement {
   const coachID = user?.id;
   const [loadFailed, setLoadFailed] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
-  // Every read of approval_status (mount load, focus refresh) takes a ticket;
-  // only the newest ticket may write it, so a slow older read cannot win.
-  const approvalRead = useRef(0);
+  // Every read of approval_status (mount load, focus refresh) takes a ticket and
+  // may only write if nothing newer has been applied yet: a slow older read cannot
+  // overwrite a fresher one, while a failed newer read discards nothing.
+  const approvalRead = useRef({ issued: 0, applied: 0 });
+  const applyApproval = (ticket: number, value: CoachApprovalStatus) => {
+    if (ticket <= approvalRead.current.applied) return false;
+    approvalRead.current.applied = ticket;
+    setApproval(value);
+    return true;
+  };
   useEffect(() => {
     if (!coachID) return;
     let cancelled = false;
-    const ticket = ++approvalRead.current;
+    const ticket = ++approvalRead.current.issued;
     void (async () => {
       const [profile, saved] = await Promise.allSettled([
         api.getCoach(coachID),
@@ -113,7 +120,7 @@ export default function CoachProfileScreen(): React.ReactElement {
         setTimezone(profile.value.timezone);
         setYears(String(profile.value.years_experience));
         setAccepting(profile.value.accepting_clients);
-        if (ticket === approvalRead.current) setApproval(profile.value.approval_status);
+        applyApproval(ticket, profile.value.approval_status);
         // 404 simply means the coach has not published a profile yet.
       } else if (!(profile.reason instanceof ApiError && profile.reason.status === 404)) {
         setLoadFailed(true);
@@ -140,16 +147,15 @@ export default function CoachProfileScreen(): React.ReactElement {
     useCallback(() => {
       if (!coachID) return;
       let cancelled = false;
-      const ticket = ++approvalRead.current;
+      const ticket = ++approvalRead.current.issued;
       api
         .getCoach(coachID)
         .then((profile) => {
-          if (cancelled || ticket !== approvalRead.current) return;
-          setApproval(profile.approval_status);
-          setRefreshError(null);
+          if (cancelled) return;
+          if (applyApproval(ticket, profile.approval_status)) setRefreshError(null);
         })
         .catch((reason: unknown) => {
-          if (cancelled || ticket !== approvalRead.current) return;
+          if (cancelled || ticket !== approvalRead.current.issued) return;
           // 404 means nothing saved yet; anything else leaves the banner possibly stale.
           if (reason instanceof ApiError && reason.status === 404) return;
           setRefreshError(`Could not refresh your review status (${describe(reason)}); it may be out of date.`);
