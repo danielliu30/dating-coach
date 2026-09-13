@@ -403,7 +403,8 @@ func (s *Service) ListCoachesByApproval(ctx context.Context, status string, limi
 // SetCoachApproval records an admin's decision on a coach profile and returns
 // the updated coach. It yields ErrInvalidInput for an unknown status and
 // ErrNotFound when the user has no coach profile row. It is idempotent: setting
-// the current state again just bumps updated_at.
+// the current state again just bumps updated_at. The returned ApprovalStatus is
+// the one this call wrote, even if a concurrent decision has since replaced it.
 func (s *Service) SetCoachApproval(ctx context.Context, coachID uuid.UUID, status string) (Coach, error) {
 	status, ok := validApprovalStatus(status)
 	if !ok {
@@ -416,7 +417,12 @@ func (s *Service) SetCoachApproval(ctx context.Context, coachID uuid.UUID, statu
 		}
 		return Coach{}, fmt.Errorf("set coach approval: %w", err)
 	}
-	return s.GetCoach(ctx, row.UserID)
+	coach, err := s.GetCoach(ctx, row.UserID)
+	if err != nil {
+		return Coach{}, err
+	}
+	coach.ApprovalStatus = row.ApprovalStatus
+	return coach, nil
 }
 
 // UpsertProfileInput is the decoded PUT /coach/profile body.

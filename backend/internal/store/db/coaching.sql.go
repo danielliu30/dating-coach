@@ -1050,7 +1050,7 @@ SELECT c.user_id, c.headline, c.bio, c.specialties, c.hourly_rate_cents, c.timez
 FROM coaches c
 JOIN users u ON u.id = c.user_id
 WHERE c.approval_status = $1 AND u.deleted_at IS NULL
-ORDER BY c.created_at, u.display_name
+ORDER BY c.created_at, u.display_name, c.user_id
 LIMIT $2 OFFSET $3
 `
 
