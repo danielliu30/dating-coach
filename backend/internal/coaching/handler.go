@@ -33,6 +33,9 @@ func (h *Handler) Routes() http.Handler {
 	r.Get("/coaches/{coachID}", h.getCoach)
 	r.Get("/coaches/{coachID}/availability", h.coachAvailability)
 	r.Get("/coaches/{coachID}/slots", h.coachSlots)
+	r.Get("/coaches/{coachID}/reviews", h.listReviews)
+	r.Get("/coaches/{coachID}/reviews/summary", h.reviewSummary)
+	r.Post("/coaches/{coachID}/reviews", h.createReview)
 	r.Post("/sessions", h.bookSession)
 	r.Get("/sessions", h.listMySessions)
 	r.Post("/sessions/{sessionID}/cancel", h.cancelSession)
@@ -49,6 +52,7 @@ func (h *Handler) CoachRoutes() http.Handler {
 	r.Post("/sessions/{sessionID}/respond", h.respondAsCoach)
 	r.Post("/sessions/{sessionID}/status", h.setSessionStatus)
 	r.Post("/sessions/{sessionID}/notes", h.setSessionNotes)
+	r.Post("/sessions/{sessionID}/meeting-url", h.setSessionMeetingURL)
 	return r
 }
 
@@ -146,6 +150,64 @@ func (h *Handler) getCoach(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusOK, coach)
+}
+
+// listReviews handles GET /coaches/{coachID}/reviews with optional limit/offset
+// paging, newest first.
+func (h *Handler) listReviews(w http.ResponseWriter, r *http.Request) {
+	coachID, ok := pathUUID(w, r, "coachID")
+	if !ok {
+		return
+	}
+	limit := httpx.QueryInt(r, "limit", 25, 100)
+	offset := httpx.QueryInt(r, "offset", 1, 10_000) - 1
+	reviews, err := h.svc.ListReviews(r.Context(), coachID, limit, offset)
+	if err != nil {
+		respondErr(w, err, "could not load reviews")
+		return
+	}
+	httpx.JSON(w, http.StatusOK, reviews)
+}
+
+// reviewSummary handles GET /coaches/{coachID}/reviews/summary: the
+// recommendation line and strengths shown in place of a star rating.
+func (h *Handler) reviewSummary(w http.ResponseWriter, r *http.Request) {
+	coachID, ok := pathUUID(w, r, "coachID")
+	if !ok {
+		return
+	}
+	out, err := h.svc.ReviewSummary(r.Context(), coachID)
+	if err != nil {
+		respondErr(w, err, "could not summarise reviews")
+		return
+	}
+	httpx.JSON(w, http.StatusOK, out)
+}
+
+// createReview handles POST /coaches/{coachID}/reviews for the signed-in
+// client; the service refuses (403) unless they have completed a session with
+// the coach.
+func (h *Handler) createReview(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFrom(r.Context())
+	if !ok {
+		httpx.Error(w, http.StatusUnauthorized, "unauthenticated")
+		return
+	}
+	coachID, ok := pathUUID(w, r, "coachID")
+	if !ok {
+		return
+	}
+	var in CreateReviewInput
+	if err := httpx.Decode(r, &in); err != nil {
+		httpx.Error(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	review, err := h.svc.CreateReview(r.Context(), coachID, principal.UserID, in)
+	if err != nil {
+		respondErr(w, err, "could not save review")
+		return
+	}
+	httpx.JSON(w, http.StatusCreated, review)
 }
 
 // coachAvailability handles GET /coaches/{coachID}/availability, returning the
@@ -408,6 +470,33 @@ func (h *Handler) setSessionNotes(w http.ResponseWriter, r *http.Request) {
 	session, err := h.svc.SetNotes(r.Context(), sessionID, principal.UserID, in.CoachNotes)
 	if err != nil {
 		respondErr(w, err, "could not update notes")
+		return
+	}
+	httpx.JSON(w, http.StatusOK, session)
+}
+
+// setSessionMeetingURL handles POST /coach/sessions/{sessionID}/meeting-url
+// with body {meeting_url}; an empty value clears the link.
+func (h *Handler) setSessionMeetingURL(w http.ResponseWriter, r *http.Request) {
+	principal, ok := auth.PrincipalFrom(r.Context())
+	if !ok {
+		httpx.Error(w, http.StatusUnauthorized, "unauthenticated")
+		return
+	}
+	sessionID, ok := pathUUID(w, r, "sessionID")
+	if !ok {
+		return
+	}
+	var in struct {
+		MeetingURL string `json:"meeting_url"`
+	}
+	if err := httpx.Decode(r, &in); err != nil {
+		httpx.Error(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	session, err := h.svc.SetMeetingURL(r.Context(), sessionID, principal.UserID, in.MeetingURL)
+	if err != nil {
+		respondErr(w, err, "could not update meeting url")
 		return
 	}
 	httpx.JSON(w, http.StatusOK, session)

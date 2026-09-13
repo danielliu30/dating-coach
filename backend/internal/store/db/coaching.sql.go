@@ -49,7 +49,7 @@ SET payment_ref = $2,
     payment_status = CASE WHEN status = 'pending_payment' THEN payment_status ELSE 'expiring' END,
     updated_at = now()
 WHERE id = $1
-RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, confirmation_token, respond_by, confirmed_at, calendar_sequence, payment_status, amount_cents, currency, payment_ref, hold_expires_at
+RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, confirmation_token, respond_by, confirmed_at, calendar_sequence, payment_status, amount_cents, currency, payment_ref, hold_expires_at, meeting_url
 `
 
 type AttachCheckoutParams struct {
@@ -83,6 +83,7 @@ func (q *Queries) AttachCheckout(ctx context.Context, arg AttachCheckoutParams) 
 		&i.Currency,
 		&i.PaymentRef,
 		&i.HoldExpiresAt,
+		&i.MeetingUrl,
 	)
 	return i, err
 }
@@ -92,7 +93,7 @@ UPDATE coaching_sessions
 SET status = 'pending', payment_status = 'authorized', hold_expires_at = NULL,
     confirmation_token = $2, respond_by = $3, updated_at = now()
 WHERE id = $1 AND status = 'pending_payment'
-RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, confirmation_token, respond_by, confirmed_at, calendar_sequence, payment_status, amount_cents, currency, payment_ref, hold_expires_at
+RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, confirmation_token, respond_by, confirmed_at, calendar_sequence, payment_status, amount_cents, currency, payment_ref, hold_expires_at, meeting_url
 `
 
 type AuthorizeSessionParams struct {
@@ -126,6 +127,7 @@ func (q *Queries) AuthorizeSession(ctx context.Context, arg AuthorizeSessionPara
 		&i.Currency,
 		&i.PaymentRef,
 		&i.HoldExpiresAt,
+		&i.MeetingUrl,
 	)
 	return i, err
 }
@@ -155,7 +157,7 @@ SET status = 'scheduled',
     calendar_sequence = calendar_sequence + 1,
     updated_at = now()
 WHERE id = $1 AND status = 'pending' AND (respond_by IS NULL OR respond_by >= now())
-RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, confirmation_token, respond_by, confirmed_at, calendar_sequence, payment_status, amount_cents, currency, payment_ref, hold_expires_at
+RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, confirmation_token, respond_by, confirmed_at, calendar_sequence, payment_status, amount_cents, currency, payment_ref, hold_expires_at, meeting_url
 `
 
 func (q *Queries) ConfirmSession(ctx context.Context, id uuid.UUID) (CoachingSession, error) {
@@ -181,6 +183,7 @@ func (q *Queries) ConfirmSession(ctx context.Context, id uuid.UUID) (CoachingSes
 		&i.Currency,
 		&i.PaymentRef,
 		&i.HoldExpiresAt,
+		&i.MeetingUrl,
 	)
 	return i, err
 }
@@ -188,7 +191,7 @@ func (q *Queries) ConfirmSession(ctx context.Context, id uuid.UUID) (CoachingSes
 const createCoachingSession = `-- name: CreateCoachingSession :one
 INSERT INTO coaching_sessions (user_id, coach_id, scheduled_time, duration_minutes, topic, status, confirmation_token, respond_by)
 VALUES ($1, $2, $3, $4, $5, 'pending', $6, $7)
-RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, confirmation_token, respond_by, confirmed_at, calendar_sequence, payment_status, amount_cents, currency, payment_ref, hold_expires_at
+RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, confirmation_token, respond_by, confirmed_at, calendar_sequence, payment_status, amount_cents, currency, payment_ref, hold_expires_at, meeting_url
 `
 
 type CreateCoachingSessionParams struct {
@@ -232,6 +235,7 @@ func (q *Queries) CreateCoachingSession(ctx context.Context, arg CreateCoachingS
 		&i.Currency,
 		&i.PaymentRef,
 		&i.HoldExpiresAt,
+		&i.MeetingUrl,
 	)
 	return i, err
 }
@@ -240,7 +244,7 @@ const createPendingPaymentSession = `-- name: CreatePendingPaymentSession :one
 INSERT INTO coaching_sessions (user_id, coach_id, scheduled_time, duration_minutes, topic,
                                status, payment_status, amount_cents, currency, hold_expires_at)
 VALUES ($1, $2, $3, $4, $5, 'pending_payment', 'pending', $6, $7, $8)
-RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, confirmation_token, respond_by, confirmed_at, calendar_sequence, payment_status, amount_cents, currency, payment_ref, hold_expires_at
+RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, confirmation_token, respond_by, confirmed_at, calendar_sequence, payment_status, amount_cents, currency, payment_ref, hold_expires_at, meeting_url
 `
 
 type CreatePendingPaymentSessionParams struct {
@@ -286,6 +290,7 @@ func (q *Queries) CreatePendingPaymentSession(ctx context.Context, arg CreatePen
 		&i.Currency,
 		&i.PaymentRef,
 		&i.HoldExpiresAt,
+		&i.MeetingUrl,
 	)
 	return i, err
 }
@@ -302,7 +307,7 @@ SET status = 'declined',
     calendar_sequence = calendar_sequence + 1,
     updated_at = now()
 WHERE id = $1 AND status = 'pending' AND (respond_by IS NULL OR respond_by >= now())
-RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, confirmation_token, respond_by, confirmed_at, calendar_sequence, payment_status, amount_cents, currency, payment_ref, hold_expires_at
+RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, confirmation_token, respond_by, confirmed_at, calendar_sequence, payment_status, amount_cents, currency, payment_ref, hold_expires_at, meeting_url
 `
 
 func (q *Queries) DeclineSession(ctx context.Context, id uuid.UUID) (CoachingSession, error) {
@@ -328,6 +333,7 @@ func (q *Queries) DeclineSession(ctx context.Context, id uuid.UUID) (CoachingSes
 		&i.Currency,
 		&i.PaymentRef,
 		&i.HoldExpiresAt,
+		&i.MeetingUrl,
 	)
 	return i, err
 }
@@ -381,7 +387,7 @@ WHERE id IN (
     LIMIT $1
     FOR UPDATE SKIP LOCKED
 )
-RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, confirmation_token, respond_by, confirmed_at, calendar_sequence, payment_status, amount_cents, currency, payment_ref, hold_expires_at
+RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, confirmation_token, respond_by, confirmed_at, calendar_sequence, payment_status, amount_cents, currency, payment_ref, hold_expires_at, meeting_url
 `
 
 func (q *Queries) ExpirePendingSessions(ctx context.Context, limit int32) ([]CoachingSession, error) {
@@ -413,6 +419,7 @@ func (q *Queries) ExpirePendingSessions(ctx context.Context, limit int32) ([]Coa
 			&i.Currency,
 			&i.PaymentRef,
 			&i.HoldExpiresAt,
+			&i.MeetingUrl,
 		); err != nil {
 			return nil, err
 		}
@@ -425,9 +432,18 @@ func (q *Queries) ExpirePendingSessions(ctx context.Context, limit int32) ([]Coa
 }
 
 const getCoach = `-- name: GetCoach :one
-SELECT c.user_id, c.headline, c.bio, c.specialties, c.hourly_rate_cents, c.timezone, c.years_experience, c.accepting_clients, c.created_at, c.updated_at, c.phases, u.display_name, u.email
+SELECT c.user_id, c.headline, c.bio, c.specialties, c.hourly_rate_cents, c.timezone, c.years_experience, c.accepting_clients, c.created_at, c.updated_at, c.phases, u.display_name, u.email,
+       COALESCE(r.avg_rating, 0)::float8 AS avg_rating,
+       COALESCE(r.review_count, 0)::int AS review_count,
+       COALESCE(r.recommend_count, 0)::int AS recommend_count
 FROM coaches c
 JOIN users u ON u.id = c.user_id
+LEFT JOIN (
+    SELECT coach_id, AVG(rating) AS avg_rating, COUNT(*) AS review_count,
+           COUNT(*) FILTER (WHERE rating >= 4) AS recommend_count
+    FROM coach_reviews
+    GROUP BY coach_id
+) r ON r.coach_id = c.user_id
 WHERE c.user_id = $1
 `
 
@@ -445,6 +461,9 @@ type GetCoachRow struct {
 	Phases           []string  `json:"phases"`
 	DisplayName      string    `json:"display_name"`
 	Email            string    `json:"email"`
+	AvgRating        float64   `json:"avg_rating"`
+	ReviewCount      int32     `json:"review_count"`
+	RecommendCount   int32     `json:"recommend_count"`
 }
 
 func (q *Queries) GetCoach(ctx context.Context, userID uuid.UUID) (GetCoachRow, error) {
@@ -464,12 +483,15 @@ func (q *Queries) GetCoach(ctx context.Context, userID uuid.UUID) (GetCoachRow, 
 		&i.Phases,
 		&i.DisplayName,
 		&i.Email,
+		&i.AvgRating,
+		&i.ReviewCount,
+		&i.RecommendCount,
 	)
 	return i, err
 }
 
 const getCoachingSession = `-- name: GetCoachingSession :one
-SELECT id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, confirmation_token, respond_by, confirmed_at, calendar_sequence, payment_status, amount_cents, currency, payment_ref, hold_expires_at FROM coaching_sessions WHERE id = $1
+SELECT id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, confirmation_token, respond_by, confirmed_at, calendar_sequence, payment_status, amount_cents, currency, payment_ref, hold_expires_at, meeting_url FROM coaching_sessions WHERE id = $1
 `
 
 func (q *Queries) GetCoachingSession(ctx context.Context, id uuid.UUID) (CoachingSession, error) {
@@ -495,12 +517,13 @@ func (q *Queries) GetCoachingSession(ctx context.Context, id uuid.UUID) (Coachin
 		&i.Currency,
 		&i.PaymentRef,
 		&i.HoldExpiresAt,
+		&i.MeetingUrl,
 	)
 	return i, err
 }
 
 const getSessionByConfirmationToken = `-- name: GetSessionByConfirmationToken :one
-SELECT id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, confirmation_token, respond_by, confirmed_at, calendar_sequence, payment_status, amount_cents, currency, payment_ref, hold_expires_at FROM coaching_sessions
+SELECT id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, confirmation_token, respond_by, confirmed_at, calendar_sequence, payment_status, amount_cents, currency, payment_ref, hold_expires_at, meeting_url FROM coaching_sessions
 WHERE id = $1 AND confirmation_token = $2
 `
 
@@ -532,12 +555,13 @@ func (q *Queries) GetSessionByConfirmationToken(ctx context.Context, arg GetSess
 		&i.Currency,
 		&i.PaymentRef,
 		&i.HoldExpiresAt,
+		&i.MeetingUrl,
 	)
 	return i, err
 }
 
 const getSessionByPaymentRefForUpdate = `-- name: GetSessionByPaymentRefForUpdate :one
-SELECT id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, confirmation_token, respond_by, confirmed_at, calendar_sequence, payment_status, amount_cents, currency, payment_ref, hold_expires_at FROM coaching_sessions WHERE payment_ref = $1 FOR UPDATE
+SELECT id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, confirmation_token, respond_by, confirmed_at, calendar_sequence, payment_status, amount_cents, currency, payment_ref, hold_expires_at, meeting_url FROM coaching_sessions WHERE payment_ref = $1 FOR UPDATE
 `
 
 func (q *Queries) GetSessionByPaymentRefForUpdate(ctx context.Context, paymentRef *string) (CoachingSession, error) {
@@ -563,12 +587,13 @@ func (q *Queries) GetSessionByPaymentRefForUpdate(ctx context.Context, paymentRe
 		&i.Currency,
 		&i.PaymentRef,
 		&i.HoldExpiresAt,
+		&i.MeetingUrl,
 	)
 	return i, err
 }
 
 const getSessionParties = `-- name: GetSessionParties :one
-SELECT s.id, s.user_id, s.coach_id, s.scheduled_time, s.duration_minutes, s.status, s.topic, s.coach_notes, s.created_at, s.updated_at, s.confirmation_token, s.respond_by, s.confirmed_at, s.calendar_sequence, s.payment_status, s.amount_cents, s.currency, s.payment_ref, s.hold_expires_at,
+SELECT s.id, s.user_id, s.coach_id, s.scheduled_time, s.duration_minutes, s.status, s.topic, s.coach_notes, s.created_at, s.updated_at, s.confirmation_token, s.respond_by, s.confirmed_at, s.calendar_sequence, s.payment_status, s.amount_cents, s.currency, s.payment_ref, s.hold_expires_at, s.meeting_url,
        u.email        AS user_email,
        u.display_name AS user_name,
        cu.email       AS coach_email,
@@ -601,6 +626,7 @@ type GetSessionPartiesRow struct {
 	Currency          string     `json:"currency"`
 	PaymentRef        *string    `json:"payment_ref"`
 	HoldExpiresAt     *time.Time `json:"hold_expires_at"`
+	MeetingUrl        string     `json:"meeting_url"`
 	UserEmail         string     `json:"user_email"`
 	UserName          string     `json:"user_name"`
 	CoachEmail        string     `json:"coach_email"`
@@ -631,6 +657,7 @@ func (q *Queries) GetSessionParties(ctx context.Context, id uuid.UUID) (GetSessi
 		&i.Currency,
 		&i.PaymentRef,
 		&i.HoldExpiresAt,
+		&i.MeetingUrl,
 		&i.UserEmail,
 		&i.UserName,
 		&i.CoachEmail,
@@ -640,8 +667,31 @@ func (q *Queries) GetSessionParties(ctx context.Context, id uuid.UUID) (GetSessi
 	return i, err
 }
 
+const hasCompletedSession = `-- name: HasCompletedSession :one
+SELECT EXISTS (
+    SELECT 1 FROM coaching_sessions
+    WHERE coach_id = $1 AND user_id = $2 AND status = 'completed'
+      AND ($3::uuid IS NULL OR id = $3::uuid)
+)
+`
+
+type HasCompletedSessionParams struct {
+	CoachID   uuid.UUID  `json:"coach_id"`
+	UserID    uuid.UUID  `json:"user_id"`
+	SessionID *uuid.UUID `json:"session_id"`
+}
+
+// Whether the client has at least one completed session with the coach,
+// optionally restricted to one session id.
+func (q *Queries) HasCompletedSession(ctx context.Context, arg HasCompletedSessionParams) (bool, error) {
+	row := q.db.QueryRow(ctx, hasCompletedSession, arg.CoachID, arg.UserID, arg.SessionID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const listAuthorizationsToRelease = `-- name: ListAuthorizationsToRelease :many
-SELECT id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, confirmation_token, respond_by, confirmed_at, calendar_sequence, payment_status, amount_cents, currency, payment_ref, hold_expires_at FROM coaching_sessions
+SELECT id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, confirmation_token, respond_by, confirmed_at, calendar_sequence, payment_status, amount_cents, currency, payment_ref, hold_expires_at, meeting_url FROM coaching_sessions
 WHERE payment_status = 'releasing' AND payment_ref IS NOT NULL
 ORDER BY updated_at
 `
@@ -675,6 +725,7 @@ func (q *Queries) ListAuthorizationsToRelease(ctx context.Context) ([]CoachingSe
 			&i.Currency,
 			&i.PaymentRef,
 			&i.HoldExpiresAt,
+			&i.MeetingUrl,
 		); err != nil {
 			return nil, err
 		}
@@ -729,7 +780,7 @@ func (q *Queries) ListBookedSlots(ctx context.Context, arg ListBookedSlotsParams
 }
 
 const listCheckoutsToExpire = `-- name: ListCheckoutsToExpire :many
-SELECT id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, confirmation_token, respond_by, confirmed_at, calendar_sequence, payment_status, amount_cents, currency, payment_ref, hold_expires_at FROM coaching_sessions
+SELECT id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, confirmation_token, respond_by, confirmed_at, calendar_sequence, payment_status, amount_cents, currency, payment_ref, hold_expires_at, meeting_url FROM coaching_sessions
 WHERE payment_status = 'expiring' AND payment_ref IS NOT NULL
 ORDER BY updated_at
 `
@@ -763,6 +814,7 @@ func (q *Queries) ListCheckoutsToExpire(ctx context.Context) ([]CoachingSession,
 			&i.Currency,
 			&i.PaymentRef,
 			&i.HoldExpiresAt,
+			&i.MeetingUrl,
 		); err != nil {
 			return nil, err
 		}
@@ -806,13 +858,117 @@ func (q *Queries) ListCoachAvailability(ctx context.Context, coachID uuid.UUID) 
 	return items, nil
 }
 
+const listCoachReviewTexts = `-- name: ListCoachReviewTexts :many
+SELECT rating, comment
+FROM coach_reviews
+WHERE coach_id = $1
+ORDER BY updated_at DESC, id
+LIMIT $2
+`
+
+type ListCoachReviewTextsParams struct {
+	CoachID uuid.UUID `json:"coach_id"`
+	Limit   int32     `json:"limit"`
+}
+
+type ListCoachReviewTextsRow struct {
+	Rating  int16  `json:"rating"`
+	Comment string `json:"comment"`
+}
+
+func (q *Queries) ListCoachReviewTexts(ctx context.Context, arg ListCoachReviewTextsParams) ([]ListCoachReviewTextsRow, error) {
+	rows, err := q.db.Query(ctx, listCoachReviewTexts, arg.CoachID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListCoachReviewTextsRow{}
+	for rows.Next() {
+		var i ListCoachReviewTextsRow
+		if err := rows.Scan(&i.Rating, &i.Comment); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCoachReviews = `-- name: ListCoachReviews :many
+SELECT r.id, r.coach_id, r.user_id, r.session_id, r.rating, r.comment, r.created_at, r.updated_at, u.display_name AS reviewer_name
+FROM coach_reviews r
+JOIN users u ON u.id = r.user_id
+WHERE r.coach_id = $1
+ORDER BY r.created_at DESC
+LIMIT $2 OFFSET $3
+`
+
+type ListCoachReviewsParams struct {
+	CoachID uuid.UUID `json:"coach_id"`
+	Limit   int32     `json:"limit"`
+	Offset  int32     `json:"offset"`
+}
+
+type ListCoachReviewsRow struct {
+	ID           uuid.UUID  `json:"id"`
+	CoachID      uuid.UUID  `json:"coach_id"`
+	UserID       uuid.UUID  `json:"user_id"`
+	SessionID    *uuid.UUID `json:"session_id"`
+	Rating       int16      `json:"rating"`
+	Comment      string     `json:"comment"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+	ReviewerName string     `json:"reviewer_name"`
+}
+
+func (q *Queries) ListCoachReviews(ctx context.Context, arg ListCoachReviewsParams) ([]ListCoachReviewsRow, error) {
+	rows, err := q.db.Query(ctx, listCoachReviews, arg.CoachID, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListCoachReviewsRow{}
+	for rows.Next() {
+		var i ListCoachReviewsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.CoachID,
+			&i.UserID,
+			&i.SessionID,
+			&i.Rating,
+			&i.Comment,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.ReviewerName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listCoaches = `-- name: ListCoaches :many
-SELECT c.user_id, c.headline, c.bio, c.specialties, c.hourly_rate_cents, c.timezone, c.years_experience, c.accepting_clients, c.created_at, c.updated_at, c.phases, u.display_name, u.email
+SELECT c.user_id, c.headline, c.bio, c.specialties, c.hourly_rate_cents, c.timezone, c.years_experience, c.accepting_clients, c.created_at, c.updated_at, c.phases, u.display_name, u.email,
+       COALESCE(r.avg_rating, 0)::float8 AS avg_rating,
+       COALESCE(r.review_count, 0)::int AS review_count,
+       COALESCE(r.recommend_count, 0)::int AS recommend_count
 FROM coaches c
 JOIN users u ON u.id = c.user_id
+LEFT JOIN (
+    SELECT coach_id, AVG(rating) AS avg_rating, COUNT(*) AS review_count,
+           COUNT(*) FILTER (WHERE rating >= 4) AS recommend_count
+    FROM coach_reviews
+    GROUP BY coach_id
+) r ON r.coach_id = c.user_id
 WHERE ($3::boolean IS NOT TRUE OR c.accepting_clients)
   AND ($4::text IS NULL OR $4::text = ANY(c.phases))
-ORDER BY c.years_experience DESC, u.display_name
+ORDER BY COALESCE(r.avg_rating, 0) DESC, c.years_experience DESC, u.display_name
 LIMIT $1 OFFSET $2
 `
 
@@ -837,6 +993,9 @@ type ListCoachesRow struct {
 	Phases           []string  `json:"phases"`
 	DisplayName      string    `json:"display_name"`
 	Email            string    `json:"email"`
+	AvgRating        float64   `json:"avg_rating"`
+	ReviewCount      int32     `json:"review_count"`
+	RecommendCount   int32     `json:"recommend_count"`
 }
 
 func (q *Queries) ListCoaches(ctx context.Context, arg ListCoachesParams) ([]ListCoachesRow, error) {
@@ -867,6 +1026,9 @@ func (q *Queries) ListCoaches(ctx context.Context, arg ListCoachesParams) ([]Lis
 			&i.Phases,
 			&i.DisplayName,
 			&i.Email,
+			&i.AvgRating,
+			&i.ReviewCount,
+			&i.RecommendCount,
 		); err != nil {
 			return nil, err
 		}
@@ -879,7 +1041,7 @@ func (q *Queries) ListCoaches(ctx context.Context, arg ListCoachesParams) ([]Lis
 }
 
 const listRefundsDue = `-- name: ListRefundsDue :many
-SELECT id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, confirmation_token, respond_by, confirmed_at, calendar_sequence, payment_status, amount_cents, currency, payment_ref, hold_expires_at FROM coaching_sessions
+SELECT id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, confirmation_token, respond_by, confirmed_at, calendar_sequence, payment_status, amount_cents, currency, payment_ref, hold_expires_at, meeting_url FROM coaching_sessions
 WHERE payment_status = 'refund_due' AND payment_ref IS NOT NULL
 ORDER BY updated_at
 `
@@ -913,6 +1075,7 @@ func (q *Queries) ListRefundsDue(ctx context.Context) ([]CoachingSession, error)
 			&i.Currency,
 			&i.PaymentRef,
 			&i.HoldExpiresAt,
+			&i.MeetingUrl,
 		); err != nil {
 			return nil, err
 		}
@@ -925,7 +1088,7 @@ func (q *Queries) ListRefundsDue(ctx context.Context) ([]CoachingSession, error)
 }
 
 const listSessionsForCoach = `-- name: ListSessionsForCoach :many
-SELECT s.id, s.user_id, s.coach_id, s.scheduled_time, s.duration_minutes, s.status, s.topic, s.coach_notes, s.created_at, s.updated_at, s.confirmation_token, s.respond_by, s.confirmed_at, s.calendar_sequence, s.payment_status, s.amount_cents, s.currency, s.payment_ref, s.hold_expires_at, u.display_name AS user_name
+SELECT s.id, s.user_id, s.coach_id, s.scheduled_time, s.duration_minutes, s.status, s.topic, s.coach_notes, s.created_at, s.updated_at, s.confirmation_token, s.respond_by, s.confirmed_at, s.calendar_sequence, s.payment_status, s.amount_cents, s.currency, s.payment_ref, s.hold_expires_at, s.meeting_url, u.display_name AS user_name
 FROM coaching_sessions s
 JOIN users u ON u.id = s.user_id
 WHERE s.coach_id = $1
@@ -960,6 +1123,7 @@ type ListSessionsForCoachRow struct {
 	Currency          string     `json:"currency"`
 	PaymentRef        *string    `json:"payment_ref"`
 	HoldExpiresAt     *time.Time `json:"hold_expires_at"`
+	MeetingUrl        string     `json:"meeting_url"`
 	UserName          string     `json:"user_name"`
 }
 
@@ -992,6 +1156,7 @@ func (q *Queries) ListSessionsForCoach(ctx context.Context, arg ListSessionsForC
 			&i.Currency,
 			&i.PaymentRef,
 			&i.HoldExpiresAt,
+			&i.MeetingUrl,
 			&i.UserName,
 		); err != nil {
 			return nil, err
@@ -1005,7 +1170,7 @@ func (q *Queries) ListSessionsForCoach(ctx context.Context, arg ListSessionsForC
 }
 
 const listSessionsForUser = `-- name: ListSessionsForUser :many
-SELECT s.id, s.user_id, s.coach_id, s.scheduled_time, s.duration_minutes, s.status, s.topic, s.coach_notes, s.created_at, s.updated_at, s.confirmation_token, s.respond_by, s.confirmed_at, s.calendar_sequence, s.payment_status, s.amount_cents, s.currency, s.payment_ref, s.hold_expires_at, u.display_name AS coach_name
+SELECT s.id, s.user_id, s.coach_id, s.scheduled_time, s.duration_minutes, s.status, s.topic, s.coach_notes, s.created_at, s.updated_at, s.confirmation_token, s.respond_by, s.confirmed_at, s.calendar_sequence, s.payment_status, s.amount_cents, s.currency, s.payment_ref, s.hold_expires_at, s.meeting_url, u.display_name AS coach_name
 FROM coaching_sessions s
 JOIN users u ON u.id = s.coach_id
 WHERE s.user_id = $1
@@ -1038,6 +1203,7 @@ type ListSessionsForUserRow struct {
 	Currency          string     `json:"currency"`
 	PaymentRef        *string    `json:"payment_ref"`
 	HoldExpiresAt     *time.Time `json:"hold_expires_at"`
+	MeetingUrl        string     `json:"meeting_url"`
 	CoachName         string     `json:"coach_name"`
 }
 
@@ -1070,6 +1236,7 @@ func (q *Queries) ListSessionsForUser(ctx context.Context, arg ListSessionsForUs
 			&i.Currency,
 			&i.PaymentRef,
 			&i.HoldExpiresAt,
+			&i.MeetingUrl,
 			&i.CoachName,
 		); err != nil {
 			return nil, err
@@ -1181,7 +1348,7 @@ SET status = 'pending', payment_status = 'authorized', hold_expires_at = NULL,
     confirmation_token = $2, respond_by = $3, updated_at = now()
 WHERE id = $1 AND status = 'expired' AND hold_expires_at IS NOT NULL
   AND payment_status IN ('pending', 'expiring', 'failed')
-RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, confirmation_token, respond_by, confirmed_at, calendar_sequence, payment_status, amount_cents, currency, payment_ref, hold_expires_at
+RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, confirmation_token, respond_by, confirmed_at, calendar_sequence, payment_status, amount_cents, currency, payment_ref, hold_expires_at, meeting_url
 `
 
 type ReinstateAuthorizedSessionParams struct {
@@ -1216,6 +1383,7 @@ func (q *Queries) ReinstateAuthorizedSession(ctx context.Context, arg ReinstateA
 		&i.Currency,
 		&i.PaymentRef,
 		&i.HoldExpiresAt,
+		&i.MeetingUrl,
 	)
 	return i, err
 }
@@ -1227,7 +1395,7 @@ SET status = 'cancelled',
     hold_expires_at = NULL,
     updated_at = now()
 WHERE id = $1 AND status = 'pending_payment'
-RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, confirmation_token, respond_by, confirmed_at, calendar_sequence, payment_status, amount_cents, currency, payment_ref, hold_expires_at
+RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, confirmation_token, respond_by, confirmed_at, calendar_sequence, payment_status, amount_cents, currency, payment_ref, hold_expires_at, meeting_url
 `
 
 // For a hold abandoned by a participant while its checkout may still be open:
@@ -1256,6 +1424,7 @@ func (q *Queries) ReleasePendingPaymentSession(ctx context.Context, id uuid.UUID
 		&i.Currency,
 		&i.PaymentRef,
 		&i.HoldExpiresAt,
+		&i.MeetingUrl,
 	)
 	return i, err
 }
@@ -1279,7 +1448,7 @@ SET scheduled_time = $2,
     calendar_sequence = calendar_sequence + 1,
     updated_at = now()
 WHERE id = $1 AND status = $6
-RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, confirmation_token, respond_by, confirmed_at, calendar_sequence, payment_status, amount_cents, currency, payment_ref, hold_expires_at
+RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, confirmation_token, respond_by, confirmed_at, calendar_sequence, payment_status, amount_cents, currency, payment_ref, hold_expires_at, meeting_url
 `
 
 type RescheduleSessionParams struct {
@@ -1321,6 +1490,53 @@ func (q *Queries) RescheduleSession(ctx context.Context, arg RescheduleSessionPa
 		&i.Currency,
 		&i.PaymentRef,
 		&i.HoldExpiresAt,
+		&i.MeetingUrl,
+	)
+	return i, err
+}
+
+const updateSessionMeetingURL = `-- name: UpdateSessionMeetingURL :one
+UPDATE coaching_sessions
+SET meeting_url = $2,
+    calendar_sequence = calendar_sequence + 1,
+    updated_at = now()
+WHERE id = $1
+  AND status IN ('pending', 'scheduled')
+  AND meeting_url <> $2
+RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, confirmation_token, respond_by, confirmed_at, calendar_sequence, payment_status, amount_cents, currency, payment_ref, hold_expires_at, meeting_url
+`
+
+type UpdateSessionMeetingURLParams struct {
+	ID         uuid.UUID `json:"id"`
+	MeetingUrl string    `json:"meeting_url"`
+}
+
+// Matches no row when the session is not pending/scheduled or already holds
+// the value, so the lifecycle and no-op decisions are atomic with the write.
+func (q *Queries) UpdateSessionMeetingURL(ctx context.Context, arg UpdateSessionMeetingURLParams) (CoachingSession, error) {
+	row := q.db.QueryRow(ctx, updateSessionMeetingURL, arg.ID, arg.MeetingUrl)
+	var i CoachingSession
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.CoachID,
+		&i.ScheduledTime,
+		&i.DurationMinutes,
+		&i.Status,
+		&i.Topic,
+		&i.CoachNotes,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ConfirmationToken,
+		&i.RespondBy,
+		&i.ConfirmedAt,
+		&i.CalendarSequence,
+		&i.PaymentStatus,
+		&i.AmountCents,
+		&i.Currency,
+		&i.PaymentRef,
+		&i.HoldExpiresAt,
+		&i.MeetingUrl,
 	)
 	return i, err
 }
@@ -1329,7 +1545,7 @@ const updateSessionNotes = `-- name: UpdateSessionNotes :one
 UPDATE coaching_sessions
 SET coach_notes = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, confirmation_token, respond_by, confirmed_at, calendar_sequence, payment_status, amount_cents, currency, payment_ref, hold_expires_at
+RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, confirmation_token, respond_by, confirmed_at, calendar_sequence, payment_status, amount_cents, currency, payment_ref, hold_expires_at, meeting_url
 `
 
 type UpdateSessionNotesParams struct {
@@ -1360,6 +1576,7 @@ func (q *Queries) UpdateSessionNotes(ctx context.Context, arg UpdateSessionNotes
 		&i.Currency,
 		&i.PaymentRef,
 		&i.HoldExpiresAt,
+		&i.MeetingUrl,
 	)
 	return i, err
 }
@@ -1371,7 +1588,7 @@ SET status = $2,
     calendar_sequence = calendar_sequence + 1,
     updated_at = now()
 WHERE id = $1 AND status = $3
-RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, confirmation_token, respond_by, confirmed_at, calendar_sequence, payment_status, amount_cents, currency, payment_ref, hold_expires_at
+RETURNING id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, confirmation_token, respond_by, confirmed_at, calendar_sequence, payment_status, amount_cents, currency, payment_ref, hold_expires_at, meeting_url
 `
 
 type UpdateSessionStatusParams struct {
@@ -1405,6 +1622,7 @@ func (q *Queries) UpdateSessionStatus(ctx context.Context, arg UpdateSessionStat
 		&i.Currency,
 		&i.PaymentRef,
 		&i.HoldExpiresAt,
+		&i.MeetingUrl,
 	)
 	return i, err
 }
@@ -1462,6 +1680,47 @@ func (q *Queries) UpsertCoachProfile(ctx context.Context, arg UpsertCoachProfile
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Phases,
+	)
+	return i, err
+}
+
+const upsertCoachReview = `-- name: UpsertCoachReview :one
+INSERT INTO coach_reviews (coach_id, user_id, session_id, rating, comment)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (coach_id, user_id) DO UPDATE
+SET session_id = EXCLUDED.session_id,
+    rating = EXCLUDED.rating,
+    comment = EXCLUDED.comment,
+    updated_at = now()
+RETURNING id, coach_id, user_id, session_id, rating, comment, created_at, updated_at
+`
+
+type UpsertCoachReviewParams struct {
+	CoachID   uuid.UUID  `json:"coach_id"`
+	UserID    uuid.UUID  `json:"user_id"`
+	SessionID *uuid.UUID `json:"session_id"`
+	Rating    int16      `json:"rating"`
+	Comment   string     `json:"comment"`
+}
+
+func (q *Queries) UpsertCoachReview(ctx context.Context, arg UpsertCoachReviewParams) (CoachReview, error) {
+	row := q.db.QueryRow(ctx, upsertCoachReview,
+		arg.CoachID,
+		arg.UserID,
+		arg.SessionID,
+		arg.Rating,
+		arg.Comment,
+	)
+	var i CoachReview
+	err := row.Scan(
+		&i.ID,
+		&i.CoachID,
+		&i.UserID,
+		&i.SessionID,
+		&i.Rating,
+		&i.Comment,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }

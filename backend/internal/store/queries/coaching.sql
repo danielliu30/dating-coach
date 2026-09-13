@@ -14,19 +14,64 @@ SET headline = EXCLUDED.headline,
 RETURNING *;
 
 -- name: ListCoaches :many
-SELECT c.*, u.display_name, u.email
+SELECT c.*, u.display_name, u.email,
+       COALESCE(r.avg_rating, 0)::float8 AS avg_rating,
+       COALESCE(r.review_count, 0)::int AS review_count,
+       COALESCE(r.recommend_count, 0)::int AS recommend_count
 FROM coaches c
 JOIN users u ON u.id = c.user_id
+LEFT JOIN (
+    SELECT coach_id, AVG(rating) AS avg_rating, COUNT(*) AS review_count,
+           COUNT(*) FILTER (WHERE rating >= 4) AS recommend_count
+    FROM coach_reviews
+    GROUP BY coach_id
+) r ON r.coach_id = c.user_id
 WHERE (sqlc.narg('accepting_only')::boolean IS NOT TRUE OR c.accepting_clients)
   AND (sqlc.narg('phase')::text IS NULL OR sqlc.narg('phase')::text = ANY(c.phases))
-ORDER BY c.years_experience DESC, u.display_name
+ORDER BY COALESCE(r.avg_rating, 0) DESC, c.years_experience DESC, u.display_name
 LIMIT $1 OFFSET $2;
 
 -- name: GetCoach :one
-SELECT c.*, u.display_name, u.email
+SELECT c.*, u.display_name, u.email,
+       COALESCE(r.avg_rating, 0)::float8 AS avg_rating,
+       COALESCE(r.review_count, 0)::int AS review_count,
+       COALESCE(r.recommend_count, 0)::int AS recommend_count
 FROM coaches c
 JOIN users u ON u.id = c.user_id
+LEFT JOIN (
+    SELECT coach_id, AVG(rating) AS avg_rating, COUNT(*) AS review_count,
+           COUNT(*) FILTER (WHERE rating >= 4) AS recommend_count
+    FROM coach_reviews
+    GROUP BY coach_id
+) r ON r.coach_id = c.user_id
 WHERE c.user_id = $1;
+
+-- name: HasCompletedSession :one
+-- Whether the client has at least one completed session with the coach,
+-- optionally restricted to one session id.
+SELECT EXISTS (
+    SELECT 1 FROM coaching_sessions
+    WHERE coach_id = $1 AND user_id = $2 AND status = 'completed'
+      AND (sqlc.narg('session_id')::uuid IS NULL OR id = sqlc.narg('session_id')::uuid)
+);
+
+-- name: UpsertCoachReview :one
+INSERT INTO coach_reviews (coach_id, user_id, session_id, rating, comment)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (coach_id, user_id) DO UPDATE
+SET session_id = EXCLUDED.session_id,
+    rating = EXCLUDED.rating,
+    comment = EXCLUDED.comment,
+    updated_at = now()
+RETURNING *;
+
+-- name: ListCoachReviews :many
+SELECT r.*, u.display_name AS reviewer_name
+FROM coach_reviews r
+JOIN users u ON u.id = r.user_id
+WHERE r.coach_id = $1
+ORDER BY r.created_at DESC
+LIMIT $2 OFFSET $3;
 
 -- name: ReplaceCoachAvailability :exec
 DELETE FROM coach_availability WHERE coach_id = $1;
@@ -285,3 +330,22 @@ UPDATE coaching_sessions
 SET coach_notes = $2, updated_at = now()
 WHERE id = $1
 RETURNING *;
+
+-- name: UpdateSessionMeetingURL :one
+-- Matches no row when the session is not pending/scheduled or already holds
+-- the value, so the lifecycle and no-op decisions are atomic with the write.
+UPDATE coaching_sessions
+SET meeting_url = $2,
+    calendar_sequence = calendar_sequence + 1,
+    updated_at = now()
+WHERE id = $1
+  AND status IN ('pending', 'scheduled')
+  AND meeting_url <> $2
+RETURNING *;
+
+-- name: ListCoachReviewTexts :many
+SELECT rating, comment
+FROM coach_reviews
+WHERE coach_id = $1
+ORDER BY updated_at DESC, id
+LIMIT $2;

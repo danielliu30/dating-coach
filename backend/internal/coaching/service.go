@@ -9,10 +9,13 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -92,6 +95,38 @@ type Service struct {
 	holdTTL time.Duration
 	// appURL is where the payment provider sends the client back to.
 	appURL string
+	// reviews condenses written reviews into strengths; nil means only the
+	// deterministic recommendation line is produced.
+	reviews ReviewSummarizer
+}
+
+// ReviewSummarizer is the ml-analyzer's review-summary capability as the
+// coaching service needs it; analysis.MLClient satisfies it.
+type ReviewSummarizer interface {
+	SummarizeReviews(ctx context.Context, in ReviewSummaryRequest) (ReviewSummaryResult, error)
+}
+
+// ReviewSummaryRequest is what the summariser is given: the coach's name and
+// each review's private rating plus written comment.
+type ReviewSummaryRequest struct {
+	CoachName string              `json:"coach_name"`
+	Reviews   []ReviewSummaryItem `json:"reviews"`
+}
+
+// ReviewSummaryItem is one review as the summariser sees it.
+type ReviewSummaryItem struct {
+	Rating  int16  `json:"rating"`
+	Comment string `json:"comment"`
+}
+
+// ReviewSummaryResult is the summariser's answer, exposed as-is by
+// Service.ReviewSummary.
+type ReviewSummaryResult struct {
+	ModelVersion string   `json:"model_version"`
+	Recommended  int32    `json:"recommended"`
+	Total        int32    `json:"total"`
+	Summary      string   `json:"summary"`
+	Strengths    []string `json:"strengths"`
 }
 
 // NewService wires the service dependencies; called once from cmd/api and
@@ -100,7 +135,7 @@ type Service struct {
 // a pending_payment booking keeps its slot. appURL is the public app origin
 // the confirmation links in coach emails and the payment return URLs point at
 // and mailFrom the organizer address on calendar invites.
-func NewService(pool *pgxpool.Pool, queries *db.Queries, provider payments.Provider, holdTTL time.Duration, appURL, mailFrom string) *Service {
+func NewService(pool *pgxpool.Pool, queries *db.Queries, provider payments.Provider, holdTTL time.Duration, appURL, mailFrom string, reviews ReviewSummarizer) *Service {
 	return &Service{
 		pool:     pool,
 		queries:  queries,
@@ -108,6 +143,7 @@ func NewService(pool *pgxpool.Pool, queries *db.Queries, provider payments.Provi
 		payments: provider,
 		holdTTL:  holdTTL,
 		appURL:   appURL,
+		reviews:  reviews,
 	}
 }
 
@@ -131,6 +167,35 @@ type Coach struct {
 	Timezone         string   `json:"timezone"`
 	YearsExperience  int32    `json:"years_experience"`
 	AcceptingClients bool     `json:"accepting_clients"`
+	// AvgRating is the mean of client ratings (1-5); 0 when ReviewCount is 0.
+	AvgRating   float64 `json:"avg_rating"`
+	ReviewCount int32   `json:"review_count"`
+	// RecommendCount is how many reviews meet recommendThreshold; the client
+	// shows this instead of the numeric rating.
+	RecommendCount int32 `json:"recommend_count"`
+}
+
+// Review is a client's rating of a coach, written after a completed session.
+type Review struct {
+	ID           string `json:"id"`
+	CoachID      string `json:"coach_id"`
+	UserID       string `json:"user_id"`
+	ReviewerName string `json:"reviewer_name"`
+	SessionID    string `json:"session_id,omitempty"`
+	Rating       int16  `json:"rating"`
+	// Recommended is Rating >= recommendThreshold; what clients see.
+	Recommended bool      `json:"recommended"`
+	Comment     string    `json:"comment"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// CreateReviewInput is the client-supplied body of a review. SessionID is
+// optional; when set it must name a completed session between the two parties.
+type CreateReviewInput struct {
+	SessionID *uuid.UUID `json:"session_id"`
+	Rating    int16      `json:"rating"`
+	Comment   string     `json:"comment"`
 }
 
 // Session is the API view of a booking. CounterpartName is the other party's
@@ -145,11 +210,13 @@ type Session struct {
 	Status          string `json:"status"`
 	Topic           string `json:"topic"`
 	CoachNotes      string `json:"coach_notes,omitempty"`
-	RespondBy       string `json:"respond_by,omitempty"`
-	PaymentStatus   string `json:"payment_status"`
-	AmountCents     int32  `json:"amount_cents"`
-	Currency        string `json:"currency"`
-	HoldExpiresAt   string `json:"hold_expires_at,omitempty"`
+	// MeetingURL is the join link the coach set for the session, if any.
+	MeetingURL    string `json:"meeting_url,omitempty"`
+	RespondBy     string `json:"respond_by,omitempty"`
+	PaymentStatus string `json:"payment_status"`
+	AmountCents   int32  `json:"amount_cents"`
+	Currency      string `json:"currency"`
+	HoldExpiresAt string `json:"hold_expires_at,omitempty"`
 	// CheckoutURL is only set on the response to a booking that must be paid
 	// for; it is where the client authorises the payment.
 	CheckoutURL string `json:"checkout_url,omitempty"`
@@ -181,6 +248,7 @@ func sessionOf(s db.CoachingSession, counterpart string) Session {
 		Status:          s.Status,
 		Topic:           s.Topic,
 		CoachNotes:      s.CoachNotes,
+		MeetingURL:      s.MeetingUrl,
 		RespondBy:       rfc3339(s.RespondBy),
 		PaymentStatus:   s.PaymentStatus,
 		AmountCents:     s.AmountCents,
@@ -230,6 +298,9 @@ func (s *Service) ListCoaches(ctx context.Context, limit, offset int32, acceptin
 			Timezone:         row.Timezone,
 			YearsExperience:  row.YearsExperience,
 			AcceptingClients: row.AcceptingClients,
+			AvgRating:        row.AvgRating,
+			ReviewCount:      row.ReviewCount,
+			RecommendCount:   row.RecommendCount,
 		})
 	}
 	return out, nil
@@ -255,6 +326,9 @@ func (s *Service) GetCoach(ctx context.Context, coachID uuid.UUID) (Coach, error
 		Timezone:         row.Timezone,
 		YearsExperience:  row.YearsExperience,
 		AcceptingClients: row.AcceptingClients,
+		AvgRating:        row.AvgRating,
+		ReviewCount:      row.ReviewCount,
+		RecommendCount:   row.RecommendCount,
 	}, nil
 }
 
@@ -835,6 +909,7 @@ func (s *Service) ListForUser(ctx context.Context, userID uuid.UUID, status *str
 			Status:          row.Status,
 			Topic:           row.Topic,
 			CoachNotes:      row.CoachNotes,
+			MeetingURL:      row.MeetingUrl,
 			RespondBy:       rfc3339(row.RespondBy),
 			PaymentStatus:   row.PaymentStatus,
 			AmountCents:     row.AmountCents,
@@ -868,6 +943,7 @@ func (s *Service) ListForCoach(ctx context.Context, coachID uuid.UUID, status *s
 			Status:          row.Status,
 			Topic:           row.Topic,
 			CoachNotes:      row.CoachNotes,
+			MeetingURL:      row.MeetingUrl,
 			RespondBy:       rfc3339(row.RespondBy),
 			PaymentStatus:   row.PaymentStatus,
 			AmountCents:     row.AmountCents,
@@ -1059,4 +1135,266 @@ func (s *Service) SetNotes(ctx context.Context, sessionID, coachID uuid.UUID, no
 		return Session{}, fmt.Errorf("update notes: %w", err)
 	}
 	return sessionOf(updated, ""), nil
+}
+
+// SetMeetingURL stores the join link clients use to attend the session; only
+// the session's coach may, and only while the session is pending or scheduled
+// (a finished or cancelled session yields ErrInvalidInput). The URL must be
+// empty (clearing it) or an absolute http(s) URL with a host, otherwise
+// ErrInvalidInput. Changing the link on a scheduled session bumps the calendar
+// sequence and emails both parties an updated invite so their calendars carry
+// the new location; a pending session is simply updated, since its confirmed
+// invite has not been sent yet. Setting the value it already holds is a no-op.
+func (s *Service) SetMeetingURL(ctx context.Context, sessionID, coachID uuid.UUID, meetingURL string) (Session, error) {
+	meetingURL, err := normaliseMeetingURL(meetingURL)
+	if err != nil {
+		return Session{}, err
+	}
+	session, err := s.participant(ctx, sessionID, coachID)
+	if err != nil {
+		return Session{}, err
+	}
+	if session.CoachID != coachID {
+		return Session{}, ErrForbidden
+	}
+	if err := meetingLinkAllowed(session); err != nil {
+		return Session{}, err
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Session{}, fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := s.queries.WithTx(tx)
+
+	updated, err := q.UpdateSessionMeetingURL(ctx, db.UpdateSessionMeetingURLParams{ID: sessionID, MeetingUrl: meetingURL})
+	if err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return Session{}, fmt.Errorf("update meeting url: %w", err)
+		}
+		// The conditional UPDATE matched nothing: a concurrent change moved the
+		// session to a terminal status or already stored this value. Re-read
+		// and report whichever it was.
+		current, err := q.GetCoachingSession(ctx, sessionID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return Session{}, ErrNotFound
+			}
+			return Session{}, fmt.Errorf("reload session: %w", err)
+		}
+		if err := meetingLinkAllowed(current); err != nil {
+			return Session{}, err
+		}
+		return sessionOf(current, ""), nil
+	}
+	if updated.Status == StatusScheduled {
+		parties, err := q.GetSessionParties(ctx, sessionID)
+		if err != nil {
+			return Session{}, fmt.Errorf("load session parties: %w", err)
+		}
+		if err := s.mail.meetingLinkChanged(ctx, q, parties, false); err != nil {
+			return Session{}, err
+		}
+		if err := s.mail.meetingLinkChanged(ctx, q, parties, true); err != nil {
+			return Session{}, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Session{}, fmt.Errorf("commit meeting url: %w", err)
+	}
+	return sessionOf(updated, ""), nil
+}
+
+// meetingLinkAllowed reports ErrInvalidInput when the session's status no
+// longer admits a meeting link (only pending and scheduled sessions do).
+func meetingLinkAllowed(session db.CoachingSession) error {
+	if session.Status != StatusPending && session.Status != StatusScheduled {
+		return fmt.Errorf("%w: a %s session cannot take a meeting link", ErrInvalidInput, session.Status)
+	}
+	return nil
+}
+
+// normaliseMeetingURL trims raw and returns it unchanged when empty or when it
+// parses as an absolute http or https URL with a host; anything else is
+// ErrInvalidInput so a bare "zoom.us/j/1" or a javascript: link is never
+// stored and later rendered as a tappable link.
+func normaliseMeetingURL(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return "", fmt.Errorf("%w: meeting_url must be an http(s) URL", ErrInvalidInput)
+	}
+	return raw, nil
+}
+
+// maxReviewComment bounds the free-text comment on a review.
+const maxReviewComment = 2000
+
+// recommendThreshold is the lowest rating that counts as recommending the
+// coach; the app never shows the rating itself.
+const recommendThreshold = 4
+
+// maxSummaryReviews caps how many (most recently written) reviews are sent to
+// the summariser.
+const maxSummaryReviews = 200
+
+// summaryTimeout bounds the wait for ml-analyzer before the aggregate fallback
+// is used; the page already has everything it needs locally.
+const summaryTimeout = 8 * time.Second
+
+// CreateReview records (or replaces) the caller's review of a coach. It is
+// gated: the caller must have at least one completed session with the coach,
+// or, when in.SessionID is set, that session must be theirs, with that coach,
+// and completed — otherwise ErrForbidden. Rating must be 1-5 and the comment at
+// most maxReviewComment characters, otherwise ErrInvalidInput. A second review
+// for the same coach overwrites the first (one review per client per coach).
+// A coach may not review themselves (ErrForbidden), even via a self-booking.
+func (s *Service) CreateReview(ctx context.Context, coachID, userID uuid.UUID, in CreateReviewInput) (Review, error) {
+	if coachID == userID {
+		return Review{}, ErrForbidden
+	}
+	if in.Rating < 1 || in.Rating > 5 {
+		return Review{}, fmt.Errorf("%w: rating must be between 1 and 5", ErrInvalidInput)
+	}
+	comment := strings.TrimSpace(in.Comment)
+	if utf8.RuneCountInString(comment) > maxReviewComment {
+		return Review{}, fmt.Errorf("%w: comment exceeds %d characters", ErrInvalidInput, maxReviewComment)
+	}
+	if _, err := s.queries.GetCoach(ctx, coachID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Review{}, ErrNotFound
+		}
+		return Review{}, fmt.Errorf("load coach: %w", err)
+	}
+	completed, err := s.queries.HasCompletedSession(ctx, db.HasCompletedSessionParams{
+		CoachID:   coachID,
+		UserID:    userID,
+		SessionID: in.SessionID,
+	})
+	if err != nil {
+		return Review{}, fmt.Errorf("check completed session: %w", err)
+	}
+	if !completed {
+		return Review{}, ErrForbidden
+	}
+	row, err := s.queries.UpsertCoachReview(ctx, db.UpsertCoachReviewParams{
+		CoachID:   coachID,
+		UserID:    userID,
+		SessionID: in.SessionID,
+		Rating:    in.Rating,
+		Comment:   comment,
+	})
+	if err != nil {
+		return Review{}, fmt.Errorf("upsert review: %w", err)
+	}
+	reviewer, err := s.queries.GetUserByID(ctx, userID)
+	if err != nil {
+		return Review{}, fmt.Errorf("load reviewer: %w", err)
+	}
+	return reviewOf(row, reviewer.DisplayName), nil
+}
+
+// ListReviews returns the coach's reviews, newest first. It is public to any
+// authenticated caller and returns ErrNotFound for an unknown coach.
+func (s *Service) ListReviews(ctx context.Context, coachID uuid.UUID, limit, offset int32) ([]Review, error) {
+	if _, err := s.queries.GetCoach(ctx, coachID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("load coach: %w", err)
+	}
+	rows, err := s.queries.ListCoachReviews(ctx, db.ListCoachReviewsParams{CoachID: coachID, Limit: limit, Offset: offset})
+	if err != nil {
+		return nil, fmt.Errorf("list reviews: %w", err)
+	}
+	out := make([]Review, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, reviewOf(db.CoachReview{
+			ID: r.ID, CoachID: r.CoachID, UserID: r.UserID, SessionID: r.SessionID,
+			Rating: r.Rating, Comment: r.Comment, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
+		}, r.ReviewerName))
+	}
+	return out, nil
+}
+
+// reviewOf converts a stored review plus its reviewer's display name into the
+// API shape; a nil session id becomes an omitted field.
+func reviewOf(r db.CoachReview, reviewerName string) Review {
+	out := Review{
+		ID:           r.ID.String(),
+		CoachID:      r.CoachID.String(),
+		UserID:       r.UserID.String(),
+		ReviewerName: reviewerName,
+		Rating:       r.Rating,
+		Recommended:  r.Rating >= recommendThreshold,
+		Comment:      r.Comment,
+		CreatedAt:    r.CreatedAt,
+		UpdatedAt:    r.UpdatedAt,
+	}
+	if r.SessionID != nil {
+		out.SessionID = r.SessionID.String()
+	}
+	return out
+}
+
+// ReviewSummary condenses the coach's reviews into a recommendation line and
+// named strengths for the coach page. Unknown coach → ErrNotFound. With no
+// summariser configured, or when it fails, it degrades to the deterministic
+// recommendation line (from the stored aggregates) with no strengths, so the
+// page never breaks because ml-analyzer is down.
+func (s *Service) ReviewSummary(ctx context.Context, coachID uuid.UUID) (ReviewSummaryResult, error) {
+	coach, err := s.GetCoach(ctx, coachID)
+	if err != nil {
+		return ReviewSummaryResult{}, err
+	}
+	fallback := ReviewSummaryResult{
+		ModelVersion: "aggregate",
+		Recommended:  coach.RecommendCount,
+		Total:        coach.ReviewCount,
+		Summary:      recommendationLine(coach.RecommendCount, coach.ReviewCount, coach.DisplayName),
+		Strengths:    []string{},
+	}
+	if s.reviews == nil || coach.ReviewCount == 0 {
+		return fallback, nil
+	}
+	rows, err := s.queries.ListCoachReviewTexts(ctx, db.ListCoachReviewTextsParams{CoachID: coachID, Limit: maxSummaryReviews})
+	if err != nil {
+		return ReviewSummaryResult{}, fmt.Errorf("load reviews: %w", err)
+	}
+	req := ReviewSummaryRequest{CoachName: coach.DisplayName, Reviews: make([]ReviewSummaryItem, 0, len(rows))}
+	for _, r := range rows {
+		req.Reviews = append(req.Reviews, ReviewSummaryItem{Rating: r.Rating, Comment: r.Comment})
+	}
+	mlCtx, cancel := context.WithTimeout(ctx, summaryTimeout)
+	defer cancel()
+	out, err := s.reviews.SummarizeReviews(mlCtx, req)
+	if err != nil {
+		slog.WarnContext(ctx, "review summary unavailable, using aggregates", "coach_id", coachID, "err", err)
+		return fallback, nil
+	}
+	if out.Strengths == nil {
+		out.Strengths = []string{}
+	}
+	// The summariser only saw a sample; the stored aggregates own the counts and
+	// the headline built from them.
+	sampleLine := recommendationLine(out.Recommended, out.Total, coach.DisplayName)
+	out.Summary = strings.TrimSpace(fallback.Summary + " " + strings.TrimSpace(strings.TrimPrefix(out.Summary, sampleLine)))
+	out.Recommended, out.Total = fallback.Recommended, fallback.Total
+	return out, nil
+}
+
+// recommendationLine phrases the recommend/total counts without numbers of
+// stars; empty when there are no reviews.
+func recommendationLine(recommended, total int32, coachName string) string {
+	if total == 0 {
+		return ""
+	}
+	if recommended == total {
+		return fmt.Sprintf("Every client so far recommends %s.", coachName)
+	}
+	return fmt.Sprintf("%d of %d clients recommend %s.", recommended, total, coachName)
 }

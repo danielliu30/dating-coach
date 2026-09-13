@@ -69,6 +69,17 @@ type CoachAvailability struct {
 	EndMinute   int32     `json:"end_minute"`
 }
 
+type CoachReview struct {
+	ID        uuid.UUID  `json:"id"`
+	CoachID   uuid.UUID  `json:"coach_id"`
+	UserID    uuid.UUID  `json:"user_id"`
+	SessionID *uuid.UUID `json:"session_id"`
+	Rating    int16      `json:"rating"`
+	Comment   string     `json:"comment"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
+}
+
 type CoachingSession struct {
 	ID                uuid.UUID  `json:"id"`
 	UserID            uuid.UUID  `json:"user_id"`
@@ -89,6 +100,7 @@ type CoachingSession struct {
 	Currency          string     `json:"currency"`
 	PaymentRef        *string    `json:"payment_ref"`
 	HoldExpiresAt     *time.Time `json:"hold_expires_at"`
+	MeetingUrl        string     `json:"meeting_url"`
 }
 
 type Conversation struct {

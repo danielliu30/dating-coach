@@ -33,6 +33,9 @@ func invite(s db.GetSessionPartiesRow, organizer string) string {
 	if s.Topic != "" {
 		description = "Topic: " + s.Topic
 	}
+	if s.MeetingUrl != "" {
+		description += "\nJoin: " + s.MeetingUrl
+	}
 
 	var b strings.Builder
 	line := func(format string, args ...any) {
@@ -51,6 +54,9 @@ func invite(s db.GetSessionPartiesRow, organizer string) string {
 	line("DTEND:%s", end.UTC().Format(icsTimeLayout))
 	line("SUMMARY:%s", escapeICS(summary))
 	line("DESCRIPTION:%s", escapeICS(description))
+	if s.MeetingUrl != "" {
+		line("LOCATION:%s", escapeICS(s.MeetingUrl))
+	}
 	line("STATUS:%s", status)
 	line("ORGANIZER:mailto:%s", organizer)
 	line("ATTENDEE;CN=%s;ROLE=REQ-PARTICIPANT:mailto:%s", paramICS(s.CoachName), s.CoachEmail)

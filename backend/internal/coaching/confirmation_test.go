@@ -124,7 +124,7 @@ func testService(t *testing.T) (*Service, *pgxpool.Pool) {
 		t.Fatalf("connect postgres: %v", err)
 	}
 	t.Cleanup(pool.Close)
-	return NewService(pool, db.New(pool), payments.Disabled{}, 15*time.Minute, "http://app.test", "no-reply@example.test"), pool
+	return NewService(pool, db.New(pool), payments.Disabled{}, 15*time.Minute, "http://app.test", "no-reply@example.test", nil), pool
 }
 
 // insertUser creates a user with the given role and registers its removal,
@@ -555,4 +555,208 @@ func TestCancellationUpdatesBothCalendars(t *testing.T) {
 	if ics := icsFor(t, pool, emailOf(t, pool, coach), "Cancelled: session with"); !strings.Contains(ics, "METHOD:CANCEL") || !strings.Contains(ics, "UID:"+s.ID+"@") {
 		t.Fatalf("coach's own cancel update should cancel their event:\n%s", ics)
 	}
+}
+
+func TestMeetingLinkFollowsLifecycleAndUpdatesCalendars(t *testing.T) {
+	svc, pool := testService(t)
+	ctx := context.Background()
+	coach, client, stranger := insertCoach(t, pool), insertUser(t, pool, "user"), insertCoach(t, pool)
+
+	s, err := svc.BookSession(ctx, client, BookInput{CoachID: coach.String(), ScheduledTime: nextSlot()})
+	if err != nil {
+		t.Fatalf("book: %v", err)
+	}
+	sid := uuid.MustParse(s.ID)
+	if _, err := svc.SetMeetingURL(ctx, sid, stranger, "https://meet.test/a"); !errors.Is(err, ErrForbidden) && !errors.Is(err, ErrNotFound) {
+		t.Fatalf("another coach setting link: err = %v", err)
+	}
+	if _, err := svc.SetMeetingURL(ctx, sid, coach, "meet.test/a"); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("relative url: err = %v, want ErrInvalidInput", err)
+	}
+	// While pending only the row changes; the confirmed invite carries the link later.
+	if _, err := svc.SetMeetingURL(ctx, sid, coach, "https://meet.test/a"); err != nil {
+		t.Fatalf("set while pending: %v", err)
+	}
+	if got := outboxFor(t, pool, emailOf(t, pool, client)); len(got) != 1 {
+		t.Fatalf("client emails while pending = %v, want only the receipt", got)
+	}
+	if _, err := svc.RespondAsCoach(ctx, sid, coach, "confirm"); err != nil {
+		t.Fatalf("confirm: %v", err)
+	}
+	if ics := icsFor(t, pool, emailOf(t, pool, client), "confirmed"); !strings.Contains(ics, "LOCATION:https://meet.test/a") {
+		t.Fatalf("confirmation invite = %q, want LOCATION with the link", ics)
+	}
+	// Unchanged value is a no-op: no extra mail, no sequence bump.
+	if _, err := svc.SetMeetingURL(ctx, sid, coach, "https://meet.test/a"); err != nil {
+		t.Fatalf("set same: %v", err)
+	}
+	if got := outboxFor(t, pool, emailOf(t, pool, client)); len(got) != 2 {
+		t.Fatalf("client emails after no-op = %v, want receipt and confirmation", got)
+	}
+	updated, err := svc.SetMeetingURL(ctx, sid, coach, "https://meet.test/b")
+	if err != nil {
+		t.Fatalf("replace while scheduled: %v", err)
+	}
+	if updated.MeetingURL != "https://meet.test/b" {
+		t.Fatalf("meeting url = %q, want the new link", updated.MeetingURL)
+	}
+	for _, who := range []uuid.UUID{client, coach} {
+		got := outboxFor(t, pool, emailOf(t, pool, who))
+		if len(got) != 3 || !strings.Contains(got[2], "Join link") {
+			t.Fatalf("emails for %s = %v, want a join-link update last", who, got)
+		}
+		ics := icsFor(t, pool, emailOf(t, pool, who), "Join link")
+		// Sequence: 1 pending set, 2 confirmation, 3 this replacement.
+		if !strings.Contains(ics, "LOCATION:https://meet.test/b") || !strings.Contains(ics, "SEQUENCE:3") {
+			t.Fatalf("join-link invite for %s = %q, want new LOCATION with SEQUENCE:3", who, ics)
+		}
+	}
+	if _, err := svc.SetStatus(ctx, sid, client, StatusCancelled); err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+	if _, err := svc.SetMeetingURL(ctx, sid, coach, "https://meet.test/c"); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("set on cancelled: err = %v, want ErrInvalidInput", err)
+	}
+}
+
+func TestInviteCarriesMeetingURL(t *testing.T) {
+	row := db.GetSessionPartiesRow{
+		ID:              uuid.New(),
+		Status:          StatusScheduled,
+		ScheduledTime:   time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC),
+		DurationMinutes: 45,
+		UserName:        "Ana",
+		CoachName:       "Coach",
+		MeetingUrl:      "https://meet.example.test/abc,1",
+	}
+	ics := invite(row, "no-reply@example.test")
+	if !strings.Contains(ics, `LOCATION:https://meet.example.test/abc\,1`+"\r\n") {
+		t.Errorf("invite lacks escaped LOCATION: %q", ics)
+	}
+	if !strings.Contains(ics, `Join: https://meet.example.test/abc\,1`) {
+		t.Errorf("invite DESCRIPTION lacks join link: %q", ics)
+	}
+	row.MeetingUrl = ""
+	if strings.Contains(invite(row, "no-reply@example.test"), "LOCATION:") {
+		t.Error("invite has LOCATION without a meeting url")
+	}
+}
+
+func TestNormaliseMeetingURL(t *testing.T) {
+	for _, ok := range []string{"", "  ", "https://zoom.us/j/1", "http://meet.example.test/x?y=1"} {
+		if _, err := normaliseMeetingURL(ok); err != nil {
+			t.Errorf("%q: unexpected error %v", ok, err)
+		}
+	}
+	if got, _ := normaliseMeetingURL("  "); got != "" {
+		t.Errorf("blank should clear, got %q", got)
+	}
+	for _, bad := range []string{"zoom.us/j/1", "ftp://x.test", "javascript:alert(1)", "https://", "not a url"} {
+		if _, err := normaliseMeetingURL(bad); !errors.Is(err, ErrInvalidInput) {
+			t.Errorf("%q: expected ErrInvalidInput, got %v", bad, err)
+		}
+	}
+}
+
+func TestReviewsRequireCompletedSession(t *testing.T) {
+	svc, pool := testService(t)
+	ctx := context.Background()
+	coach, client, other := insertCoach(t, pool), insertUser(t, pool, "user"), insertUser(t, pool, "user")
+
+	if _, err := svc.CreateReview(ctx, coach, client, CreateReviewInput{Rating: 5}); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("review with no session: err = %v, want ErrForbidden", err)
+	}
+	if _, err := svc.CreateReview(ctx, coach, coach, CreateReviewInput{Rating: 5}); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("coach reviewing themselves: err = %v, want ErrForbidden", err)
+	}
+	s, err := svc.BookSession(ctx, client, BookInput{CoachID: coach.String(), ScheduledTime: nextSlot()})
+	if err != nil {
+		t.Fatalf("book: %v", err)
+	}
+	sid := uuid.MustParse(s.ID)
+	if _, err := svc.RespondAsCoach(ctx, sid, coach, "confirm"); err != nil {
+		t.Fatalf("confirm: %v", err)
+	}
+	if _, err := svc.CreateReview(ctx, coach, client, CreateReviewInput{Rating: 5}); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("review of scheduled (not completed) session: err = %v, want ErrForbidden", err)
+	}
+	if _, err := svc.SetStatus(ctx, sid, coach, StatusCompleted); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	if _, err := svc.CreateReview(ctx, coach, other, CreateReviewInput{SessionID: &sid, Rating: 5}); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("stranger citing someone else's session: err = %v, want ErrForbidden", err)
+	}
+	if _, err := svc.CreateReview(ctx, coach, client, CreateReviewInput{Rating: 6}); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("rating 6: err = %v, want ErrInvalidInput", err)
+	}
+	first, err := svc.CreateReview(ctx, coach, client, CreateReviewInput{SessionID: &sid, Rating: 4, Comment: "  solid  "})
+	if err != nil {
+		t.Fatalf("review: %v", err)
+	}
+	if first.Rating != 4 || first.Comment != "solid" || first.SessionID != s.ID {
+		t.Fatalf("review = %+v", first)
+	}
+	// A second review by the same client replaces the first rather than adding one.
+	second, err := svc.CreateReview(ctx, coach, client, CreateReviewInput{Rating: 2})
+	if err != nil {
+		t.Fatalf("re-review: %v", err)
+	}
+	if second.ID != first.ID || second.Rating != 2 {
+		t.Fatalf("second review = %+v, want same id with rating 2", second)
+	}
+	reviews, err := svc.ListReviews(ctx, coach, 10, 0)
+	if err != nil || len(reviews) != 1 || reviews[0].Rating != 2 || reviews[0].ReviewerName == "" {
+		t.Fatalf("list = %+v, %v", reviews, err)
+	}
+	c, err := svc.GetCoach(ctx, coach)
+	if err != nil || c.ReviewCount != 1 || c.AvgRating != 2 || c.RecommendCount != 0 {
+		t.Fatalf("coach aggregates = %+v, %v", c, err)
+	}
+	if reviews[0].Recommended {
+		t.Fatalf("a rating of 2 must not count as a recommendation: %+v", reviews[0])
+	}
+
+	// Without a summariser the summary is the deterministic aggregate line.
+	summary, err := svc.ReviewSummary(ctx, coach)
+	if err != nil || summary.ModelVersion != "aggregate" || summary.Total != 1 || summary.Recommended != 0 ||
+		summary.Summary != "0 of 1 clients recommend "+c.DisplayName+"." || len(summary.Strengths) != 0 {
+		t.Fatalf("aggregate summary = %+v, %v", summary, err)
+	}
+
+	// A configured summariser receives the private ratings and comments and its
+	// answer is passed through; when it fails the aggregate line is used instead.
+	// The summariser's own (sample-based) counts and headline are replaced by the
+	// authoritative aggregates; its overview and strengths are kept.
+	fake := &fakeSummarizer{out: ReviewSummaryResult{ModelVersion: "fake", Recommended: 1, Total: 1,
+		Summary: "Every client so far recommends " + c.DisplayName + ". Clients say…", Strengths: []string{"Honest, direct feedback"}}}
+	svc.reviews = fake
+	summary, err = svc.ReviewSummary(ctx, coach)
+	if err != nil || summary.ModelVersion != "fake" || len(summary.Strengths) != 1 || summary.Recommended != 0 || summary.Total != 1 ||
+		summary.Summary != "0 of 1 clients recommend "+c.DisplayName+". Clients say…" {
+		t.Fatalf("summarised = %+v, %v", summary, err)
+	}
+	if len(fake.got.Reviews) != 1 || fake.got.Reviews[0].Rating != 2 || fake.got.CoachName != c.DisplayName {
+		t.Fatalf("summariser input = %+v", fake.got)
+	}
+	fake.err = errors.New("ml down")
+	summary, err = svc.ReviewSummary(ctx, coach)
+	if err != nil || summary.ModelVersion != "aggregate" {
+		t.Fatalf("fallback summary = %+v, %v", summary, err)
+	}
+	if _, err := svc.ReviewSummary(ctx, uuid.New()); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown coach summary err = %v, want ErrNotFound", err)
+	}
+}
+
+// fakeSummarizer records the request it was given and replies with a canned
+// result or error.
+type fakeSummarizer struct {
+	got ReviewSummaryRequest
+	out ReviewSummaryResult
+	err error
+}
+
+func (f *fakeSummarizer) SummarizeReviews(_ context.Context, in ReviewSummaryRequest) (ReviewSummaryResult, error) {
+	f.got = in
+	return f.out, f.err
 }
