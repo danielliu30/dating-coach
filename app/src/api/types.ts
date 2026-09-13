@@ -94,6 +94,15 @@ export interface CoachReview {
   updated_at: string;
 }
 
+/** What the coach page shows in place of a star rating: recommendation counts, an overview and named strengths. */
+export interface ReviewSummary {
+  model_version: string;
+  recommended: number;
+  total: number;
+  summary: string;
+  strengths: string[];
+}
+
 export interface AvailabilityWindow {
   weekday: number;
   start_minute: number;
