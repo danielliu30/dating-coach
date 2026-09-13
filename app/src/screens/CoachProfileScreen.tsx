@@ -3,7 +3,7 @@ import React, { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { ApiError, api } from '../api/client';
-import { DATING_PHASES, type AvailabilityWindow, type DatingPhase } from '../api/types';
+import { DATING_PHASES, type AvailabilityWindow, type CoachApprovalStatus, type DatingPhase } from '../api/types';
 import { Avatar, GradientCard, SectionHeader, SkeletonCard, StatusPill } from '../components/kit';
 import { Badge, Button, Chip, Field, Screen } from '../components/ui';
 import { PHASE_LABELS, toggle } from '../lib/phases';
@@ -32,6 +32,29 @@ const draftOf = (window: AvailabilityWindow, index: number): WindowDraft => ({
 const describe = (reason: unknown): string =>
   reason instanceof Error ? reason.message : 'unknown error';
 
+/**
+ * Banner copy for a coach whose profile is not (yet) shown to clients, or null
+ * when the coach is approved and nothing needs saying.
+ */
+const approvalNotice = (status: CoachApprovalStatus): { title: string; body: string; tone: string } | null => {
+  switch (status) {
+    case 'pending':
+      return {
+        title: 'Your profile is under review',
+        body: 'Clients can’t see or book you until an admin approves it. You can keep editing in the meantime.',
+        tone: colors.neutral,
+      };
+    case 'rejected':
+      return {
+        title: 'Your profile was not approved',
+        body: 'Clients can’t see or book you. Update your profile and reach out to us to request another review.',
+        tone: colors.flat,
+      };
+    default:
+      return null;
+  }
+};
+
 const parseClock = (value: string): number | null => {
   const match = /^(\d{1,2}):(\d{2})$/.exec(value.trim());
   if (!match) return null;
@@ -49,6 +72,8 @@ export default function CoachProfileScreen(): React.ReactElement {
   const [timezone, setTimezone] = useState('UTC');
   const [years, setYears] = useState('3');
   const [accepting, setAccepting] = useState(true);
+  // Null until the saved profile arrives (or a fresh coach saves one).
+  const [approval, setApproval] = useState<CoachApprovalStatus | null>(null);
 
   const [windows, setWindows] = useState<WindowDraft[]>(() =>
     [1, 2, 3, 4, 5].map((weekday) => ({ key: `default-${weekday}`, weekday, start: '17:00', end: '21:00' })),
@@ -82,6 +107,7 @@ export default function CoachProfileScreen(): React.ReactElement {
         setTimezone(profile.value.timezone);
         setYears(String(profile.value.years_experience));
         setAccepting(profile.value.accepting_clients);
+        setApproval(profile.value.approval_status);
         // 404 simply means the coach has not published a profile yet.
       } else if (!(profile.reason instanceof ApiError && profile.reason.status === 404)) {
         setLoadFailed(true);
@@ -121,7 +147,7 @@ export default function CoachProfileScreen(): React.ReactElement {
     setError(null);
     setStatus(null);
     try {
-      await api.upsertCoachProfile({
+      const saved = await api.upsertCoachProfile({
         headline: headline.trim(),
         bio: bio.trim(),
         specialties: specialties
@@ -134,6 +160,7 @@ export default function CoachProfileScreen(): React.ReactElement {
         years_experience: Number(years) || 0,
         accepting_clients: accepting,
       });
+      setApproval(saved.approval_status);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'could not save profile');
       setBusy(false);
@@ -164,6 +191,7 @@ export default function CoachProfileScreen(): React.ReactElement {
 
   const removeWindow = (key: string) => setWindows((current) => current.filter((w) => w.key !== key));
 
+  const notice = approval ? approvalNotice(approval) : null;
   const name = user?.display_name ?? 'You';
   const specialtyList = specialties
     .split(',')
@@ -182,6 +210,15 @@ export default function CoachProfileScreen(): React.ReactElement {
 
   return (
     <Screen>
+      {notice ? (
+        <View accessible accessibilityRole="alert" style={[styles.notice, { borderColor: notice.tone }]}>
+          <Ionicons name="time-outline" size={20} color={notice.tone} />
+          <View style={{ flex: 1, gap: 2 }}>
+            <Text style={[type.subheading, { color: notice.tone }]}>{notice.title}</Text>
+            <Text style={type.caption}>{notice.body}</Text>
+          </View>
+        </View>
+      ) : null}
       <GradientCard gradient="meadow">
         <View style={styles.previewRow}>
           <Avatar name={name} size={64} />
@@ -340,6 +377,15 @@ export default function CoachProfileScreen(): React.ReactElement {
 }
 
 const styles = StyleSheet.create({
+  notice: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    padding: 12,
+    borderRadius: radii.md,
+    borderWidth: 1.5,
+    backgroundColor: colors.surfaceAlt,
+  },
   previewRow: { flexDirection: 'row', alignItems: 'center', gap: 14 },
   previewPills: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   toggle: {
