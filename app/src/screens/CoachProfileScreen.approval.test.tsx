@@ -1,9 +1,21 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import React from 'react';
 
 import { ApiError, api } from '../api/client';
 import type { Coach } from '../api/types';
 import CoachProfileScreen from './CoachProfileScreen';
+
+// Drive focus by hand so a test can "return to the tab" without a navigator.
+const mockFocus: { effect: (() => void | (() => void)) | null } = { effect: null };
+jest.mock('@react-navigation/native', () => {
+  const { useEffect } = require('react');
+  return {
+    useFocusEffect: (effect: () => void | (() => void)) => {
+      mockFocus.effect = effect;
+      useEffect(effect, [effect]);
+    },
+  };
+});
 
 jest.mock('../api/client', () => {
   const actual = jest.requireActual('../api/client');
@@ -69,6 +81,20 @@ describe('CoachProfileScreen approval banner', () => {
     render(<CoachProfileScreen />);
     await screen.findByDisplayValue('Openers that land');
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('re-reads only the approval status when the tab regains focus, keeping form edits', async () => {
+    mocked.getCoach.mockResolvedValue(coach('pending'));
+    render(<CoachProfileScreen />);
+    await screen.findByText(REVIEW);
+    fireEvent.changeText(screen.getByDisplayValue('Openers that land'), 'Edited headline');
+
+    mocked.getCoach.mockResolvedValue(coach('approved'));
+    await act(async () => {
+      mockFocus.effect?.();
+    });
+    await waitFor(() => expect(screen.queryByText(REVIEW)).toBeNull());
+    expect(screen.getByDisplayValue('Edited headline')).toBeTruthy();
   });
 
   it('shows the banner after a first-time save, when there was no profile to load', async () => {

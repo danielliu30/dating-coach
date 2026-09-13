@@ -1,5 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
-import React, { useEffect, useState } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { ApiError, api } from '../api/client';
@@ -127,6 +128,26 @@ export default function CoachProfileScreen(): React.ReactElement {
       cancelled = true;
     };
   }, [coachID]);
+
+  // An admin decides approval outside this screen and the tab stays mounted
+  // between visits, so re-read just the status on focus; form edits are kept.
+  useFocusEffect(
+    useCallback(() => {
+      if (!coachID) return;
+      let cancelled = false;
+      api
+        .getCoach(coachID)
+        .then((profile) => {
+          if (!cancelled) setApproval(profile.approval_status);
+        })
+        .catch(() => {
+          // The load effect already reports failures; a 404 means nothing saved yet.
+        });
+      return () => {
+        cancelled = true;
+      };
+    }, [coachID]),
+  );
 
   const save = async () => {
     if (loadFailed) {
