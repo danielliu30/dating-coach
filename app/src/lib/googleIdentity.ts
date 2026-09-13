@@ -58,8 +58,12 @@ function loadGoogleIdentityServices(): Promise<GoogleIdentityServices> {
     script.src = GIS_SCRIPT_URL;
     script.async = true;
     script.onload = () => {
-      if (window.google) resolve(window.google);
-      else reject(new Error('Google sign-in did not load'));
+      if (window.google) {
+        resolve(window.google);
+      } else {
+        scriptLoad = null;
+        reject(new Error('Google sign-in did not load'));
+      }
     };
     script.onerror = () => {
       scriptLoad = null;
