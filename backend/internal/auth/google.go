@@ -143,7 +143,7 @@ func (v *GoogleVerifier) key(ctx context.Context, kid string) (*rsa.PublicKey, e
 	}
 	keys, err := v.fetch(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrGoogleKeysUnavailable, err)
+		return nil, fmt.Errorf("%w: %w", ErrGoogleKeysUnavailable, err)
 	}
 	v.keys, v.fetchedAt = keys, time.Now()
 	key, ok := keys[kid]

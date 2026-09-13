@@ -163,4 +163,12 @@ func TestGoogleVerifierReportsUnreachableJWKS(t *testing.T) {
 	if !errors.Is(err, ErrGoogleKeysUnavailable) || errors.Is(err, ErrInvalidGoogleToken) {
 		t.Fatalf("err = %v, want ErrGoogleKeysUnavailable and not ErrInvalidGoogleToken", err)
 	}
+
+	live := newFakeGoogle(t, "k1")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = NewGoogleVerifier("client-1", live.server.URL, nil).Verify(ctx, live.token(t, "k1", goodClaims("client-1")))
+	if !errors.Is(err, ErrGoogleKeysUnavailable) || !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want both ErrGoogleKeysUnavailable and context.Canceled", err)
+	}
 }
