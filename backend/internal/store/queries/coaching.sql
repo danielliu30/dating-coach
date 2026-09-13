@@ -358,7 +358,7 @@ SELECT c.*, u.display_name, u.email
 FROM coaches c
 JOIN users u ON u.id = c.user_id
 WHERE c.approval_status = $1 AND u.deleted_at IS NULL
-ORDER BY c.created_at, u.display_name
+ORDER BY c.created_at, u.display_name, c.user_id
 LIMIT $2 OFFSET $3;
 
 -- name: SetCoachApproval :one
