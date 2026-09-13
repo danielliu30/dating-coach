@@ -36,6 +36,12 @@ var (
 	ErrEmailNotVerified   = errors.New("email address is not verified")
 )
 
+// NoPasswordHash is the password_hash stored for accounts created by an
+// external identity provider (Google). It is not a bcrypt hash, so no password
+// can ever match it, and SignIn refuses such accounts outright rather than
+// handing the empty string to bcrypt.
+const NoPasswordHash = ""
+
 const (
 	// VerificationCodeTTL is how long an emailed verification code stays valid.
 	VerificationCodeTTL = 3 * time.Minute
@@ -376,9 +382,10 @@ func (s *Service) SignUp(ctx context.Context, in SignUpInput) (Session, error) {
 	}, nil
 }
 
-// SignIn verifies the password and opens a session. Unknown emails and wrong
-// passwords both return ErrInvalidCredentials; an unverified account returns
-// ErrEmailNotVerified, only after the password has been checked.
+// SignIn verifies the password and opens a session. Unknown emails, wrong
+// passwords and accounts that have no password at all (NoPasswordHash, i.e.
+// created through Google) return ErrInvalidCredentials; an unverified account
+// returns ErrEmailNotVerified, only after the password has been checked.
 //
 // An account awaiting the deletion worker is indistinguishable from an unknown
 // one: the lookup skips rows marked deleted, so no session is ever minted for
@@ -390,6 +397,9 @@ func (s *Service) SignIn(ctx context.Context, email, password string) (Session, 
 			return Session{}, ErrInvalidCredentials
 		}
 		return Session{}, fmt.Errorf("lookup user: %w", err)
+	}
+	if user.PasswordHash == NoPasswordHash {
+		return Session{}, ErrInvalidCredentials
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)); err != nil {
 		return Session{}, ErrInvalidCredentials

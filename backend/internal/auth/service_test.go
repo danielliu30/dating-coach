@@ -466,3 +466,38 @@ func TestUpdateDatingProfileRejectsPhaseOnBothSides(t *testing.T) {
 		t.Fatalf("got %v, want ErrInvalidInput", err)
 	}
 }
+
+// TestSignInRefusesAccountWithoutPassword covers accounts created through an
+// external identity provider: CreateVerifiedUser stores them already verified
+// with NoPasswordHash, and no password — not even the empty one that would
+// match a naive comparison — signs them in.
+func TestSignInRefusesAccountWithoutPassword(t *testing.T) {
+	svc, _, pool := newTestService(t)
+	ctx := context.Background()
+
+	email := "passwordless-test-" + uuid.NewString() + "@example.com"
+	t.Cleanup(func() {
+		if _, err := pool.Exec(context.Background(), "DELETE FROM users WHERE email = $1", email); err != nil {
+			t.Errorf("delete test user: %v", err)
+		}
+	})
+
+	user, err := svc.queries.CreateVerifiedUser(ctx, db.CreateVerifiedUserParams{
+		Email:        email,
+		PasswordHash: NoPasswordHash,
+		DisplayName:  "Passwordless Test",
+		Role:         RoleCoach,
+	})
+	if err != nil {
+		t.Fatalf("create verified user: %v", err)
+	}
+	if !user.EmailVerified || user.Role != RoleCoach {
+		t.Fatalf("created user verified=%v role=%q, want verified coach", user.EmailVerified, user.Role)
+	}
+
+	for _, password := range []string{"", NoPasswordHash, "anything"} {
+		if _, err := svc.SignIn(ctx, email, password); !errors.Is(err, ErrInvalidCredentials) {
+			t.Fatalf("sign in with password %q = %v, want %v", password, err, ErrInvalidCredentials)
+		}
+	}
+}
