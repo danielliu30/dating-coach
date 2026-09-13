@@ -350,3 +350,19 @@ FROM coach_reviews
 WHERE coach_id = $1
 ORDER BY updated_at DESC, id
 LIMIT $2;
+
+-- name: ListCoachesByStatus :many
+-- Admin review queue: every coach profile in one approval state, oldest first
+-- so the longest-waiting applications surface at the top.
+SELECT c.*, u.display_name, u.email
+FROM coaches c
+JOIN users u ON u.id = c.user_id
+WHERE c.approval_status = $1 AND u.deleted_at IS NULL
+ORDER BY c.created_at, u.display_name
+LIMIT $2 OFFSET $3;
+
+-- name: SetCoachApproval :one
+UPDATE coaches
+SET approval_status = $2, updated_at = now()
+WHERE user_id = $1
+RETURNING *;

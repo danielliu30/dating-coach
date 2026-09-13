@@ -74,6 +74,87 @@ func TestNewCoachIsPendingAndHiddenUntilApproved(t *testing.T) {
 	}
 }
 
+// queue returns one admin approval queue keyed by coach id.
+func queue(t *testing.T, svc *Service, status string) map[string]AdminCoach {
+	t.Helper()
+	out := map[string]AdminCoach{}
+	for offset := int32(0); ; offset += 100 {
+		page, err := svc.ListCoachesByApproval(context.Background(), status, 100, offset)
+		if err != nil {
+			t.Fatalf("list %s coaches: %v", status, err)
+		}
+		for _, c := range page {
+			out[c.ID] = c
+		}
+		if len(page) < 100 {
+			return out
+		}
+	}
+}
+
+func TestAdminApprovalQueueAndDecision(t *testing.T) {
+	svc, pool := testService(t)
+	ctx := context.Background()
+	coachID, client := insertUser(t, pool, "coach"), insertUser(t, pool, "user")
+	if _, err := svc.UpsertProfile(ctx, coachID, UpsertProfileInput{Headline: "applicant", AcceptingClients: true}); err != nil {
+		t.Fatalf("upsert profile: %v", err)
+	}
+	if _, err := svc.SetAvailability(ctx, coachID, []AvailabilityWindow{
+		{Weekday: 0, StartMinute: 0, EndMinute: 1440}, {Weekday: 1, StartMinute: 0, EndMinute: 1440},
+		{Weekday: 2, StartMinute: 0, EndMinute: 1440}, {Weekday: 3, StartMinute: 0, EndMinute: 1440},
+		{Weekday: 4, StartMinute: 0, EndMinute: 1440}, {Weekday: 5, StartMinute: 0, EndMinute: 1440},
+		{Weekday: 6, StartMinute: 0, EndMinute: 1440},
+	}); err != nil {
+		t.Fatalf("set availability: %v", err)
+	}
+	id := coachID.String()
+
+	if _, err := svc.ListCoachesByApproval(ctx, "banned", 10, 0); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("list with bogus status: err = %v, want ErrInvalidInput", err)
+	}
+	if _, err := svc.SetCoachApproval(ctx, coachID, "banned"); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("set bogus status: err = %v, want ErrInvalidInput", err)
+	}
+	if _, err := svc.SetCoachApproval(ctx, client, ApprovalApproved); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("approve a non-coach: err = %v, want ErrNotFound", err)
+	}
+
+	if applicant, ok := queue(t, svc, ApprovalPending)[id]; !ok || applicant.Email == "" || applicant.DisplayName == "" {
+		t.Fatalf("new coach missing from pending queue or lacks contact details: %+v", applicant)
+	}
+	if listedIDs(t, svc)[id] {
+		t.Fatal("pending coach must not be in the directory")
+	}
+	if _, err := svc.BookSession(ctx, client, BookInput{CoachID: id, ScheduledTime: nextSlot()}); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("booking a pending coach: err = %v, want ErrUnavailable", err)
+	}
+
+	coach, err := svc.SetCoachApproval(ctx, coachID, ApprovalApproved)
+	if err != nil || coach.ApprovalStatus != ApprovalApproved {
+		t.Fatalf("approve = %+v, %v", coach, err)
+	}
+	if _, pending := queue(t, svc, ApprovalPending)[id]; pending {
+		t.Fatal("approved coach must leave the pending queue")
+	}
+	if _, approved := queue(t, svc, ApprovalApproved)[id]; !approved {
+		t.Fatal("approved coach should move from the pending to the approved queue")
+	}
+	if !listedIDs(t, svc)[id] {
+		t.Fatal("approved coach must be in the directory")
+	}
+	if _, err := svc.BookSession(ctx, client, BookInput{CoachID: id, ScheduledTime: nextSlot()}); err != nil {
+		t.Fatalf("booking an approved coach: %v", err)
+	}
+
+	coach, err = svc.SetCoachApproval(ctx, coachID, ApprovalRejected)
+	if err != nil || coach.ApprovalStatus != ApprovalRejected {
+		t.Fatalf("reject = %+v, %v", coach, err)
+	}
+	if _, rejected := queue(t, svc, ApprovalRejected)[id]; listedIDs(t, svc)[id] || !rejected {
+		t.Fatal("rejected coach must be hidden and sit in the rejected queue")
+	}
+}
+
 func TestOnlyApprovedCoachesAreBookable(t *testing.T) {
 	svc, pool := testService(t)
 	ctx := context.Background()

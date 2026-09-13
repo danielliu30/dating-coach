@@ -1045,6 +1045,75 @@ func (q *Queries) ListCoaches(ctx context.Context, arg ListCoachesParams) ([]Lis
 	return items, nil
 }
 
+const listCoachesByStatus = `-- name: ListCoachesByStatus :many
+SELECT c.user_id, c.headline, c.bio, c.specialties, c.hourly_rate_cents, c.timezone, c.years_experience, c.accepting_clients, c.created_at, c.updated_at, c.phases, c.approval_status, u.display_name, u.email
+FROM coaches c
+JOIN users u ON u.id = c.user_id
+WHERE c.approval_status = $1 AND u.deleted_at IS NULL
+ORDER BY c.created_at, u.display_name
+LIMIT $2 OFFSET $3
+`
+
+type ListCoachesByStatusParams struct {
+	ApprovalStatus string `json:"approval_status"`
+	Limit          int32  `json:"limit"`
+	Offset         int32  `json:"offset"`
+}
+
+type ListCoachesByStatusRow struct {
+	UserID           uuid.UUID `json:"user_id"`
+	Headline         string    `json:"headline"`
+	Bio              string    `json:"bio"`
+	Specialties      []string  `json:"specialties"`
+	HourlyRateCents  int32     `json:"hourly_rate_cents"`
+	Timezone         string    `json:"timezone"`
+	YearsExperience  int32     `json:"years_experience"`
+	AcceptingClients bool      `json:"accepting_clients"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+	Phases           []string  `json:"phases"`
+	ApprovalStatus   string    `json:"approval_status"`
+	DisplayName      string    `json:"display_name"`
+	Email            string    `json:"email"`
+}
+
+// Admin review queue: every coach profile in one approval state, oldest first
+// so the longest-waiting applications surface at the top.
+func (q *Queries) ListCoachesByStatus(ctx context.Context, arg ListCoachesByStatusParams) ([]ListCoachesByStatusRow, error) {
+	rows, err := q.db.Query(ctx, listCoachesByStatus, arg.ApprovalStatus, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListCoachesByStatusRow{}
+	for rows.Next() {
+		var i ListCoachesByStatusRow
+		if err := rows.Scan(
+			&i.UserID,
+			&i.Headline,
+			&i.Bio,
+			&i.Specialties,
+			&i.HourlyRateCents,
+			&i.Timezone,
+			&i.YearsExperience,
+			&i.AcceptingClients,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Phases,
+			&i.ApprovalStatus,
+			&i.DisplayName,
+			&i.Email,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listRefundsDue = `-- name: ListRefundsDue :many
 SELECT id, user_id, coach_id, scheduled_time, duration_minutes, status, topic, coach_notes, created_at, updated_at, confirmation_token, respond_by, confirmed_at, calendar_sequence, payment_status, amount_cents, currency, payment_ref, hold_expires_at, meeting_url FROM coaching_sessions
 WHERE payment_status = 'refund_due' AND payment_ref IS NOT NULL
@@ -1496,6 +1565,38 @@ func (q *Queries) RescheduleSession(ctx context.Context, arg RescheduleSessionPa
 		&i.PaymentRef,
 		&i.HoldExpiresAt,
 		&i.MeetingUrl,
+	)
+	return i, err
+}
+
+const setCoachApproval = `-- name: SetCoachApproval :one
+UPDATE coaches
+SET approval_status = $2, updated_at = now()
+WHERE user_id = $1
+RETURNING user_id, headline, bio, specialties, hourly_rate_cents, timezone, years_experience, accepting_clients, created_at, updated_at, phases, approval_status
+`
+
+type SetCoachApprovalParams struct {
+	UserID         uuid.UUID `json:"user_id"`
+	ApprovalStatus string    `json:"approval_status"`
+}
+
+func (q *Queries) SetCoachApproval(ctx context.Context, arg SetCoachApprovalParams) (Coach, error) {
+	row := q.db.QueryRow(ctx, setCoachApproval, arg.UserID, arg.ApprovalStatus)
+	var i Coach
+	err := row.Scan(
+		&i.UserID,
+		&i.Headline,
+		&i.Bio,
+		&i.Specialties,
+		&i.HourlyRateCents,
+		&i.Timezone,
+		&i.YearsExperience,
+		&i.AcceptingClients,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Phases,
+		&i.ApprovalStatus,
 	)
 	return i, err
 }
