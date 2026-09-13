@@ -458,9 +458,10 @@ func (s *Service) SignInWithGoogle(ctx context.Context, in GoogleSignInInput) (S
 // createGoogleUser inserts the verified, password-less account for identity
 // with the given role. The display name is Google's profile name, or the
 // address's local part when Google supplied none. A unique-violation on the
-// email (two first sign-ins racing) resolves to the row the other call made;
-// a row that exists but is marked deleted is reported as ErrInvalidCredentials,
-// matching SignIn.
+// email (a first sign-in racing another, or a password sign-up) resolves to
+// the row the other call made, marked verified if it was not, since Google has
+// confirmed the address; a row that exists but is marked deleted is reported as
+// ErrInvalidCredentials, matching SignIn.
 func (s *Service) createGoogleUser(ctx context.Context, identity GoogleIdentity, role string) (db.User, error) {
 	displayName := strings.TrimSpace(identity.Name)
 	if displayName == "" {
@@ -485,6 +486,11 @@ func (s *Service) createGoogleUser(ctx context.Context, identity GoogleIdentity,
 			return db.User{}, ErrInvalidCredentials
 		}
 		return db.User{}, fmt.Errorf("lookup user: %w", err)
+	}
+	if !user.EmailVerified {
+		if user, err = s.queries.VerifyUserEmail(ctx, user.ID); err != nil {
+			return db.User{}, fmt.Errorf("mark google account verified: %w", err)
+		}
 	}
 	return user, nil
 }

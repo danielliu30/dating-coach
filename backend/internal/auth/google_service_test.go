@@ -95,6 +95,37 @@ func TestSignInWithGoogleVerifiesExistingPasswordAccount(t *testing.T) {
 	}
 }
 
+// TestCreateGoogleUserRecoversLostRace covers the insert losing to a password
+// sign-up that landed between lookup and insert: the unique violation resolves
+// to that account, marked verified because Google confirmed the address, so
+// both its password and Google keep working.
+func TestCreateGoogleUserRecoversLostRace(t *testing.T) {
+	svc, _, pool := newTestService(t)
+	ctx := context.Background()
+
+	const password = "correct-horse"
+	email := "google-race-test-" + uuid.NewString() + "@example.com"
+	t.Cleanup(func() {
+		if _, err := pool.Exec(context.Background(), "DELETE FROM users WHERE email = $1", email); err != nil {
+			t.Errorf("delete test user: %v", err)
+		}
+	})
+	if _, err := svc.SignUp(ctx, SignUpInput{Email: email, Password: password, DisplayName: "Race Test"}); err != nil {
+		t.Fatalf("sign up: %v", err)
+	}
+
+	user, err := svc.createGoogleUser(ctx, GoogleIdentity{Subject: "sub-4", Email: email, Name: "Ignored"}, RoleCoach)
+	if err != nil {
+		t.Fatalf("createGoogleUser after a lost race: %v", err)
+	}
+	if !user.EmailVerified || user.DisplayName != "Race Test" || user.Role != RoleUser || user.PasswordHash == NoPasswordHash {
+		t.Fatalf("recovered user = %+v, want the verified password account", user)
+	}
+	if _, err := svc.SignIn(ctx, email, password); err != nil {
+		t.Fatalf("password sign in after recovery: %v", err)
+	}
+}
+
 // TestSignInWithGoogleRejects covers the refusals that never reach the store:
 // no verifier configured, a bad role, and a token the verifier rejects.
 func TestSignInWithGoogleRejects(t *testing.T) {
