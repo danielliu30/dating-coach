@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { ApiError, api } from '../api/client';
@@ -89,9 +89,14 @@ export default function CoachProfileScreen(): React.ReactElement {
   // other nor leave the editor showing defaults that a save would commit.
   const coachID = user?.id;
   const [loadFailed, setLoadFailed] = useState(false);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+  // Every read of approval_status (mount load, focus refresh) takes a ticket;
+  // only the newest ticket may write it, so a slow older read cannot win.
+  const approvalRead = useRef(0);
   useEffect(() => {
     if (!coachID) return;
     let cancelled = false;
+    const ticket = ++approvalRead.current;
     void (async () => {
       const [profile, saved] = await Promise.allSettled([
         api.getCoach(coachID),
@@ -108,7 +113,7 @@ export default function CoachProfileScreen(): React.ReactElement {
         setTimezone(profile.value.timezone);
         setYears(String(profile.value.years_experience));
         setAccepting(profile.value.accepting_clients);
-        setApproval(profile.value.approval_status);
+        if (ticket === approvalRead.current) setApproval(profile.value.approval_status);
         // 404 simply means the coach has not published a profile yet.
       } else if (!(profile.reason instanceof ApiError && profile.reason.status === 404)) {
         setLoadFailed(true);
@@ -135,13 +140,19 @@ export default function CoachProfileScreen(): React.ReactElement {
     useCallback(() => {
       if (!coachID) return;
       let cancelled = false;
+      const ticket = ++approvalRead.current;
       api
         .getCoach(coachID)
         .then((profile) => {
-          if (!cancelled) setApproval(profile.approval_status);
+          if (cancelled || ticket !== approvalRead.current) return;
+          setApproval(profile.approval_status);
+          setRefreshError(null);
         })
-        .catch(() => {
-          // The load effect already reports failures; a 404 means nothing saved yet.
+        .catch((reason: unknown) => {
+          if (cancelled || ticket !== approvalRead.current) return;
+          // 404 means nothing saved yet; anything else leaves the banner possibly stale.
+          if (reason instanceof ApiError && reason.status === 404) return;
+          setRefreshError(`Could not refresh your review status (${describe(reason)}); it may be out of date.`);
         });
       return () => {
         cancelled = true;
@@ -392,6 +403,7 @@ export default function CoachProfileScreen(): React.ReactElement {
         </View>
       ) : null}
       {error ? <Text style={shared.error}>{error}</Text> : null}
+      {refreshError ? <Text style={shared.error}>{refreshError}</Text> : null}
       <Button label="Save profile" icon="save-outline" onPress={save} loading={busy} />
     </Screen>
   );

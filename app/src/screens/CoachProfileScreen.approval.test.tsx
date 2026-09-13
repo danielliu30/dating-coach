@@ -5,17 +5,41 @@ import { ApiError, api } from '../api/client';
 import type { Coach } from '../api/types';
 import CoachProfileScreen from './CoachProfileScreen';
 
-// Drive focus by hand so a test can "return to the tab" without a navigator.
-const mockFocus: { effect: (() => void | (() => void)) | null } = { effect: null };
+// Drive focus by hand so a test can blur and "return to the tab" without a
+// navigator; blur() runs the effect's cleanup exactly like the real hook.
+type FocusEffect = () => void | (() => void);
+const mockFocus = {
+  effect: null as FocusEffect | null,
+  cleanup: undefined as void | (() => void),
+  focus() {
+    this.cleanup = this.effect?.();
+  },
+  blur() {
+    this.cleanup?.();
+    this.cleanup = undefined;
+  },
+};
 jest.mock('@react-navigation/native', () => {
   const { useEffect } = require('react');
   return {
-    useFocusEffect: (effect: () => void | (() => void)) => {
+    useFocusEffect: (effect: FocusEffect) => {
       mockFocus.effect = effect;
-      useEffect(effect, [effect]);
+      useEffect(() => {
+        mockFocus.focus();
+        return () => mockFocus.blur();
+      }, [effect]);
     },
   };
 });
+
+/** A getCoach response the test resolves by hand, to order overlapping reads. */
+const deferred = () => {
+  let resolve!: (value: Coach) => void;
+  const promise = new Promise<Coach>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+};
 
 jest.mock('../api/client', () => {
   const actual = jest.requireActual('../api/client');
@@ -91,10 +115,50 @@ describe('CoachProfileScreen approval banner', () => {
 
     mocked.getCoach.mockResolvedValue(coach('approved'));
     await act(async () => {
-      mockFocus.effect?.();
+      mockFocus.blur();
+      mockFocus.focus();
     });
     await waitFor(() => expect(screen.queryByText(REVIEW)).toBeNull());
     expect(screen.getByDisplayValue('Edited headline')).toBeTruthy();
+  });
+
+  it('ignores a slow initial load that lands after a newer focus refresh', async () => {
+    const initial = deferred();
+    mocked.getCoach.mockReturnValueOnce(initial.promise);
+    render(<CoachProfileScreen />);
+
+    mocked.getCoach.mockResolvedValue(coach('approved'));
+    await act(async () => {
+      mockFocus.blur();
+      mockFocus.focus();
+    });
+    await act(async () => {
+      initial.resolve(coach('pending'));
+    });
+    await screen.findByDisplayValue('Openers that land');
+    expect(screen.queryByText(REVIEW)).toBeNull();
+  });
+
+  it('says so when the focus refresh fails, keeping the last known status', async () => {
+    mocked.getCoach.mockResolvedValue(coach('pending'));
+    render(<CoachProfileScreen />);
+    await screen.findByText(REVIEW);
+
+    mocked.getCoach.mockRejectedValue(new ApiError(503, 'unavailable'));
+    await act(async () => {
+      mockFocus.blur();
+      mockFocus.focus();
+    });
+    await screen.findByText(/Could not refresh your review status/);
+    expect(screen.getByText(REVIEW)).toBeTruthy();
+
+    mocked.getCoach.mockResolvedValue(coach('approved'));
+    await act(async () => {
+      mockFocus.blur();
+      mockFocus.focus();
+    });
+    await waitFor(() => expect(screen.queryByText(/Could not refresh/)).toBeNull());
+    expect(screen.queryByText(REVIEW)).toBeNull();
   });
 
   it('shows the banner after a first-time save, when there was no profile to load', async () => {
