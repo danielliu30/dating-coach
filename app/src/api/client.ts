@@ -174,6 +174,16 @@ export class ApiClient {
   }
 
   /**
+   * Exchanges a Google ID token for a session, creating the account with `role`
+   * when the address is new (an existing account keeps its role). The session is
+   * already verified, so callers skip the Verify screen. Rejects with 401 for a
+   * token the API would not accept and 501 when the API has no Google client ID.
+   */
+  signInWithGoogle(input: { id_token: string; role?: Role }) {
+    return this.request<AuthSession>('POST', '/auth/google', input);
+  }
+
+  /**
    * Rotates a refresh token into a new session. Rejects with 401 once the token
    * is spent or expired. It never triggers a renewal of its own: it *is* the
    * renewal, so a 401 here is final.
