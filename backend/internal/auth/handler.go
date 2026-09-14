@@ -35,6 +35,7 @@ func (h *Handler) Routes(authenticate func(http.Handler) http.Handler) http.Hand
 		public.Use(h.limiter.Middleware)
 		public.Post("/signup", h.signUp)
 		public.Post("/signin", h.signIn)
+		public.Post("/google", h.signInWithGoogle)
 		public.Post("/refresh", h.refresh)
 		public.Post("/verify", h.verify)
 		public.Post("/resend-verification", h.resendVerification)
@@ -89,6 +90,35 @@ func (h *Handler) signIn(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusForbidden, err.Error())
 	case err != nil:
 		slog.Error("sign in", "error", err)
+		httpx.Error(w, http.StatusInternalServerError, "could not sign in")
+	default:
+		httpx.JSON(w, http.StatusOK, session)
+	}
+}
+
+// signInWithGoogle handles POST /google: a Google ID token (plus the role a
+// brand-new account should get) in exchange for a full session. A token Google
+// would not stand behind answers 401, an unknown role 400, Google's key set
+// being unreachable 503, and Google sign-in not being configured 501.
+func (h *Handler) signInWithGoogle(w http.ResponseWriter, r *http.Request) {
+	var in GoogleSignInInput
+	if err := httpx.Decode(r, &in); err != nil || in.IDToken == "" {
+		httpx.Error(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	session, err := h.svc.SignInWithGoogle(r.Context(), in)
+	switch {
+	case errors.Is(err, ErrGoogleAuthDisabled):
+		httpx.Error(w, http.StatusNotImplemented, err.Error())
+	case errors.Is(err, ErrInvalidInput):
+		httpx.Error(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, ErrInvalidGoogleToken), errors.Is(err, ErrInvalidCredentials):
+		httpx.Error(w, http.StatusUnauthorized, "google sign-in was not accepted")
+	case errors.Is(err, ErrGoogleKeysUnavailable):
+		slog.Error("google sign in", "error", err)
+		httpx.Error(w, http.StatusServiceUnavailable, "could not reach google to verify the token")
+	case err != nil:
+		slog.Error("google sign in", "error", err)
 		httpx.Error(w, http.StatusInternalServerError, "could not sign in")
 	default:
 		httpx.JSON(w, http.StatusOK, session)

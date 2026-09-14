@@ -47,6 +47,10 @@ type Config struct {
 	SMTPTimeout  time.Duration
 	MailFrom     string
 
+	// GoogleClientID is the OAuth client ID Google ID tokens must be minted
+	// for. Empty disables POST /auth/google; password auth is unaffected.
+	GoogleClientID string
+
 	PublicAppURL string
 	CORSOrigins  []string
 
@@ -122,14 +126,15 @@ func Load() (*Config, error) {
 
 		DeadLetterAlertPeriod: envDuration("DEAD_LETTER_ALERT_PERIOD", time.Minute),
 
-		SMTPHost:     env("SMTP_HOST", ""),
-		SMTPPort:     envInt("SMTP_PORT", 587),
-		SMTPUsername: env("SMTP_USERNAME", ""),
-		SMTPPassword: env("SMTP_PASSWORD", ""),
-		SMTPTimeout:  envDuration("SMTP_TIMEOUT", 30*time.Second),
-		MailFrom:     env("MAIL_FROM", "no-reply@datingcoach.local"),
-		PublicAppURL: env("PUBLIC_APP_URL", "http://localhost:19006"),
-		CORSOrigins:  envList("CORS_ORIGINS", []string{"http://localhost:19006", "http://localhost:8081"}),
+		SMTPHost:       env("SMTP_HOST", ""),
+		SMTPPort:       envInt("SMTP_PORT", 587),
+		SMTPUsername:   env("SMTP_USERNAME", ""),
+		SMTPPassword:   env("SMTP_PASSWORD", ""),
+		SMTPTimeout:    envDuration("SMTP_TIMEOUT", 30*time.Second),
+		MailFrom:       env("MAIL_FROM", "no-reply@datingcoach.local"),
+		GoogleClientID: env("GOOGLE_CLIENT_ID", ""),
+		PublicAppURL:   env("PUBLIC_APP_URL", "http://localhost:19006"),
+		CORSOrigins:    envList("CORS_ORIGINS", []string{"http://localhost:19006", "http://localhost:8081"}),
 
 		PaymentsEnabled:     envBool("PAYMENTS_ENABLED", false),
 		StripeSecretKey:     env("STRIPE_SECRET_KEY", ""),
