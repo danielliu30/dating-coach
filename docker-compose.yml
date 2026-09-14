@@ -154,6 +154,19 @@ services:
       ml-analyzer:
         condition: service_started
 
+  # Local inbox (`--profile mail`): catches every email the api/worker send so
+  # verification codes and booking mails can be read at http://localhost:8025.
+  # Point the backend at it with SMTP_HOST=mailpit SMTP_PORT=1025 (no auth);
+  # with SMTP_HOST left empty the backend logs emails instead of sending them.
+  mailpit:
+    image: axllent/mailpit:v1.29
+    profiles: ['mail']
+    ports: ['${MAILPIT_UI_PORT:-8025}:8025', '${MAILPIT_SMTP_PORT:-1025}:1025']
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: 1
+      MP_SMTP_AUTH_ALLOW_INSECURE: 1
+    restart: unless-stopped
+
   # Optional Postgres UI (`--profile tools`) on :5050.
   pgadmin:
     image: dpage/pgadmin4:9.17
