@@ -3,6 +3,11 @@ INSERT INTO users (email, password_hash, display_name, role)
 VALUES ($1, $2, $3, $4)
 RETURNING *;
 
+-- name: CreateVerifiedUser :one
+INSERT INTO users (email, password_hash, display_name, role, email_verified)
+VALUES ($1, $2, $3, $4, true)
+RETURNING *;
+
 -- name: GetUserByEmail :one
 SELECT * FROM users WHERE email = $1 AND deleted_at IS NULL;
 
