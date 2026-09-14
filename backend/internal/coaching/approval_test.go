@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -161,14 +162,29 @@ func TestOnlyApprovedCoachesAreBookable(t *testing.T) {
 	coach, client := insertCoach(t, pool), insertUser(t, pool, "user")
 	start := nextSlot()
 
+	slots := func() []Slot {
+		from, _ := time.Parse(time.RFC3339, start)
+		got, err := svc.OpenSlots(ctx, coach, client, from.Add(-time.Hour), from.Add(24*time.Hour), 30, nil)
+		if err != nil {
+			t.Fatalf("open slots: %v", err)
+		}
+		return got
+	}
+
 	for _, status := range []string{ApprovalPending, ApprovalRejected} {
 		setApproval(t, pool, coach, status)
+		if got := slots(); len(got) != 0 {
+			t.Fatalf("a %s coach offers %d open slots, want none", status, len(got))
+		}
 		if _, err := svc.BookSession(ctx, client, BookInput{CoachID: coach.String(), ScheduledTime: start}); !errors.Is(err, ErrUnavailable) {
 			t.Fatalf("booking a %s coach: err = %v, want ErrUnavailable", status, err)
 		}
 	}
 
 	setApproval(t, pool, coach, ApprovalApproved)
+	if len(slots()) == 0 {
+		t.Fatal("an approved coach offers no open slots")
+	}
 	if _, err := svc.BookSession(ctx, client, BookInput{CoachID: coach.String(), ScheduledTime: start}); err != nil {
 		t.Fatalf("booking an approved coach: %v", err)
 	}
