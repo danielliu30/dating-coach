@@ -48,3 +48,38 @@ func TestRequireScope(t *testing.T) {
 		})
 	}
 }
+
+// roleRequest drives one request through mw with a session principal of the
+// given role (no principal at all when role is empty) and returns the status.
+func roleRequest(t *testing.T, mw func(http.Handler) http.Handler, role string) int {
+	t.Helper()
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	req := httptest.NewRequest(http.MethodGet, "/admin/coaches", nil)
+	if role != "" {
+		principal := Principal{UserID: uuid.New(), Email: "a@example.com", Role: role, Scope: ScopeSession}
+		req = req.WithContext(WithPrincipal(req.Context(), principal))
+	}
+	rec := httptest.NewRecorder()
+	mw(next).ServeHTTP(rec, req)
+	return rec.Code
+}
+
+func TestRequireAdmin(t *testing.T) {
+	for role, want := range map[string]int{
+		RoleAdmin: http.StatusNoContent,
+		RoleCoach: http.StatusForbidden,
+		RoleUser:  http.StatusForbidden,
+		"":        http.StatusForbidden,
+	} {
+		if got := roleRequest(t, RequireAdmin, role); got != want {
+			t.Errorf("RequireAdmin with role %q = %d, want %d", role, got, want)
+		}
+	}
+	// RequireCoach keeps admitting admins, so the two middlewares differ only
+	// in whether coaches pass.
+	if got := roleRequest(t, RequireCoach, RoleAdmin); got != http.StatusNoContent {
+		t.Errorf("RequireCoach with admin = %d, want 204", got)
+	}
+}

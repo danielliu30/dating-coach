@@ -59,6 +59,7 @@ type Coach struct {
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
 	Phases           []string  `json:"phases"`
+	ApprovalStatus   string    `json:"approval_status"`
 }
 
 type CoachAvailability struct {
