@@ -1,5 +1,5 @@
 import type { BrowserContext, Page } from '@playwright/test';
-import { BASE_URL } from './stack';
+import { BASE_URL, dbOne } from './stack';
 
 /** localStorage key the web app persists its session under. */
 export const SESSION_KEY = 'dating-coach.session';
@@ -106,12 +106,26 @@ export const ALL_WEEK: { weekday: number; start_minute: number; end_minute: numb
 );
 
 /**
+ * Records an admin decision on a coach profile straight in Postgres, the
+ * documented fallback when no admin account is signed in. Resolves with the
+ * stored status; throws when the user has no coach profile row yet.
+ */
+export async function setCoachApproval(coachID: string, status: 'pending' | 'approved' | 'rejected'): Promise<string> {
+  return dbOne(`update coaches set approval_status = '${status}', updated_at = now() where user_id = '${coachID}' returning approval_status`);
+}
+
+/**
  * Publishes a coach profile and availability straight through the API, for
- * specs whose subject is not the Profile screen. Returns the profile response.
+ * specs whose subject is not the Profile screen, and (unless `approve` is
+ * false) marks the profile approved so clients can see and book it at once.
  */
 export async function publishCoach(
   coachToken: string,
-  { rateCents = 12000, windows = ALL_WEEK }: { rateCents?: number; windows?: typeof ALL_WEEK } = {},
+  {
+    rateCents = 12000,
+    windows = ALL_WEEK,
+    approve = true,
+  }: { rateCents?: number; windows?: typeof ALL_WEEK; approve?: boolean } = {},
 ): Promise<void> {
   const profile = await api('PUT', '/coach/profile', {
     token: coachToken,
@@ -129,5 +143,10 @@ export async function publishCoach(
   const availability = await api('PUT', '/coach/availability', { token: coachToken, body: { availability: windows } });
   if (availability.status !== 200) {
     throw new Error(`availability returned ${availability.status}: ${JSON.stringify(availability.body)}`);
+  }
+  if (approve) {
+    const me = await api<{ id: string }>('GET', '/auth/me', { token: coachToken });
+    if (me.status !== 200 || !me.body) throw new Error(`/auth/me returned ${me.status}`);
+    await setCoachApproval(me.body.id, 'approved');
   }
 }
