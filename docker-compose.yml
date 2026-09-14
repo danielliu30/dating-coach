@@ -25,6 +25,7 @@ x-backend-env: &backend-env
   SMTP_PASSWORD: ${SMTP_PASSWORD:-}
   SMTP_TIMEOUT: ${SMTP_TIMEOUT:-30s}
   MAIL_FROM: ${MAIL_FROM:-no-reply@datingcoach.local}
+  GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
   PAYMENTS_ENABLED: ${PAYMENTS_ENABLED:-false}
   STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
   STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
@@ -133,6 +134,7 @@ services:
       context: ./app
       args:
         EXPO_PUBLIC_API_URL: ${WEB_API_URL:-}
+        EXPO_PUBLIC_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
     profiles: ['gateway']
     ports: ['${WEB_PORT:-3000}:80']
     restart: unless-stopped

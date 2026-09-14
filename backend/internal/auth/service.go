@@ -34,6 +34,9 @@ var (
 	ErrInvalidInput       = errors.New("invalid input")
 	ErrInvalidCode        = errors.New("invalid or expired verification code")
 	ErrEmailNotVerified   = errors.New("email address is not verified")
+	// ErrGoogleAuthDisabled is returned by SignInWithGoogle when no verifier is
+	// configured, i.e. GOOGLE_CLIENT_ID is unset.
+	ErrGoogleAuthDisabled = errors.New("google sign-in is not configured")
 )
 
 // NoPasswordHash is the password_hash stored for accounts created by an
@@ -67,6 +70,7 @@ type Service struct {
 	sessionTTL     time.Duration
 	verifyTokenTTL time.Duration
 	refreshTTL     time.Duration
+	google         GoogleTokenVerifier
 }
 
 // DeletionPublisher queues the row removal that follows a revoked account.
@@ -112,6 +116,13 @@ func NewService(
 		verifyTokenTTL: verifyTokenTTL,
 		refreshTTL:     refreshTTL,
 	}
+}
+
+// SetGoogleVerifier enables SignInWithGoogle with the given verifier. Until it
+// is called (or when called with nil) Google sign-in answers
+// ErrGoogleAuthDisabled; password sign-in is unaffected either way.
+func (s *Service) SetGoogleVerifier(v GoogleTokenVerifier) {
+	s.google = v
 }
 
 // DeleteAccount marks userID's account deleted, so no new session can be handed
@@ -380,6 +391,108 @@ func (s *Service) SignUp(ctx context.Context, in SignUpInput) (Session, error) {
 		ExpiresAt: expiresAt.UTC().Format(time.RFC3339),
 		User:      profileOf(user),
 	}, nil
+}
+
+// GoogleSignInInput is the decoded POST /auth/google body. Role is only
+// consulted when the token's address has no account yet.
+type GoogleSignInInput struct {
+	IDToken string `json:"id_token"`
+	Role    string `json:"role"`
+}
+
+// SignInWithGoogle verifies a Google ID token and opens a session for the
+// account owning its email address, creating that account when it does not
+// exist. Google has already confirmed the address, so a new account is created
+// verified (skipping the emailed code) with NoPasswordHash, and an existing
+// unverified password account is marked verified on the spot. The role in
+// `in` (user or coach, default user) applies to new accounts only; an existing
+// account keeps its role, and a coach created this way still starts unapproved.
+//
+// Errors: ErrGoogleAuthDisabled when no verifier is configured,
+// ErrInvalidGoogleToken (wrapped) for a token Google would not stand behind,
+// ErrInvalidInput for an unknown role, ErrInvalidCredentials for an account
+// pending deletion, and the verifier's own error when Google's keys could not
+// be fetched.
+func (s *Service) SignInWithGoogle(ctx context.Context, in GoogleSignInInput) (Session, error) {
+	if s.google == nil {
+		return Session{}, ErrGoogleAuthDisabled
+	}
+	role := in.Role
+	if role == "" {
+		role = RoleUser
+	}
+	if role != RoleUser && role != RoleCoach {
+		return Session{}, fmt.Errorf("%w: role must be user or coach", ErrInvalidInput)
+	}
+	identity, err := s.google.Verify(ctx, in.IDToken)
+	if err != nil {
+		return Session{}, err
+	}
+
+	user, err := s.queries.GetUserByEmail(ctx, identity.Email)
+	switch {
+	case err == nil:
+		if !user.EmailVerified {
+			if user, err = s.queries.VerifyUserEmail(ctx, user.ID); err != nil {
+				return Session{}, fmt.Errorf("mark google account verified: %w", err)
+			}
+		}
+	case errors.Is(err, pgx.ErrNoRows):
+		user, err = s.createGoogleUser(ctx, identity, role)
+		if err != nil {
+			return Session{}, err
+		}
+	default:
+		return Session{}, fmt.Errorf("lookup user: %w", err)
+	}
+
+	session, err := s.openSession(ctx, s.queries, user, uuid.Nil)
+	if err != nil {
+		return Session{}, err
+	}
+	slog.Info("session issued", "user_id", user.ID, "reason", "google sign in",
+		"expires_at", session.ExpiresAt)
+	return session, nil
+}
+
+// createGoogleUser inserts the verified, password-less account for identity
+// with the given role. The display name is Google's profile name, or the
+// address's local part when Google supplied none. A unique-violation on the
+// email (a first sign-in racing another, or a password sign-up) resolves to
+// the row the other call made, marked verified if it was not, since Google has
+// confirmed the address; a row that exists but is marked deleted is reported as
+// ErrInvalidCredentials, matching SignIn.
+func (s *Service) createGoogleUser(ctx context.Context, identity GoogleIdentity, role string) (db.User, error) {
+	displayName := strings.TrimSpace(identity.Name)
+	if displayName == "" {
+		displayName, _, _ = strings.Cut(identity.Email, "@")
+	}
+	user, err := s.queries.CreateVerifiedUser(ctx, db.CreateVerifiedUserParams{
+		Email:        identity.Email,
+		PasswordHash: NoPasswordHash,
+		DisplayName:  displayName,
+		Role:         role,
+	})
+	if err == nil {
+		return user, nil
+	}
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "23505" {
+		return db.User{}, fmt.Errorf("create google user: %w", err)
+	}
+	user, err = s.queries.GetUserByEmail(ctx, identity.Email)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return db.User{}, ErrInvalidCredentials
+		}
+		return db.User{}, fmt.Errorf("lookup user: %w", err)
+	}
+	if !user.EmailVerified {
+		if user, err = s.queries.VerifyUserEmail(ctx, user.ID); err != nil {
+			return db.User{}, fmt.Errorf("mark google account verified: %w", err)
+		}
+	}
+	return user, nil
 }
 
 // SignIn verifies the password and opens a session. Unknown emails, wrong

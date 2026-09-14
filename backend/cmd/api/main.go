@@ -81,10 +81,13 @@ func run() error {
 	denylist := auth.NewDenylist(rdb, cfg.JWTTTL)
 	verificationCodes := auth.NewVerificationCache(rdb, auth.VerificationCodeTTL)
 
-	authHandler := auth.NewHandler(
-		auth.NewService(pg.Pool, pg.Queries, issuer, notifier, cfg.BcryptCost, cfg.PublicAppURL, verificationCodes, denylist, deletions, cfg.JWTTTL, cfg.VerifyTokenTTL, cfg.RefreshTokenTTL),
-		limiter,
-	)
+	authSvc := auth.NewService(pg.Pool, pg.Queries, issuer, notifier, cfg.BcryptCost, cfg.PublicAppURL, verificationCodes, denylist, deletions, cfg.JWTTTL, cfg.VerifyTokenTTL, cfg.RefreshTokenTTL)
+	if cfg.GoogleClientID != "" {
+		authSvc.SetGoogleVerifier(auth.NewGoogleVerifier(cfg.GoogleClientID, auth.GoogleJWKSURL, nil))
+	} else {
+		slog.Info("google sign-in disabled: GOOGLE_CLIENT_ID is empty")
+	}
+	authHandler := auth.NewHandler(authSvc, limiter)
 	provider, err := payments.New(cfg.PaymentsEnabled)
 	if err != nil {
 		return err

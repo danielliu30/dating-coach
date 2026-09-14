@@ -26,6 +26,13 @@ export const API_BASE_URL = resolveBase();
 
 export const API_PREFIX = '/api/v1';
 
+/**
+ * Google OAuth web client ID for "Continue with Google" (the same value the
+ * API checks ID tokens against as GOOGLE_CLIENT_ID). Empty disables the
+ * button; the email/password flow is unaffected.
+ */
+export const GOOGLE_CLIENT_ID: string = (process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID ?? '').trim();
+
 export function wsURL(path: string, token: string): string {
   const base = API_BASE_URL.replace(/^http/, 'ws');
   return `${base}${API_PREFIX}${path}?token=${encodeURIComponent(token)}`;

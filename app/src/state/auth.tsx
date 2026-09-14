@@ -4,6 +4,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import { ApiError, api } from '../api/client';
 import type { RenewalResult, SessionEndReason } from '../api/client';
 import type { AuthSession, DatingProfileInput, Profile, Role } from '../api/types';
+import { requestGoogleIdToken } from '../lib/googleIdentity';
 
 const STORAGE_KEY = 'dating-coach.session';
 
@@ -23,6 +24,12 @@ interface AuthState {
   dismissSignedOutReason: () => void;
   signIn: (email: string, password: string) => Promise<Profile>;
   signUp: (input: { email: string; password: string; displayName: string; role: Role }) => Promise<Profile>;
+  /**
+   * Runs the Google prompt and signs in as (or creates) the account for that
+   * Google address. `role` only matters for a brand-new account. The resulting
+   * profile is already verified, so the navigator enters the app directly.
+   */
+  signInWithGoogle: (role?: Role) => Promise<Profile>;
   verify: (email: string, code: string) => Promise<Profile>;
   resendVerification: (email: string) => Promise<void>;
   refresh: () => Promise<void>;
@@ -250,6 +257,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
       signIn: async (email, password) => persist(await api.signIn({ email, password })),
       signUp: async ({ email, password, displayName, role }) =>
         persist(await api.signUp({ email, password, display_name: displayName, role })),
+      signInWithGoogle: async (role) =>
+        persist(await api.signInWithGoogle({ id_token: await requestGoogleIdToken(), role })),
       verify: async (email, code) => {
         // Verifying as the account being verified swaps the sign-up token for a
         // session one; the sign-up token cannot reach the private API the app is

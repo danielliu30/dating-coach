@@ -36,6 +36,12 @@ docker compose logs api --since 5m | grep -A 5 -B 3 'Your verification code is:'
 - Older revisions used `/verify?token=<64hex>` deep links; inspect the current log and Verify
   screen rather than assuming that older token format is still accepted.
 - A coach is invisible to clients (and unchattable) until a coach profile + availability is saved from the coach Profile tab.
+- Google sign-in (`POST /auth/google` with `{"id_token","role"}`) skips the code because Google
+  already verified the address; it answers 501 until `GOOGLE_CLIENT_ID` is set in `.env`. There
+  is no way to mint a real Google ID token headlessly, so exercise it from the Go tests
+  (`go test ./internal/auth -run Google`, stub verifier) or by clicking through in a browser
+  with a real Google account. Google-created accounts have no password: `/auth/signin` on them
+  is 401. Google coaches still need admin approval like everyone else.
 - A coach is also invisible, unbookable and unchattable until an admin approves them: every new
   coach profile starts with `coaches.approval_status = 'pending'` (existing rows were backfilled to
   `approved`). Saving the profile again never changes the status.
