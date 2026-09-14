@@ -344,6 +344,87 @@ func (s *Service) GetCoach(ctx context.Context, coachID uuid.UUID) (Coach, error
 	}, nil
 }
 
+// AdminCoach is the admin review-queue view of a coach: the profile plus the
+// account email, which the public Coach view deliberately omits.
+type AdminCoach struct {
+	Coach
+	Email string `json:"email"`
+}
+
+// validApprovalStatus normalises an approval state and reports whether it is
+// one of ApprovalPending, ApprovalApproved or ApprovalRejected.
+func validApprovalStatus(status string) (string, bool) {
+	status = strings.ToLower(strings.TrimSpace(status))
+	switch status {
+	case ApprovalPending, ApprovalApproved, ApprovalRejected:
+		return status, true
+	}
+	return status, false
+}
+
+// ListCoachesByApproval returns a page of coach profiles in one approval state
+// for the admin review queue, oldest application first. Ratings are not
+// computed for this view. An unknown status yields ErrInvalidInput.
+func (s *Service) ListCoachesByApproval(ctx context.Context, status string, limit, offset int32) ([]AdminCoach, error) {
+	status, ok := validApprovalStatus(status)
+	if !ok {
+		return nil, fmt.Errorf("%w: status must be pending, approved or rejected", ErrInvalidInput)
+	}
+	rows, err := s.queries.ListCoachesByStatus(ctx, db.ListCoachesByStatusParams{
+		ApprovalStatus: status,
+		Limit:          limit,
+		Offset:         offset,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list coaches by status: %w", err)
+	}
+	out := make([]AdminCoach, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, AdminCoach{
+			Coach: Coach{
+				ID:               row.UserID.String(),
+				DisplayName:      row.DisplayName,
+				Headline:         row.Headline,
+				Bio:              row.Bio,
+				Specialties:      row.Specialties,
+				Phases:           row.Phases,
+				HourlyRateCents:  row.HourlyRateCents,
+				Timezone:         row.Timezone,
+				YearsExperience:  row.YearsExperience,
+				AcceptingClients: row.AcceptingClients,
+				ApprovalStatus:   row.ApprovalStatus,
+			},
+			Email: row.Email,
+		})
+	}
+	return out, nil
+}
+
+// SetCoachApproval records an admin's decision on a coach profile and returns
+// the updated coach. It yields ErrInvalidInput for an unknown status and
+// ErrNotFound when the user has no coach profile row. It is idempotent: setting
+// the current state again just bumps updated_at. The returned ApprovalStatus is
+// the one this call wrote, even if a concurrent decision has since replaced it.
+func (s *Service) SetCoachApproval(ctx context.Context, coachID uuid.UUID, status string) (Coach, error) {
+	status, ok := validApprovalStatus(status)
+	if !ok {
+		return Coach{}, fmt.Errorf("%w: status must be pending, approved or rejected", ErrInvalidInput)
+	}
+	row, err := s.queries.SetCoachApproval(ctx, db.SetCoachApprovalParams{UserID: coachID, ApprovalStatus: status})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Coach{}, ErrNotFound
+		}
+		return Coach{}, fmt.Errorf("set coach approval: %w", err)
+	}
+	coach, err := s.GetCoach(ctx, row.UserID)
+	if err != nil {
+		return Coach{}, err
+	}
+	coach.ApprovalStatus = row.ApprovalStatus
+	return coach, nil
+}
+
 // UpsertProfileInput is the decoded PUT /coach/profile body.
 type UpsertProfileInput struct {
 	Headline         string   `json:"headline"`
