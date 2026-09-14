@@ -47,7 +47,9 @@ test.describe('service outages', () => {
     await expect(status).toHaveText('Connected', { timeout: 30_000 });
 
     await stopService('api');
-    await expect(status).toHaveText('Reconnecting…', { timeout: 60_000 });
+    // The pill flips between "Reconnecting…" (socket closed) and "Connecting…"
+    // (retry handshake hanging on a dead upstream); only "not Connected" is stable.
+    await expect(status).toHaveText(/^(Connecting…|Reconnecting…)$/, { timeout: 60_000 });
 
     const body = `queued while offline ${Date.now()}`;
     await clientPage.getByPlaceholder('Message your coach').fill(body);
