@@ -56,6 +56,50 @@ func (h *Handler) CoachRoutes() http.Handler {
 	return r
 }
 
+// AdminRoutes mounts the coach review queue. The caller must wrap it in
+// auth.RequireAdmin: nothing here re-checks the role.
+func (h *Handler) AdminRoutes() http.Handler {
+	r := chi.NewRouter()
+	r.Get("/coaches", h.listCoachesByApproval)
+	r.Post("/coaches/{coachID}/approve", h.decideCoach(ApprovalApproved))
+	r.Post("/coaches/{coachID}/reject", h.decideCoach(ApprovalRejected))
+	return r
+}
+
+// listCoachesByApproval handles GET /admin/coaches?status=pending|approved|rejected
+// (default pending) with the same limit/offset paging as the public directory.
+func (h *Handler) listCoachesByApproval(w http.ResponseWriter, r *http.Request) {
+	limit := httpx.QueryInt(r, "limit", 25, 100)
+	offset := httpx.QueryInt(r, "offset", 1, 10_000) - 1
+	status := r.URL.Query().Get("status")
+	if status == "" {
+		status = ApprovalPending
+	}
+	coaches, err := h.svc.ListCoachesByApproval(r.Context(), status, limit, offset)
+	if err != nil {
+		respondErr(w, err, "could not list coaches")
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"coaches": coaches})
+}
+
+// decideCoach returns the handler for POST /admin/coaches/{coachID}/approve or
+// /reject, which records the given status and answers with the updated coach.
+func (h *Handler) decideCoach(status string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		coachID, ok := pathUUID(w, r, "coachID")
+		if !ok {
+			return
+		}
+		coach, err := h.svc.SetCoachApproval(r.Context(), coachID, status)
+		if err != nil {
+			respondErr(w, err, "could not update coach approval")
+			return
+		}
+		httpx.JSON(w, http.StatusOK, coach)
+	}
+}
+
 // config handles GET /config, telling the app which booking behaviour the
 // server is running so the two cannot disagree about whether to collect payment.
 func (h *Handler) config(w http.ResponseWriter, r *http.Request) {
