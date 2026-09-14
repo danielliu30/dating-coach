@@ -94,8 +94,12 @@ test.describe.serial('happy path', () => {
     await openTab(clientPage, 'Account');
     await openTab(clientPage, 'Coaches');
     await expect(clientPage.getByText(coach.displayName)).toHaveCount(0);
+    expect(await openSlots(clientToken, coachID)).toHaveLength(0);
+    expect(await setCoachApproval(coachID, 'approved')).toBe('approved');
     const start = (await openSlots(clientToken, coachID))[0]?.start;
     if (!start) throw new Error('no open slots');
+    expect(await setCoachApproval(coachID, 'pending')).toBe('pending');
+    // Even a valid slot time is refused while the review is pending.
     const blocked = await api('POST', '/coaching/sessions', {
       token: clientToken,
       body: { coach_id: coachID, scheduled_time: start, duration_minutes: 45 },

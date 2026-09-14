@@ -552,6 +552,8 @@ func (s *Service) ListAvailability(ctx context.Context, coachID uuid.UUID) ([]Av
 // offer times that overlap the slot being moved. With payments on, slots too
 // close to start for the client to complete checkout (see minCheckoutWindow)
 // are not offered either; a reschedule takes no payment, so it keeps those.
+// A coach who is not approved has no open slots: nothing is offered that
+// assertBookable would then refuse.
 func (s *Service) OpenSlots(ctx context.Context, coachID, actorID uuid.UUID, from, to time.Time, durationMinutes int32, excludeSessionID *uuid.UUID) ([]Slot, error) {
 	if excludeSessionID != nil {
 		session, err := s.participant(ctx, *excludeSessionID, actorID)
@@ -575,6 +577,9 @@ func (s *Service) OpenSlots(ctx context.Context, coachID, actorID uuid.UUID, fro
 	coach, err := s.GetCoach(ctx, coachID)
 	if err != nil {
 		return nil, err
+	}
+	if coach.ApprovalStatus != ApprovalApproved {
+		return []Slot{}, nil
 	}
 	loc, err := time.LoadLocation(coach.Timezone)
 	if err != nil {
