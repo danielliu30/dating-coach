@@ -198,7 +198,7 @@ export default function CoachProfileScreen(): React.ReactElement {
         years_experience: Number(years) || 0,
         accepting_clients: accepting,
       });
-      setApproval(saved.approval_status);
+      applyApproval(++approvalRead.current.issued, saved.approval_status);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'could not save profile');
       setBusy(false);
