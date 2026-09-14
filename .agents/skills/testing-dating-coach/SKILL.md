@@ -23,8 +23,12 @@ cd app && npm install && npx expo start --web   # web on :8081
 ## Accounts and the verification gate
 - Role (client/coach) is chosen at sign-up and cannot be changed later; you need one of each.
 - Sign-up returns a live session but the app holds you on the Verify screen until `email_verified`.
-- No SMTP: read the six-digit verification code from the API log and enter it on the Verify
-  screen. Match the log entry to the account email when testing multiple roles. Codes expire
+- With SMTP configured (`SMTP_HOST` set in `.env`; see `.env.example`) the six-digit code arrives
+  by email. Locally, `docker compose --profile mail up -d` starts a Mailpit inbox at
+  http://localhost:8025; set `SMTP_HOST=mailpit SMTP_PORT=1025` and restart `api`/`worker`
+  (`docker compose up -d api worker`) to read every delivered email there.
+- No SMTP (`SMTP_HOST` empty, the default): read the six-digit verification code from the API log
+  and enter it on the Verify screen. Match the log entry to the account email when testing multiple roles. Codes expire
   after 3 minutes and are discarded after 3 wrong attempts; use Resend if needed.
 ```bash
 docker compose logs api --since 5m | grep -A 5 -B 3 'Your verification code is:'
