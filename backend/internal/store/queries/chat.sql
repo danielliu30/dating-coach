@@ -43,3 +43,7 @@ SELECT * FROM chat_messages
 WHERE thread_id = $1
 ORDER BY created_at DESC
 LIMIT $2 OFFSET $3;
+
+-- name: GetCoachApprovalStatus :one
+-- The coach's admin review state; no row when the user has no coach profile.
+SELECT approval_status FROM coaches WHERE user_id = $1;

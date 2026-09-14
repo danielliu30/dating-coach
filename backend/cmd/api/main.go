@@ -172,6 +172,10 @@ func newRouter(cfg *config.Config, authenticate func(http.Handler) http.Handler,
 				coach.Use(auth.RequireCoach)
 				coach.Mount("/", h.coaching.CoachRoutes())
 			})
+			private.Route("/admin", func(admin chi.Router) {
+				admin.Use(auth.RequireAdmin)
+				admin.Mount("/", h.coaching.AdminRoutes())
+			})
 		})
 	})
 	return router

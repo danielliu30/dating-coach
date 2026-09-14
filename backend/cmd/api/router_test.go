@@ -94,6 +94,39 @@ func TestPrivateRoutesRejectVerifyScope(t *testing.T) {
 	})
 }
 
+// TestAdminRoutesRequireAdminRole pins the /admin mount: only an admin session
+// token gets past the middleware; users and coaches are refused with 403 and
+// unauthenticated callers with 401.
+func TestAdminRoutesRequireAdminRole(t *testing.T) {
+	issuer := auth.NewTokenIssuer("test-secret")
+	router := testRouter(t, issuer)
+	tokenFor := func(role string) string {
+		tok, _, err := issuer.Issue(uuid.New(), role+"@example.com", role, auth.ScopeSession, time.Hour)
+		if err != nil {
+			t.Fatalf("issue %s token: %v", role, err)
+		}
+		return tok
+	}
+	// A malformed id keeps the admin request inside pathUUID, so the unbacked
+	// service is never reached and the admin case answers 400, not a panic.
+	const path = "/api/v1/admin/coaches/not-a-uuid/approve"
+	for role, want := range map[string]int{
+		auth.RoleUser:  http.StatusForbidden,
+		auth.RoleCoach: http.StatusForbidden,
+		auth.RoleAdmin: http.StatusBadRequest,
+	} {
+		if got := status(router, http.MethodPost, path, tokenFor(role)); got != want {
+			t.Errorf("%s POST %s = %d, want %d", role, path, got, want)
+		}
+	}
+	if got := status(router, http.MethodGet, "/api/v1/admin/coaches", tokenFor(auth.RoleCoach)); got != http.StatusForbidden {
+		t.Errorf("coach GET /admin/coaches = %d, want 403", got)
+	}
+	if got := status(router, http.MethodGet, "/api/v1/admin/coaches", ""); got != http.StatusUnauthorized {
+		t.Errorf("anonymous GET /admin/coaches = %d, want 401", got)
+	}
+}
+
 // status serves one request against router and returns its status code, sending
 // the bearer token when it is not empty.
 func status(router http.Handler, method, path, token string) int {

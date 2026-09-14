@@ -66,8 +66,14 @@ func threadOf(t db.ChatThread) Thread {
 	return out
 }
 
+// coachApproved is the approval_status value under which a coach may be
+// contacted; it mirrors coaching.ApprovalApproved without importing that package.
+const coachApproved = "approved"
+
 // StartThread returns the caller's active thread with a coach, creating one when
-// none exists.
+// none exists. A new thread is only opened with a coach whose profile an admin
+// has approved; otherwise (or when the user has no coach profile) it returns
+// ErrNotFound so unapproved coaches are indistinguishable from absent ones.
 func (s *Service) StartThread(ctx context.Context, userID, coachID uuid.UUID, sessionID *uuid.UUID) (Thread, error) {
 	existing, err := s.queries.GetActiveThreadForPair(ctx, db.GetActiveThreadForPairParams{UserID: userID, CoachID: coachID})
 	if err == nil {
@@ -75,6 +81,14 @@ func (s *Service) StartThread(ctx context.Context, userID, coachID uuid.UUID, se
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return Thread{}, fmt.Errorf("lookup thread: %w", err)
+	}
+
+	approval, err := s.queries.GetCoachApprovalStatus(ctx, coachID)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return Thread{}, fmt.Errorf("lookup coach approval: %w", err)
+	}
+	if err != nil || approval != coachApproved {
+		return Thread{}, fmt.Errorf("%w: coach is not available for chat", ErrNotFound)
 	}
 
 	created, err := s.queries.CreateChatThread(ctx, db.CreateChatThreadParams{

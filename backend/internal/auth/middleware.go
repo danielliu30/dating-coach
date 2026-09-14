@@ -32,6 +32,10 @@ type Principal struct {
 // IsCoach reports whether the caller may use the coach-only endpoints.
 func (p Principal) IsCoach() bool { return p.Role == RoleCoach || p.Role == RoleAdmin }
 
+// IsAdmin reports whether the caller may use the admin-only endpoints. Unlike
+// IsCoach it accepts exactly RoleAdmin: coaches never qualify.
+func (p Principal) IsAdmin() bool { return p.Role == RoleAdmin }
+
 // bearerToken returns the request's JWT from the Authorization header, falling
 // back to the token query parameter that WebSocket clients must use because
 // they cannot set headers. It returns "" when the request carries neither.
@@ -107,6 +111,20 @@ func RequireCoach(next http.Handler) http.Handler {
 		principal, ok := PrincipalFrom(r.Context())
 		if !ok || !principal.IsCoach() {
 			httpx.Error(w, http.StatusForbidden, "coach role required")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// RequireAdmin rejects callers that are not admins with 403. It assumes an
+// earlier middleware already authenticated the request and stored a Principal;
+// a missing principal is treated as forbidden rather than unauthenticated.
+func RequireAdmin(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		principal, ok := PrincipalFrom(r.Context())
+		if !ok || !principal.IsAdmin() {
+			httpx.Error(w, http.StatusForbidden, "admin role required")
 			return
 		}
 		next.ServeHTTP(w, r)
