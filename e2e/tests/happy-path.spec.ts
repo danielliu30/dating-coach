@@ -1,5 +1,5 @@
 import { test, expect, type BrowserContext, type Page } from '@playwright/test';
-import { confirmBooking, openSlots, setCoachApproval } from '../helpers/api';
+import { api, confirmBooking, openSlots, setCoachApproval } from '../helpers/api';
 import { makeAccount, signUpAndVerify } from '../helpers/signUpAndVerify';
 import { db, dbCount, dbOne, waitForDb } from '../helpers/stack';
 import { button, field, openTab, pickSlot, removeAllWindows } from '../helpers/ui';
@@ -88,12 +88,23 @@ test.describe.serial('happy path', () => {
     );
     expect(windows.split('\n').sort()).toEqual([`${today}:0-1440`, `${tomorrow}:0-1440`].sort());
 
-    // A freshly published profile awaits admin review and stays hidden from the
-    // directory. Coaches list is fetched on focus: switch away and back.
+    // A freshly published profile awaits admin review: hidden from the directory
+    // and unbookable. Coaches list is fetched on focus: switch away and back.
     expect(await dbOne(`select approval_status from coaches where user_id = '${coachID}'`)).toBe('pending');
     await openTab(clientPage, 'Account');
     await openTab(clientPage, 'Coaches');
     await expect(clientPage.getByText(coach.displayName)).toHaveCount(0);
+    expect(await openSlots(clientToken, coachID)).toHaveLength(0);
+    expect(await setCoachApproval(coachID, 'approved')).toBe('approved');
+    const start = (await openSlots(clientToken, coachID))[0]?.start;
+    if (!start) throw new Error('no open slots');
+    expect(await setCoachApproval(coachID, 'pending')).toBe('pending');
+    // Even a valid slot time is refused while the review is pending.
+    const blocked = await api('POST', '/coaching/sessions', {
+      token: clientToken,
+      body: { coach_id: coachID, scheduled_time: start, duration_minutes: 45 },
+    });
+    expect(blocked.status).toBe(409);
     expect(await setCoachApproval(coachID, 'approved')).toBe('approved');
     await openTab(clientPage, 'Account');
     await openTab(clientPage, 'Coaches');

@@ -143,12 +143,12 @@ func insertUser(t *testing.T, pool *pgxpool.Pool, role string) uuid.UUID {
 	return id
 }
 
-// insertCoach creates a coach available all day every day in UTC.
+// insertCoach creates an admin-approved coach available all day every day in UTC.
 func insertCoach(t *testing.T, pool *pgxpool.Pool) uuid.UUID {
 	t.Helper()
 	id := insertUser(t, pool, "coach")
 	ctx := context.Background()
-	if _, err := pool.Exec(ctx, `INSERT INTO coaches (user_id) VALUES ($1)`, id); err != nil {
+	if _, err := pool.Exec(ctx, `INSERT INTO coaches (user_id, approval_status) VALUES ($1, 'approved')`, id); err != nil {
 		t.Fatalf("insert coach: %v", err)
 	}
 	for wd := 0; wd < 7; wd++ {

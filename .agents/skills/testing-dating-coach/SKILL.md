@@ -42,6 +42,28 @@ docker compose logs api --since 5m | grep -A 5 -B 3 'Your verification code is:'
   (`go test ./internal/auth -run Google`, stub verifier) or by clicking through in a browser
   with a real Google account. Google-created accounts have no password: `/auth/signin` on them
   is 401. Google coaches still need admin approval like everyone else.
+- A coach is also invisible, unbookable and unchattable until an admin approves them: every new
+  coach profile starts with `coaches.approval_status = 'pending'` (existing rows were backfilled to
+  `approved`). Saving the profile again never changes the status.
+
+## Admin role and coach approval
+- Sign-up never grants `admin`. Promote an account (password or Google) in Postgres, then sign out
+  and back in so the new session token carries the role:
+```bash
+docker compose exec -T postgres psql -U datingcoach -d datingcoach -c "UPDATE users SET role='admin' WHERE email='<you>'"
+```
+- Admin endpoints (session token with role `admin`; users and coaches get 403):
+  `GET /api/v1/admin/coaches?status=pending|approved|rejected`,
+  `POST /api/v1/admin/coaches/{coachID}/approve`, `POST /api/v1/admin/coaches/{coachID}/reject`.
+```bash
+TOKEN=<admin session token>
+curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/v1/admin/coaches?status=pending
+curl -s -X POST -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/v1/admin/coaches/<uuid>/approve
+```
+- Pure-DB fallback when no admin account is handy:
+```bash
+docker compose exec -T postgres psql -U datingcoach -d datingcoach -c "UPDATE coaches SET approval_status='approved' WHERE user_id='<uuid>'"
+```
 
 ## Direct DB inspection
 Credentials come from `.env` (`POSTGRES_USER/DB=datingcoach`), NOT `postgres`:

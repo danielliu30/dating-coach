@@ -61,6 +61,9 @@ export interface AuthSession {
   user: Profile;
 }
 
+/** Admin review state of a coach profile; only 'approved' coaches are listed and bookable. */
+export type CoachApprovalStatus = 'pending' | 'approved' | 'rejected';
+
 export interface Coach {
   id: string;
   display_name: string;
@@ -77,6 +80,7 @@ export interface Coach {
   review_count: number;
   /** Reviews whose rating counts as recommending the coach; what the app displays. */
   recommend_count: number;
+  approval_status: CoachApprovalStatus;
 }
 
 /** A client's rating of a coach; only clients with a completed session may leave one. */
