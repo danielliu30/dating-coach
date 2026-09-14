@@ -7,6 +7,7 @@ import { ApiError } from '../api/client';
 import { AuthLayout } from '../components/AuthLayout';
 import { Divider } from '../components/kit';
 import { Button, Field, Notice } from '../components/ui';
+import { googleSignInAvailable } from '../lib/googleIdentity';
 import type { AuthStackParams } from '../navigation/types';
 import { useAuth } from '../state/auth';
 import { colors, fonts, shared, type } from '../theme';
@@ -14,11 +15,24 @@ import { colors, fonts, shared, type } from '../theme';
 export default function SignInScreen({
   navigation,
 }: NativeStackScreenProps<AuthStackParams, 'SignIn'>): React.ReactElement {
-  const { signIn, signedOutReason, dismissSignedOutReason } = useAuth();
+  const { signIn, signInWithGoogle, signedOutReason, dismissSignedOutReason } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [googleBusy, setGoogleBusy] = useState(false);
+
+  const submitGoogle = async () => {
+    setGoogleBusy(true);
+    setError(null);
+    try {
+      await signInWithGoogle();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'could not sign in with Google');
+    } finally {
+      setGoogleBusy(false);
+    }
+  };
 
   const submit = async () => {
     setBusy(true);
@@ -74,7 +88,17 @@ export default function SignInScreen({
           placeholder="••••••••"
         />
         {error ? <Text style={shared.error}>{error}</Text> : null}
-        <Button label="Sign in" onPress={submit} loading={busy} icon="arrow-forward" />
+        <Button label="Sign in" onPress={submit} loading={busy} disabled={googleBusy} icon="arrow-forward" />
+        {googleSignInAvailable ? (
+          <Button
+            label="Continue with Google"
+            variant="secondary"
+            onPress={submitGoogle}
+            loading={googleBusy}
+            disabled={busy}
+            icon="logo-google"
+          />
+        ) : null}
       </View>
       <View style={styles.dividerRow}>
         <Divider />
