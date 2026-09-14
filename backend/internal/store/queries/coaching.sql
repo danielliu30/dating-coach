@@ -26,7 +26,8 @@ LEFT JOIN (
     FROM coach_reviews
     GROUP BY coach_id
 ) r ON r.coach_id = c.user_id
-WHERE (sqlc.narg('accepting_only')::boolean IS NOT TRUE OR c.accepting_clients)
+WHERE c.approval_status = 'approved'
+  AND (sqlc.narg('accepting_only')::boolean IS NOT TRUE OR c.accepting_clients)
   AND (sqlc.narg('phase')::text IS NULL OR sqlc.narg('phase')::text = ANY(c.phases))
 ORDER BY COALESCE(r.avg_rating, 0) DESC, c.years_experience DESC, u.display_name
 LIMIT $1 OFFSET $2;

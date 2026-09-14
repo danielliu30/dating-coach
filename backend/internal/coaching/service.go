@@ -153,6 +153,13 @@ func (s *Service) PaymentsEnabled() bool {
 	return s.payments.Enabled()
 }
 
+// Coach approval states, mirroring the coaches.approval_status check constraint.
+const (
+	ApprovalPending  = "pending"
+	ApprovalApproved = "approved"
+	ApprovalRejected = "rejected"
+)
+
 // Coach is the public directory view of a coach profile.
 type Coach struct {
 	ID          string   `json:"id"`
@@ -167,6 +174,9 @@ type Coach struct {
 	Timezone         string   `json:"timezone"`
 	YearsExperience  int32    `json:"years_experience"`
 	AcceptingClients bool     `json:"accepting_clients"`
+	// ApprovalStatus is the admin review state (ApprovalPending, ApprovalApproved
+	// or ApprovalRejected); only approved coaches are listed to clients.
+	ApprovalStatus string `json:"approval_status"`
 	// AvgRating is the mean of client ratings (1-5); 0 when ReviewCount is 0.
 	AvgRating   float64 `json:"avg_rating"`
 	ReviewCount int32   `json:"review_count"`
@@ -298,6 +308,7 @@ func (s *Service) ListCoaches(ctx context.Context, limit, offset int32, acceptin
 			Timezone:         row.Timezone,
 			YearsExperience:  row.YearsExperience,
 			AcceptingClients: row.AcceptingClients,
+			ApprovalStatus:   row.ApprovalStatus,
 			AvgRating:        row.AvgRating,
 			ReviewCount:      row.ReviewCount,
 			RecommendCount:   row.RecommendCount,
@@ -326,6 +337,7 @@ func (s *Service) GetCoach(ctx context.Context, coachID uuid.UUID) (Coach, error
 		Timezone:         row.Timezone,
 		YearsExperience:  row.YearsExperience,
 		AcceptingClients: row.AcceptingClients,
+		ApprovalStatus:   row.ApprovalStatus,
 		AvgRating:        row.AvgRating,
 		ReviewCount:      row.ReviewCount,
 		RecommendCount:   row.RecommendCount,

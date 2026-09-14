@@ -432,7 +432,7 @@ func (q *Queries) ExpirePendingSessions(ctx context.Context, limit int32) ([]Coa
 }
 
 const getCoach = `-- name: GetCoach :one
-SELECT c.user_id, c.headline, c.bio, c.specialties, c.hourly_rate_cents, c.timezone, c.years_experience, c.accepting_clients, c.created_at, c.updated_at, c.phases, u.display_name, u.email,
+SELECT c.user_id, c.headline, c.bio, c.specialties, c.hourly_rate_cents, c.timezone, c.years_experience, c.accepting_clients, c.created_at, c.updated_at, c.phases, c.approval_status, u.display_name, u.email,
        COALESCE(r.avg_rating, 0)::float8 AS avg_rating,
        COALESCE(r.review_count, 0)::int AS review_count,
        COALESCE(r.recommend_count, 0)::int AS recommend_count
@@ -459,6 +459,7 @@ type GetCoachRow struct {
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
 	Phases           []string  `json:"phases"`
+	ApprovalStatus   string    `json:"approval_status"`
 	DisplayName      string    `json:"display_name"`
 	Email            string    `json:"email"`
 	AvgRating        float64   `json:"avg_rating"`
@@ -481,6 +482,7 @@ func (q *Queries) GetCoach(ctx context.Context, userID uuid.UUID) (GetCoachRow, 
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Phases,
+		&i.ApprovalStatus,
 		&i.DisplayName,
 		&i.Email,
 		&i.AvgRating,
@@ -954,7 +956,7 @@ func (q *Queries) ListCoachReviews(ctx context.Context, arg ListCoachReviewsPara
 }
 
 const listCoaches = `-- name: ListCoaches :many
-SELECT c.user_id, c.headline, c.bio, c.specialties, c.hourly_rate_cents, c.timezone, c.years_experience, c.accepting_clients, c.created_at, c.updated_at, c.phases, u.display_name, u.email,
+SELECT c.user_id, c.headline, c.bio, c.specialties, c.hourly_rate_cents, c.timezone, c.years_experience, c.accepting_clients, c.created_at, c.updated_at, c.phases, c.approval_status, u.display_name, u.email,
        COALESCE(r.avg_rating, 0)::float8 AS avg_rating,
        COALESCE(r.review_count, 0)::int AS review_count,
        COALESCE(r.recommend_count, 0)::int AS recommend_count
@@ -966,7 +968,8 @@ LEFT JOIN (
     FROM coach_reviews
     GROUP BY coach_id
 ) r ON r.coach_id = c.user_id
-WHERE ($3::boolean IS NOT TRUE OR c.accepting_clients)
+WHERE c.approval_status = 'approved'
+  AND ($3::boolean IS NOT TRUE OR c.accepting_clients)
   AND ($4::text IS NULL OR $4::text = ANY(c.phases))
 ORDER BY COALESCE(r.avg_rating, 0) DESC, c.years_experience DESC, u.display_name
 LIMIT $1 OFFSET $2
@@ -991,6 +994,7 @@ type ListCoachesRow struct {
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
 	Phases           []string  `json:"phases"`
+	ApprovalStatus   string    `json:"approval_status"`
 	DisplayName      string    `json:"display_name"`
 	Email            string    `json:"email"`
 	AvgRating        float64   `json:"avg_rating"`
@@ -1024,6 +1028,7 @@ func (q *Queries) ListCoaches(ctx context.Context, arg ListCoachesParams) ([]Lis
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Phases,
+			&i.ApprovalStatus,
 			&i.DisplayName,
 			&i.Email,
 			&i.AvgRating,
@@ -1640,7 +1645,7 @@ SET headline = EXCLUDED.headline,
     years_experience = EXCLUDED.years_experience,
     accepting_clients = EXCLUDED.accepting_clients,
     updated_at = now()
-RETURNING user_id, headline, bio, specialties, hourly_rate_cents, timezone, years_experience, accepting_clients, created_at, updated_at, phases
+RETURNING user_id, headline, bio, specialties, hourly_rate_cents, timezone, years_experience, accepting_clients, created_at, updated_at, phases, approval_status
 `
 
 type UpsertCoachProfileParams struct {
@@ -1680,6 +1685,7 @@ func (q *Queries) UpsertCoachProfile(ctx context.Context, arg UpsertCoachProfile
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Phases,
+		&i.ApprovalStatus,
 	)
 	return i, err
 }
