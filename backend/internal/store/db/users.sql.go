@@ -50,6 +50,45 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 	return i, err
 }
 
+const createVerifiedUser = `-- name: CreateVerifiedUser :one
+INSERT INTO users (email, password_hash, display_name, role, email_verified)
+VALUES ($1, $2, $3, $4, true)
+RETURNING id, email, password_hash, display_name, role, email_verified, created_at, updated_at, deleted_at, dating_styles, phases_strong, phases_working_on, dating_preferences
+`
+
+type CreateVerifiedUserParams struct {
+	Email        string `json:"email"`
+	PasswordHash string `json:"password_hash"`
+	DisplayName  string `json:"display_name"`
+	Role         string `json:"role"`
+}
+
+func (q *Queries) CreateVerifiedUser(ctx context.Context, arg CreateVerifiedUserParams) (User, error) {
+	row := q.db.QueryRow(ctx, createVerifiedUser,
+		arg.Email,
+		arg.PasswordHash,
+		arg.DisplayName,
+		arg.Role,
+	)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.PasswordHash,
+		&i.DisplayName,
+		&i.Role,
+		&i.EmailVerified,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+		&i.DatingStyles,
+		&i.PhasesStrong,
+		&i.PhasesWorkingOn,
+		&i.DatingPreferences,
+	)
+	return i, err
+}
+
 const deleteUser = `-- name: DeleteUser :execrows
 DELETE FROM users WHERE id = $1
 `
