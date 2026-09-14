@@ -134,6 +134,7 @@ services:
       context: ./app
       args:
         EXPO_PUBLIC_API_URL: ${WEB_API_URL:-}
+        EXPO_PUBLIC_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
     profiles: ['gateway']
     ports: ['${WEB_PORT:-3000}:80']
     restart: unless-stopped
