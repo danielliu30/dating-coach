@@ -14,13 +14,22 @@ async function passwordToken(account: Pick<Account, 'email' | 'password'>): Prom
 }
 
 /**
- * Tries to book the coach's first open slot as `clientToken`. Returns the HTTP
- * status and, on success, the new session's id so a later test can check it
- * still exists.
+ * A start time inside the fixture coach's round-the-clock availability, two
+ * days out on the hour, for booking attempts when the API offers no slots.
+ */
+function fallbackStart(): string {
+  const at = new Date(Date.now() + 48 * 60 * 60 * 1000);
+  at.setUTCMinutes(0, 0, 0);
+  return at.toISOString();
+}
+
+/**
+ * Tries to book the coach as `clientToken`, at their first open slot or, when
+ * none is offered, at `fallbackStart()`. Returns the HTTP status and, on
+ * success, the new session's id so a later test can check it still exists.
  */
 async function tryBooking(clientToken: string, coachID: string): Promise<{ status: number; sessionID?: string }> {
-  const start = (await openSlots(clientToken, coachID))[0]?.start;
-  if (!start) throw new Error('no open slots');
+  const start = (await openSlots(clientToken, coachID))[0]?.start ?? fallbackStart();
   const res = await api<{ id: string }>('POST', '/coaching/sessions', {
     token: clientToken,
     body: { coach_id: coachID, scheduled_time: start, duration_minutes: 45 },
@@ -84,6 +93,7 @@ test.describe('coach approval', () => {
     const clientPage = clientCtx.pages()[0]!;
     await openTab(clientPage, 'Coaches');
     await expect(clientPage.getByText(coach.displayName)).toHaveCount(0);
+    expect(await openSlots(clientToken, coachID)).toHaveLength(0);
     expect((await tryBooking(clientToken, coachID)).status).toBe(409);
   });
 
@@ -132,6 +142,7 @@ test.describe('coach approval', () => {
     await openTab(clientPage, 'Account');
     await openTab(clientPage, 'Coaches');
     await expect(clientPage.getByText(coach.displayName)).toHaveCount(0);
+    expect(await openSlots(clientToken, coachID)).toHaveLength(0);
     expect((await tryBooking(clientToken, coachID)).status).toBe(409);
 
     // Rejection only stops new business; the session booked while approved is untouched.
