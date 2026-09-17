@@ -110,6 +110,17 @@ export default function CoachDetailScreen({
     }
   };
 
+  /**
+   * Switches the session length. Open slots are re-fetched for the new length,
+   * so a slot chosen for the previous length is dropped rather than carried over
+   * into a booking with a different `duration_minutes`.
+   */
+  const pickDuration = (minutes: number) => {
+    if (minutes === duration) return;
+    setDuration(minutes);
+    setSelected(null);
+  };
+
   const book = async () => {
     if (!selected) {
       setError('Pick a time slot first.');
@@ -172,7 +183,10 @@ export default function CoachDetailScreen({
 
   const c = coach.data;
   const rate = (c.hourly_rate_cents / 100).toFixed(0);
-  const selectedSlot = (slots.data ?? []).find((s) => s.start === selected) ?? null;
+  // Slots fetched for a previous length linger in `slots.data` while the new
+  // request is in flight (or after it fails); only offer the current length's.
+  const openSlots = (slots.data ?? []).filter((s) => s.duration_minutes === duration);
+  const selectedSlot = openSlots.find((s) => s.start === selected) ?? null;
 
   return (
     <Screen>
@@ -358,7 +372,7 @@ export default function CoachDetailScreen({
                 key={minutes}
                 accessibilityRole="radio"
                 accessibilityState={{ selected: active }}
-                onPress={() => setDuration(minutes)}
+                onPress={() => pickDuration(minutes)}
                 style={[styles.duration, active && styles.durationActive]}
               >
                 <Text style={[styles.durationValue, active && { color: colors.primaryText }]}>{minutes}</Text>
@@ -369,12 +383,13 @@ export default function CoachDetailScreen({
         </View>
 
         <Text style={styles.label}>Open slots · next 7 days</Text>
-        {slots.loading && !slots.data ? <Loading /> : null}
-        {slots.data?.length === 0 ? (
+        {slots.loading && openSlots.length === 0 ? <Loading /> : null}
+        {!slots.loading && slots.error ? <Text style={shared.error}>{slots.error}</Text> : null}
+        {!slots.loading && !slots.error && slots.data && openSlots.length === 0 ? (
           <MetaRow icon="calendar-clear-outline" text="No open slots in this window. Try another length." />
         ) : null}
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
-          {(slots.data ?? []).map((slot) => {
+          {openSlots.map((slot) => {
             const active = selected === slot.start;
             const parts = slotParts(slot);
             return (
