@@ -103,7 +103,7 @@ describe('ChatScreen optimistic sending', () => {
 
     expect(await screen.findByText('are you there?')).toBeTruthy();
     expect(screen.getAllByTestId('pending')).toHaveLength(1);
-    expect(latest().send).toHaveBeenCalledWith('are you there?');
+    expect(latest().send).toHaveBeenCalledWith('are you there?', expect.any(String));
   });
 
   it('replaces the pending bubble with the server echo instead of duplicating it', async () => {
@@ -259,5 +259,53 @@ describe('ChatScreen optimistic sending', () => {
 
     expect(screen.getAllByText('OK')).toHaveLength(1);
     expect(screen.queryAllByTestId('pending')).toHaveLength(0);
+  });
+
+  it('settles and rejects by client id, so a rejection overtaking an earlier echo hits the right bubble', async () => {
+    mount();
+    await waitFor(() => expect(mockSockets).toHaveLength(1));
+    await typeAndSend('hello');
+    await typeAndSend('hello');
+    const [[, firstID], [, secondID]] = latest().send.mock.calls as [string, string][];
+    expect(firstID).not.toBe(secondID);
+
+    // The second send is refused first (direct on the socket), then the first one's echo arrives via the hub.
+    act(() => latest().handlers.onEvent({ type: 'error', client_id: secondID, body: 'message body is too long' }));
+    expect(screen.getAllByText('hello')).toHaveLength(1);
+    expect(screen.getAllByTestId('pending')).toHaveLength(1);
+    expect(screen.getByText('Not sent: message body is too long')).toBeTruthy();
+
+    act(() =>
+      latest().handlers.onEvent({
+        type: 'message',
+        message_id: 'm-first',
+        client_id: firstID,
+        sender_id: 'me',
+        body: 'hello',
+        created_at: '2030-01-07T18:00:00Z',
+      }),
+    );
+    expect(screen.getAllByText('hello')).toHaveLength(1);
+    expect(screen.queryAllByTestId('pending')).toHaveLength(0);
+  });
+
+  it('ignores an echo whose client id belongs to no pending bubble, appending it as a new message', async () => {
+    mount();
+    await waitFor(() => expect(mockSockets).toHaveLength(1));
+    await typeAndSend('hello');
+
+    act(() =>
+      latest().handlers.onEvent({
+        type: 'message',
+        message_id: 'm-other-device',
+        client_id: 'someone-elses-id',
+        sender_id: 'me',
+        body: 'hello',
+        created_at: '2030-01-07T18:00:00Z',
+      }),
+    );
+
+    expect(screen.getAllByText('hello')).toHaveLength(2);
+    expect(screen.getAllByTestId('pending')).toHaveLength(1);
   });
 });
