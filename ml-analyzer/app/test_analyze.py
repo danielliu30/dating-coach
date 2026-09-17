@@ -587,6 +587,12 @@ def test_llm_parse_rejects_diagnosing_why_the_match_replied() -> None:
         "It reads like they weren't interested after Message 2.",
         "This is where you were rejected.",
         "You may have been too intense for them.",
+        "Your long opener made it hard for them to respond.",
+        "Two questions in a row; that is why they stopped.",
+        "The reason they went quiet was the pace.",
+        "It's unclear why they dropped off, but the tone shifted.",
+        "The silence was due to the topic change.",
+        "It reads like they weren\u2019t interested after Message 2.",
     )
     for field in ("summary", "improvements", "reflection_questions", "patterns", "strengths"):
         for diagnosis in diagnoses:
