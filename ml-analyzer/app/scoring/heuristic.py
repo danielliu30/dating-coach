@@ -135,6 +135,74 @@ def review_self_messages(messages: Sequence[Message]) -> List[SelfMessageReview]
     return reviews
 
 
+# Fewest customer messages before the conversation says anything about who is investing more.
+MIN_SELF_FOR_RECIPROCITY = 3
+# Customer-to-match ratio (message count or word count) from which the imbalance is named.
+RECIPROCITY_RATIO = 1.75
+
+
+def _asks_question(message: Message) -> bool:
+    """True when the message poses a question: a ``?`` closing a sentence or an open-question word anywhere."""
+    return bool(ASKS_BACK.search(message.body) or OPEN_QUESTION.search(message.body))
+
+
+def _times(ratio: float) -> str:
+    """Round a >1 ratio to the everyday phrase used in a pattern ("twice", "three times", "5 times")."""
+    if ratio < 2.5:
+        return "twice"
+    if ratio < 3.5:
+        return "three times"
+    return f"{round(ratio)} times"
+
+
+def reciprocity_patterns(messages: Sequence[Message]) -> List[str]:
+    """Name it when the customer is clearly investing more than the match, as observations to reflect on.
+
+    Compares the customer's side of ``messages`` to the match's on three
+    signals: message count, total word count and who is carrying the
+    questions. Each signal that shows a clear imbalance (a ratio of at least
+    ``RECIPROCITY_RATIO`` in the customer's direction, or every question being
+    the customer's) yields one short, descriptive sentence, e.g. "You sent about
+    twice as many messages as they did in this conversation." Nothing is said
+    about *why* the match engaged less and nothing is drafted; the caller
+    surfaces the list as ``Overall.patterns``. Returns an empty list when the
+    customer wrote fewer than ``MIN_SELF_FOR_RECIPROCITY`` messages or when the
+    exchange is roughly balanced (or tilted the other way), so a short or
+    even conversation stays silent rather than manufacturing a pattern.
+    """
+    own = [m for m in messages if m.sender == "self"]
+    theirs = [m for m in messages if m.sender == "match"]
+    if len(own) < MIN_SELF_FOR_RECIPROCITY:
+        return []
+
+    patterns: List[str] = []
+
+    if not theirs:
+        patterns.append(f"You sent {len(own)} messages in this conversation and none came back.")
+        return patterns
+
+    count_ratio = len(own) / len(theirs)
+    if count_ratio >= RECIPROCITY_RATIO:
+        patterns.append(
+            f"You sent about {_times(count_ratio)} as many messages as they did in this conversation "
+            f"({len(own)} to {len(theirs)})."
+        )
+
+    own_words = sum(_word_count(m) for m in own)
+    their_words = sum(_word_count(m) for m in theirs)
+    if their_words and own_words / their_words >= RECIPROCITY_RATIO:
+        patterns.append(f"You wrote about {_times(own_words / their_words)} as many words as they did across the conversation.")
+
+    own_questions = sum(1 for m in own if _asks_question(m))
+    their_questions = sum(1 for m in theirs if _asks_question(m))
+    if own_questions >= 2 and their_questions == 0:
+        patterns.append(
+            f"The questions in this conversation were all yours ({own_questions} of them); none came back from their side."
+        )
+
+    return patterns
+
+
 class HeuristicScorer(Scorer):
     version = "heuristic-v2"
 
