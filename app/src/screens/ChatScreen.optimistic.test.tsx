@@ -237,4 +237,27 @@ describe('ChatScreen optimistic sending', () => {
     expect(screen.getAllByText('OK')).toHaveLength(2);
     expect(screen.getAllByTestId('pending')).toHaveLength(1);
   });
+
+  it('lets history settle a queued bubble once the connection that flushed it has closed', async () => {
+    mount();
+    await waitFor(() => expect(mockSockets).toHaveLength(1));
+    act(() => latest().handlers.onStatus?.('closed'));
+    await typeAndSend('OK');
+
+    // Reconnect flushes the outbox; the server persists "OK" but the echo is lost with the drop.
+    act(() => latest().handlers.onStatus?.('open'));
+    act(() => latest().handlers.onEvent({ type: 'history', messages: [] }));
+    expect(screen.getAllByTestId('pending')).toHaveLength(1);
+    act(() => latest().handlers.onStatus?.('closed'));
+    act(() => latest().handlers.onStatus?.('open'));
+    act(() =>
+      latest().handlers.onEvent({
+        type: 'history',
+        messages: [{ id: 'ok1', thread_id: 'th1', sender_id: 'me', body: 'OK', created_at: '2030-01-07T18:00:00Z' }],
+      }),
+    );
+
+    expect(screen.getAllByText('OK')).toHaveLength(1);
+    expect(screen.queryAllByTestId('pending')).toHaveLength(0);
+  });
 });

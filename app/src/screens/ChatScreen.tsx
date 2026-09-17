@@ -35,9 +35,27 @@ export default function ChatScreen({
   tokenRef.current = token;
   const connectionRef = useRef(connection);
   connectionRef.current = connection;
-  // Ids of pending bubbles still sitting in the socket's outbox: they were sent
-  // while disconnected, so the server has not seen them yet.
+  // Ids of pending bubbles the server has not seen yet: sent while disconnected,
+  // so still in the socket's outbox. Opening a connection flushes the outbox,
+  // but the server may still reject them, so they only stop counting as queued
+  // once that connection ends (or their echo/rejection arrives).
   const queuedRef = useRef(new Set<string | number>());
+  const flushedRef = useRef(new Set<string | number>());
+
+  /**
+   * Mirrors the socket status into state and tracks which queued bubbles have
+   * been handed to the server: ids flushed on a connection leave `queuedRef`
+   * when that connection closes, so a later history can settle them.
+   */
+  const onStatus = useCallback((status: 'connecting' | 'open' | 'closed') => {
+    if (status === 'open') {
+      flushedRef.current = new Set(queuedRef.current);
+    } else if (status === 'closed') {
+      flushedRef.current.forEach((id) => queuedRef.current.delete(id));
+      flushedRef.current.clear();
+    }
+    setConnection(status);
+  }, []);
   const signedIn = token !== null;
 
   useEffect(() => navigation.setOptions({ title }), [navigation, title]);
@@ -120,7 +138,7 @@ export default function ChatScreen({
     if (!signedIn) return;
     const socket = new ChatSocket(threadID, () => tokenRef.current, {
       onEvent,
-      onStatus: setConnection,
+      onStatus,
     });
     socketRef.current = socket;
     socket.connect();
@@ -128,7 +146,7 @@ export default function ChatScreen({
       socket.close();
       socketRef.current = null;
     };
-  }, [onEvent, signedIn, threadID]);
+  }, [onEvent, onStatus, signedIn, threadID]);
 
   /**
    * Shows each outgoing message at once as a pending bubble and hands it to the
