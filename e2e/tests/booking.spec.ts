@@ -108,10 +108,13 @@ test.describe('booking edge cases', () => {
     const { coachID, token: coachToken } = await freshCoach(coachCtx, 'resched-coach');
     await coachCtx.close();
 
-    // Book 60 minutes through the API and confirm it, so the session occupies [start, start+60).
+    // Book 60 minutes through the API and confirm it, so the session occupies
+    // [start, start+60). The shifted start below must itself fit a 60-minute
+    // slot, so skip a start whose +30 sits on the daily window's midnight edge.
     const slots = await openSlots(clientToken, coachID, { durationMinutes: 60 });
-    const start = slots[3]?.start;
-    if (!start) throw new Error('no open slots');
+    const offered = new Set(slots.map((s) => Date.parse(s.start)));
+    const start = slots.slice(3).find((s) => offered.has(Date.parse(s.start) + 30 * 60_000))?.start;
+    if (!start) throw new Error('no open slot followed by a bookable half-hour shift');
     const booked = await api<{ id: string }>('POST', '/coaching/sessions', {
       token: clientToken,
       body: { coach_id: coachID, scheduled_time: start, duration_minutes: 60, topic: 'reschedule me' },
