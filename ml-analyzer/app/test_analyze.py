@@ -174,6 +174,21 @@ def test_heuristic_match_only_stretch_is_neutral() -> None:
     assert response.overall.strengths == [] and response.overall.improvements == []
 
 
+def test_overall_reflection_fields_default_empty() -> None:
+    """``reflection_questions`` / ``patterns`` are optional and default to empty lists, so the wire shape stays valid without them."""
+    overall = Overall(engagement_score=0.5)
+    assert overall.reflection_questions == [] and overall.patterns == []
+    assert Overall(**{"engagement_score": 0.5, "summary": "ok"}).model_dump()["patterns"] == []
+
+    response = client.post(
+        "/analyze",
+        json={"conversation_id": "conv-shape", "messages": [{"position": 0, "sender": "match", "body": "Hey there, how was your week?"}]},
+    )
+    assert response.status_code == 200
+    body = response.json()["overall"]
+    assert body["reflection_questions"] == [] and body["patterns"] == []
+
+
 def test_analyze_request_preferences_are_optional() -> None:
     """``preferences`` is accepted when present and defaults to None so existing callers keep working."""
     base = {"conversation_id": "conv-3", "messages": [{"position": 0, "sender": "self", "body": "Hey"}]}

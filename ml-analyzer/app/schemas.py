@@ -43,6 +43,15 @@ class Segment(BaseModel):
 
 
 class Overall(BaseModel):
+    """Conversation-level verdict on the customer's own messages.
+
+    ``reflection_questions`` and ``patterns`` turn the analysis inward: open,
+    non-directive questions the customer can sit with ("did I like them?") and
+    recurring behaviour named as an observation to reflect on. Neither ever
+    contains a drafted reply. Both default to empty so existing clients are
+    unaffected.
+    """
+
     engagement_score: float = Field(ge=0.0, le=1.0)
     summary: str = ""
     strengths: List[str] = Field(default_factory=list)
