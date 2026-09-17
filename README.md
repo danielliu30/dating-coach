@@ -1,5 +1,7 @@
 # Dating Coach
 
+> New here? Read the product & architecture overview in [docs/OVERVIEW.md](docs/OVERVIEW.md).
+
 A dating-coach platform in three independent components:
 
 | Path           | Stack                                   | Responsibility                                                       |

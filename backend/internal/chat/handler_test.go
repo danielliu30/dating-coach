@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -167,5 +168,46 @@ func TestSessionStatusReadsTheAccountRow(t *testing.T) {
 	}
 	if got := h.sessionStatus(ctx, userID); got != socketRevoked {
 		t.Fatalf("sessionStatus of a deleted account = %d, want %d", got, socketRevoked)
+	}
+}
+
+// TestHandleIncomingRejectionEchoesClientID sends an empty message, which the
+// service refuses before touching storage, and asserts the error frame names
+// the client's own id for that send.
+func TestHandleIncomingRejectionEchoesClientID(t *testing.T) {
+	h := NewHandler(NewService(nil, nil), nil, stubAccounts{active: true}, nil)
+	threadID := uuid.New()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			t.Errorf("accept: %v", err)
+			return
+		}
+		defer conn.CloseNow()
+		event := Event{Type: EventMessage, ClientID: "c-42", Body: "   "}
+		principal := auth.Principal{UserID: uuid.New()}
+		h.handleIncoming(r.Context(), conn, threadID, principal, uuid.New(), event)
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, _, err := websocket.Dial(ctx, "ws"+server.URL[len("http"):], nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.CloseNow()
+
+	_, data, err := conn.Read(ctx)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	var got Event
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("decode %s: %v", data, err)
+	}
+	if got.Type != EventError || got.ClientID != "c-42" || got.ThreadID != threadID.String() {
+		t.Fatalf("error frame = %+v, want type %q with client_id c-42 for thread %s", got, EventError, threadID)
 	}
 }

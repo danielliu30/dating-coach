@@ -56,13 +56,13 @@ class Overall(BaseModel):
     summary: str = ""
     strengths: List[str] = Field(default_factory=list)
     improvements: List[str] = Field(default_factory=list)
-    reflection_questions: List[str] = Field(
-        default_factory=list,
-        description="Open questions that prompt the customer's own reflection; never tell them what to do",
-    )
     patterns: List[str] = Field(
         default_factory=list,
-        description="Short observations naming recurring behaviour across the conversation; never a drafted reply",
+        description="Recurring behaviour across the customer's messages and the principle behind it; never a drafted reply",
+    )
+    reflection_questions: List[str] = Field(
+        default_factory=list,
+        description="Open questions that prompt the customer to self-diagnose; never a drafted reply",
     )
 
 

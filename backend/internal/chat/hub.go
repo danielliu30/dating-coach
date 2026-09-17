@@ -28,9 +28,13 @@ const (
 
 // Event is the envelope exchanged over the socket and over Redis pub/sub.
 type Event struct {
-	Type      string    `json:"type"`
-	ThreadID  string    `json:"thread_id,omitempty"`
-	MessageID string    `json:"message_id,omitempty"`
+	Type      string `json:"type"`
+	ThreadID  string `json:"thread_id,omitempty"`
+	MessageID string `json:"message_id,omitempty"`
+	// ClientID is the sender's own id for a message frame. It is not stored;
+	// the echo and any rejection of that send carry it back so the sending
+	// client can match them to the bubble it rendered.
+	ClientID  string    `json:"client_id,omitempty"`
 	SenderID  string    `json:"sender_id,omitempty"`
 	Body      string    `json:"body,omitempty"`
 	Typing    bool      `json:"typing,omitempty"`

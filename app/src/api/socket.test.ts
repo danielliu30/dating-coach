@@ -212,6 +212,21 @@ describe('ChatSocket', () => {
     ]);
   });
 
+  it("puts the caller's client id on the message frame and keeps it through the outbox", async () => {
+    const socket = new ChatSocket('t1', () => 'tok', { onEvent: jest.fn() });
+    socket.connect();
+    latest().open();
+    socket.send('hi', 'c1');
+    expect(JSON.parse(String(latest().send.mock.calls[0][0]))).toEqual({ type: 'message', body: 'hi', client_id: 'c1' });
+
+    latest().serverClose();
+    await flush();
+    socket.send('later', 'c2');
+    jest.advanceTimersByTime(1000);
+    latest().open();
+    expect(JSON.parse(String(latest().send.mock.calls[0][0]))).toEqual({ type: 'message', body: 'later', client_id: 'c2' });
+  });
+
   it('sends immediately while open', () => {
     const socket = new ChatSocket('t1', () => 'tok', { onEvent: jest.fn() });
     socket.connect();
