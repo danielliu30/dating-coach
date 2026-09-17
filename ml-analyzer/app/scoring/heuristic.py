@@ -231,9 +231,10 @@ def reflection_questions(
     questions = ["Setting how they responded aside for a moment: did you actually enjoy this conversation?"]
     if patterns:
         questions.append("Were you putting in more effort than they were, and did that feel okay to you?")
-    if preferences:
+    preference = preferences.strip() if preferences else ""
+    if preference:
         questions.append(
-            f"You said you are looking for: {preferences.strip()[:200]}. Did this conversation feel like it was heading there?"
+            f"You said you are looking for: {preference[:200]}. Did this conversation feel like it was heading there?"
         )
     return questions
 
