@@ -9,7 +9,7 @@ from pydantic import ValidationError
 
 from app.config import Settings
 from app.main import app
-from app.schemas import AnalyzeRequest, ImageAnalyzeRequest, ImageRef, Message, ReviewComment, ReviewSummaryRequest, Segment
+from app.schemas import AnalyzeRequest, ImageAnalyzeRequest, ImageRef, Message, Overall, ReviewComment, ReviewSummaryRequest, Segment
 from app.scoring.base import message_range
 from app.scoring.heuristic import HeuristicScorer, review_self_messages
 from app.scoring.image import HeuristicImageScorer, build_image_scorer, image_dimensions
@@ -40,6 +40,28 @@ def test_analyze_heuristic() -> None:
     body = response.json()
     assert body["model_version"]
     assert 0.0 <= body["overall"]["engagement_score"] <= 1.0
+
+
+def test_overall_patterns_default_empty() -> None:
+    """Overall pattern fields default to empty and remain empty for a basic analysis."""
+    assert Overall(engagement_score=0.5).patterns == []
+    assert Overall(engagement_score=0.5).reflection_questions == []
+
+    request = AnalyzeRequest(
+        conversation_id="conv-1",
+        platform="test",
+        match_name="Sam",
+        messages=[
+            Message(position=0, sender="self", body="Hey! How was your weekend?"),
+            Message(position=1, sender="match", body="Pretty good, went hiking. You?"),
+            Message(position=2, sender="self", body="Nice! I tried a new ramen place."),
+        ],
+    )
+    response = client.post("/analyze", json=request.model_dump())
+    assert response.status_code == 200
+    body = response.json()
+    assert body["overall"]["patterns"] == []
+    assert body["overall"]["reflection_questions"] == []
 
 
 def test_analyze_images_endpoint_fallback() -> None:
