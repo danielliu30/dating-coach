@@ -175,7 +175,7 @@ func (h *Handler) postMessage(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	msg, err := h.svc.Send(r.Context(), threadID, principal.UserID, in.Body)
+	msg, err := h.svc.Send(r.Context(), threadID, principal.UserID, in.Body, "")
 	if err != nil {
 		respondErr(w, err, "could not send message")
 		return
@@ -403,8 +403,8 @@ func (h *Handler) handleIncoming(ctx context.Context, conn *websocket.Conn, thre
 	}
 	switch event.Type {
 	case EventMessage:
-		if _, err := h.svc.Send(ctx, threadID, principal.UserID, event.Body); err != nil {
-			h.write(ctx, conn, Event{Type: EventError, ThreadID: threadID.String(), Body: err.Error()})
+		if _, err := h.svc.Send(ctx, threadID, principal.UserID, event.Body, event.ClientID); err != nil {
+			h.write(ctx, conn, Event{Type: EventError, ThreadID: threadID.String(), ClientID: event.ClientID, Body: err.Error()})
 		}
 	case EventTyping:
 		if err := h.svc.Typing(ctx, threadID, principal.UserID, event.Typing); err != nil {
