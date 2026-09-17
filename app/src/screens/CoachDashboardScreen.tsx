@@ -24,6 +24,9 @@ import { colors, fonts, radii, shared, type } from '../theme';
 import { formatWhen, sessionTone } from './MySessionsScreen';
 
 /** Greeting keyed to the local hour, e.g. "Good morning". */
+/** The per-session requests a coach can fire from a dashboard card. */
+type SessionAction = 'complete' | 'no_show' | 'notes' | 'meeting_url';
+
 const greeting = (): string => {
   const hour = new Date().getHours();
   return hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
@@ -37,10 +40,18 @@ export default function CoachDashboardScreen(): React.ReactElement {
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [meetingUrls, setMeetingUrls] = useState<Record<string, string>>({});
   const [actError, setActError] = useState<string | null>(null);
-  const [busyID, setBusyID] = useState<string | null>(null);
+  const [busy, setBusy] = useState<{ sessionID: string; action: SessionAction } | null>(null);
 
-  const act = async (session: CoachingSession, action: 'complete' | 'no_show' | 'notes' | 'meeting_url') => {
-    setBusyID(session.id);
+  /** Whether `action` on `session` is the request currently in flight. */
+  const isBusy = (session: CoachingSession, action: SessionAction): boolean =>
+    busy?.sessionID === session.id && busy.action === action;
+  /** Whether some other request on `session` is in flight, so this action must wait. */
+  const isBlocked = (session: CoachingSession, action: SessionAction): boolean =>
+    busy?.sessionID === session.id && busy.action !== action;
+
+  const act = async (session: CoachingSession, action: SessionAction) => {
+    if (busy?.sessionID === session.id) return;
+    setBusy({ sessionID: session.id, action });
     setActError(null);
     try {
       if (action === 'notes') {
@@ -54,7 +65,7 @@ export default function CoachDashboardScreen(): React.ReactElement {
     } catch (err) {
       setActError(err instanceof Error ? err.message : 'could not update session');
     } finally {
-      setBusyID(null);
+      setBusy(null);
     }
   };
 
@@ -180,7 +191,8 @@ export default function CoachDashboardScreen(): React.ReactElement {
               label="Save meeting link"
               icon="videocam-outline"
               variant="secondary"
-              loading={busyID === session.id}
+              loading={isBusy(session, 'meeting_url')}
+              disabled={isBlocked(session, 'meeting_url')}
               onPress={() => void act(session, 'meeting_url')}
             />
             <Text style={styles.label}>Session notes</Text>
@@ -198,7 +210,8 @@ export default function CoachDashboardScreen(): React.ReactElement {
                   label="Save notes"
                   icon="save-outline"
                   variant="secondary"
-                  loading={busyID === session.id}
+                  loading={isBusy(session, 'notes')}
+                  disabled={isBlocked(session, 'notes')}
                   onPress={() => void act(session, 'notes')}
                 />
               </View>
@@ -206,7 +219,8 @@ export default function CoachDashboardScreen(): React.ReactElement {
                 <Button
                   label="Completed"
                   icon="checkmark-outline"
-                  disabled={busyID === session.id}
+                  loading={isBusy(session, 'complete')}
+                  disabled={isBlocked(session, 'complete')}
                   onPress={() => void act(session, 'complete')}
                 />
               </View>
@@ -214,7 +228,8 @@ export default function CoachDashboardScreen(): React.ReactElement {
                 <Button
                   label="No show"
                   variant="secondary"
-                  disabled={busyID === session.id}
+                  loading={isBusy(session, 'no_show')}
+                  disabled={isBlocked(session, 'no_show')}
                   onPress={() => void act(session, 'no_show')}
                 />
               </View>
