@@ -228,6 +228,15 @@ def test_reciprocity_patterns_stay_silent_when_balanced_or_too_short() -> None:
         "The questions in this conversation were all yours (2 of them); none came back from their side."
     ]
 
+    emphatic_reply = [
+        Message(position=0, sender="self", body="How was work??"),
+        Message(position=1, sender="match", body='Fine, and you?! I liked your "long day" comment.'),
+        Message(position=2, sender="self", body="Did you eat?"),
+        Message(position=3, sender="match", body="(Did you?)"),
+        Message(position=4, sender="self", body="See you later."),
+    ]
+    assert reciprocity_patterns(emphatic_reply) == []
+
     unanswered = [Message(position=i, sender="self", body="Hey, are you around this week?") for i in range(3)]
     assert reciprocity_patterns(unanswered) == ["You sent 3 messages in this conversation and none came back."]
 
