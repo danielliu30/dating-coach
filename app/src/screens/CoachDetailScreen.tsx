@@ -182,7 +182,10 @@ export default function CoachDetailScreen({
 
   const c = coach.data;
   const rate = (c.hourly_rate_cents / 100).toFixed(0);
-  const selectedSlot = (slots.data ?? []).find((s) => s.start === selected) ?? null;
+  // Slots fetched for a previous length linger in `slots.data` while the new
+  // request is in flight (or after it fails); only offer the current length's.
+  const openSlots = (slots.data ?? []).filter((s) => s.duration_minutes === duration);
+  const selectedSlot = openSlots.find((s) => s.start === selected) ?? null;
 
   return (
     <Screen>
@@ -379,12 +382,12 @@ export default function CoachDetailScreen({
         </View>
 
         <Text style={styles.label}>Open slots · next 7 days</Text>
-        {slots.loading && !slots.data ? <Loading /> : null}
-        {slots.data?.length === 0 ? (
+        {slots.loading && openSlots.length === 0 ? <Loading /> : null}
+        {!slots.loading && slots.data && openSlots.length === 0 ? (
           <MetaRow icon="calendar-clear-outline" text="No open slots in this window. Try another length." />
         ) : null}
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
-          {(slots.data ?? []).map((slot) => {
+          {openSlots.map((slot) => {
             const active = selected === slot.start;
             const parts = slotParts(slot);
             return (

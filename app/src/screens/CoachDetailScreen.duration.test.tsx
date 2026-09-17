@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import React from 'react';
 
 import { api } from '../api/client';
@@ -79,6 +79,20 @@ describe('CoachDetailScreen duration', () => {
     fireEvent.press(screen.getByRole('button', { name: 'Book session' }));
     await waitFor(() => expect(screen.getByText('Pick a time slot first.')).toBeTruthy());
     expect(mocked.bookSession).not.toHaveBeenCalled();
+  });
+
+  it('hides the previous length\'s slots until the new length\'s slots arrive', async () => {
+    mount();
+    await waitFor(() => expect(screen.getAllByRole('button', { name: /Jan 7/ }).length).toBe(2));
+
+    let deliver: (slots: Slot[]) => void = () => {};
+    mocked.openSlots.mockImplementationOnce(() => new Promise<Slot[]>((resolve) => (deliver = resolve)));
+    fireEvent.press(durationRadio(60));
+    await waitFor(() => expect(mocked.openSlots).toHaveBeenLastCalledWith('c1', 60));
+    expect(screen.queryAllByRole('button', { name: /Jan 7/ })).toHaveLength(0);
+
+    await act(async () => deliver([{ start: '2030-01-08T10:00:00Z', duration_minutes: 60 }]));
+    expect(screen.getAllByRole('button', { name: /Jan 8/ })).toHaveLength(1);
   });
 
   it('keeps the selected slot when the same length is pressed again', async () => {
