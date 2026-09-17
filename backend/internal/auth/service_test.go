@@ -440,6 +440,42 @@ func TestNormaliseChoicesCanonicalisesAndRejectsUnknown(t *testing.T) {
 	}
 }
 
+// TestValidatePassword pins the three password rules: the byte bounds — the
+// upper one being bcrypt's input limit, which would otherwise surface as an
+// internal error from GenerateFromPassword — and the whitespace-only refusal.
+func TestValidatePassword(t *testing.T) {
+	cases := []struct {
+		name     string
+		password string
+		wantErr  bool
+	}{
+		{"accepted", "correct-horse", false},
+		{"exactly min", strings.Repeat("a", MinPasswordLen), false},
+		{"exactly max", strings.Repeat("a", MaxPasswordLen), false},
+		{"multibyte within max", strings.Repeat("é", MaxPasswordLen/2), false},
+		{"too short", strings.Repeat("a", MinPasswordLen-1), true},
+		{"one byte over max", strings.Repeat("a", MaxPasswordLen+1), true},
+		{"multibyte over max", strings.Repeat("é", MaxPasswordLen/2+1), true},
+		{"only spaces", strings.Repeat(" ", MinPasswordLen), true},
+		{"only mixed whitespace", " \t\n\r    ", true},
+		{"padded but not blank", "   abc   ", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validatePassword(tc.password)
+			if tc.wantErr && !errors.Is(err, ErrInvalidInput) {
+				t.Fatalf("got %v, want ErrInvalidInput", err)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("got %v, want nil", err)
+			}
+			if err != nil && strings.Contains(err.Error(), tc.password) {
+				t.Fatalf("error %q echoes the password", err)
+			}
+		})
+	}
+}
+
 // TestUpdateDatingProfileRejectsOverlongPreferences pins the free-text cap:
 // the ML analyzer refuses longer preferences, so the API must too, before any
 // query runs.
