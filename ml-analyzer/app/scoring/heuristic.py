@@ -6,7 +6,8 @@ an LLM call fails, so ``/analyze`` always answers with the same shape.
 Only the customer's own messages (``sender == "self"``) are judged. The match's
 messages are never scored; they serve as evidence of how each of the customer's
 messages landed (no reply, a short reply, or a substantive reply). Feedback
-hints at what to look at, it never drafts what to say next.
+hints at what to look at, it never drafts what to say next, and it names
+recurring habits across the conversation.
 """
 
 from __future__ import annotations
@@ -136,7 +137,7 @@ def review_self_messages(messages: Sequence[Message]) -> List[SelfMessageReview]
 
 
 class HeuristicScorer(Scorer):
-    version = "heuristic-v2"
+    version = "heuristic-v3"
 
     def __init__(self, segment_size: int = 4) -> None:
         self.segment_size = segment_size
@@ -172,6 +173,8 @@ class HeuristicScorer(Scorer):
                 summary=_summary(reviews, request.preferences),
                 strengths=_strengths(reviews),
                 improvements=_improvements(reviews),
+                patterns=_patterns(reviews),
+                reflection_questions=_reflection_questions(reviews),
             ),
         )
 
@@ -208,6 +211,74 @@ def _improvements(reviews: Sequence[SelfMessageReview]) -> List[str]:
                 "it may not have given them much to engage with."
             )
     return hints[:5]
+
+
+MIN_PATTERN_COUNT = 2
+
+
+def _has_open_question(message: Message) -> bool:
+    """Return whether a message contains an open question or ends in a question mark."""
+    return bool(OPEN_QUESTION.search(message.body)) or message.body.strip().endswith("?")
+
+
+def _patterns(reviews: Sequence[SelfMessageReview]) -> List[str]:
+    """Name behaviour that recurs across the customer's stalled (and landed) messages.
+
+    Only traits shared by at least ``MIN_PATTERN_COUNT`` messages are reported,
+    so a single flat message is left to ``_improvements``. Each phrase gives the
+    count, the trait and the principle behind it; none of them suggest wording.
+    Returns an empty list when nothing recurs.
+    """
+    flat = [r for r in reviews if r.outcome in ("no_reply", "short_reply")]
+    patterns: List[str] = []
+    if len(flat) >= MIN_PATTERN_COUNT:
+        no_open = [r for r in flat if not _has_open_question(r.message)]
+        if len(no_open) >= MIN_PATTERN_COUNT:
+            patterns.append(
+                f"{len(no_open)} of your {len(flat)} messages that stalled carried no open question — "
+                "a message with nothing specific to answer is easy to leave hanging."
+            )
+        low = [r for r in flat if _is_low_effort(r.message)]
+        if len(low) >= MIN_PATTERN_COUNT:
+            names = ", ".join(_excerpt(r.message) for r in low[:3])
+            patterns.append(
+                f"{len(low)} of your {len(flat)} messages that stalled were one-word reactions ({names}) — "
+                "a reaction on its own gives the other person nothing to build on."
+            )
+        double = [r for r in flat if r.outcome == "no_reply" and r.reply is None and r is not reviews[-1]]
+        if len(double) >= MIN_PATTERN_COUNT:
+            patterns.append(
+                f"{len(double)} times you wrote again before they had answered — "
+                "following up on your own message tends to lower the pressure on them to reply at all."
+            )
+    good = [r for r in reviews if r.outcome == "good_reply"]
+    good_open = [r for r in good if _has_open_question(r.message)]
+    if len(good_open) >= MIN_PATTERN_COUNT and len(good_open) * 2 >= len(good):
+        patterns.append(
+            f"{len(good_open)} of your {len(good)} messages that landed included an open question — "
+            "that is the habit doing the work when replies come back detailed."
+        )
+    return patterns[:5]
+
+
+def _reflection_questions(reviews: Sequence[SelfMessageReview]) -> List[str]:
+    """Open questions that hand the diagnosis back to the customer.
+
+    Emitted only when ``_patterns`` found something recurring, so a clean or
+    one-off conversation gets none. Questions are about the customer's own
+    habits and never propose what to write.
+    """
+    patterns = _patterns(reviews)
+    if not patterns:
+        return []
+    questions = ["Which of your messages drew the most detail, and what did they have in common?"]
+    if any("no open question" in p for p in patterns):
+        questions.append("Before sending, what would the other person concretely answer in your message?")
+    if any("one-word reactions" in p for p in patterns):
+        questions.append("When you reacted with a single word, what were you hoping would happen next?")
+    if any("wrote again" in p for p in patterns):
+        questions.append("What changes for them when you leave room to come back on their own?")
+    return questions[:3]
 
 
 def _outcome_counts(reviews: Sequence[SelfMessageReview]) -> Dict[Outcome, int]:

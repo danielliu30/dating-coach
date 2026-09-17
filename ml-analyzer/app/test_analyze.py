@@ -9,7 +9,7 @@ from pydantic import ValidationError
 
 from app.config import Settings
 from app.main import app
-from app.schemas import AnalyzeRequest, ImageAnalyzeRequest, ImageRef, Message, Overall, ReviewComment, ReviewSummaryRequest, Segment
+from app.schemas import AnalyzeRequest, AnalyzeResponse, ImageAnalyzeRequest, ImageRef, Message, Overall, ReviewComment, ReviewSummaryRequest, Segment
 from app.scoring.base import message_range
 from app.scoring.heuristic import HeuristicScorer, review_self_messages
 from app.scoring.image import HeuristicImageScorer, build_image_scorer, image_dimensions
@@ -153,9 +153,71 @@ def test_heuristic_feedback_hints_without_drafting_replies() -> None:
         "Message 3 ('Nice') only drew a short reply ('ok') — it may not have given them much to engage with.",
         "Message 5 ('So what are you up to this weekend?') got no reply — worth a look at what made it hard to answer.",
     ]
-    for hint in response.overall.improvements:
+    for hint in response.overall.improvements + response.overall.patterns + response.overall.reflection_questions:
         assert "ask" not in hint.lower() and "say" not in hint.lower()
     assert "fellow climber" in response.overall.summary
+
+
+def test_heuristic_patterns_name_recurring_behaviour() -> None:
+    """Recurring stalled-message traits become diagnostic patterns and self-reflection questions."""
+    request = AnalyzeRequest(
+        conversation_id="conv-patterns",
+        messages=[
+            Message(position=0, sender="self", body="Nice"),
+            Message(position=1, sender="match", body="ok"),
+            Message(position=2, sender="self", body="Cool"),
+            Message(position=3, sender="match", body="yeah"),
+            Message(position=4, sender="self", body="Sounds fun"),
+            Message(position=5, sender="match", body="ok"),
+            Message(position=6, sender="self", body="How did you first get into climbing?"),
+            Message(position=7, sender="match", body="My brother dragged me to a gym years ago and I never stopped, do you climb?"),
+        ],
+    )
+    response = asyncio.run(HeuristicScorer(segment_size=2).analyze(request))
+
+    assert response.overall.patterns[0] == (
+        "3 of your 3 messages that stalled carried no open question — "
+        "a message with nothing specific to answer is easy to leave hanging."
+    )
+    assert any(
+        "one-word reactions" in pattern
+        and "2 of your 3" in pattern
+        and "'Nice', 'Cool'" in pattern
+        for pattern in response.overall.patterns
+    )
+    assert response.overall.reflection_questions[0] == "Which of your messages drew the most detail, and what did they have in common?"
+    assert len(response.overall.reflection_questions) == 3
+    for text in response.overall.patterns + response.overall.reflection_questions:
+        assert "ask" not in text.lower() and "say" not in text.lower()
+
+
+def test_heuristic_patterns_empty_when_nothing_recurs() -> None:
+    """One-off and match-only conversations keep recurring-pattern fields empty."""
+    one_off = AnalyzeRequest(
+        conversation_id="conv-4",
+        messages=[
+            Message(position=0, sender="self", body="What made you pick that hiking trail?"),
+            Message(position=1, sender="match", body="My sister said it was worth it, have you been?"),
+            Message(position=2, sender="self", body="Nice"),
+            Message(position=3, sender="match", body="ok"),
+            Message(position=4, sender="self", body="So what are you up to this weekend?"),
+        ],
+    )
+    one_off_response = asyncio.run(HeuristicScorer(segment_size=2).analyze(one_off))
+    assert one_off_response.overall.patterns == []
+    assert one_off_response.overall.reflection_questions == []
+
+    match_only = AnalyzeRequest(
+        conversation_id="conv-5",
+        messages=[
+            Message(position=0, sender="match", body="Hey there, how was the concert last night?"),
+            Message(position=1, sender="match", body="I heard the opener was great"),
+        ],
+    )
+    match_only_response = asyncio.run(HeuristicScorer(segment_size=2).analyze(match_only))
+    assert match_only_response.overall.patterns == []
+    assert match_only_response.overall.reflection_questions == []
+    assert AnalyzeResponse.model_validate(match_only_response.model_dump()) == match_only_response
 
 
 def test_heuristic_match_only_stretch_is_neutral() -> None:
