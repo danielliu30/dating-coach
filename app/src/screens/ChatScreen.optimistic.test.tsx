@@ -202,6 +202,7 @@ describe('ChatScreen optimistic sending', () => {
   it('settles a pending bubble that reconnect history already contains', async () => {
     mount();
     await waitFor(() => expect(mockSockets).toHaveLength(1));
+    act(() => latest().handlers.onStatus?.('open'));
     await typeAndSend('made it');
     await typeAndSend('still waiting');
 
@@ -218,5 +219,22 @@ describe('ChatScreen optimistic sending', () => {
     expect(screen.getAllByTestId('sent')).toHaveLength(1);
     expect(screen.getAllByTestId('pending')).toHaveLength(1);
     expect(screen.getByText('still waiting')).toBeTruthy();
+  });
+
+  it('does not let an older identical message settle a bubble still queued offline', async () => {
+    mount();
+    await waitFor(() => expect(mockSockets).toHaveLength(1));
+    act(() => latest().handlers.onStatus?.('closed'));
+    await typeAndSend('OK');
+
+    act(() =>
+      latest().handlers.onEvent({
+        type: 'history',
+        messages: [{ id: 'old', thread_id: 'th1', sender_id: 'me', body: 'OK', created_at: '2030-01-01T00:00:00Z' }],
+      }),
+    );
+
+    expect(screen.getAllByText('OK')).toHaveLength(2);
+    expect(screen.getAllByTestId('pending')).toHaveLength(1);
   });
 });

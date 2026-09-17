@@ -33,6 +33,11 @@ export default function ChatScreen({
   // next reconnect without tearing the open one down.
   const tokenRef = useRef(token);
   tokenRef.current = token;
+  const connectionRef = useRef(connection);
+  connectionRef.current = connection;
+  // Ids of pending bubbles still sitting in the socket's outbox: they were sent
+  // while disconnected, so the server has not seen them yet.
+  const queuedRef = useRef(new Set<string | number>());
   const signedIn = token !== null;
 
   useEffect(() => navigation.setOptions({ title }), [navigation, title]);
@@ -42,9 +47,10 @@ export default function ChatScreen({
       switch (event.type) {
         case 'history': {
           // History arrives on every (re)connect, before the socket's outbox is
-          // flushed. Pending bubbles that history already contains (sent, but
-          // the echo was lost with the connection) are settled by it; the rest
-          // are kept in front of it for later echoes to settle.
+          // flushed. A pending bubble the server did receive (sent on an open
+          // socket, echo lost with the connection) is settled by a matching
+          // history message; bubbles still queued in the outbox are kept as is,
+          // since an older identical message is not theirs.
           const history = (event.messages ?? []).map(toGifted);
           setMessages((current) => {
             const known = new Set(current.map((m) => m._id));
@@ -53,7 +59,7 @@ export default function ChatScreen({
               .filter((m) => m.user._id === user?.id && !known.has(m._id))
               .reverse()
               .forEach((m) => {
-                const i = pending.findLastIndex((p) => p.text === m.text);
+                const i = pending.findLastIndex((p) => !queuedRef.current.has(p._id) && p.text === m.text);
                 if (i !== -1) pending.splice(i, 1);
               });
             return [...pending, ...history];
@@ -77,6 +83,7 @@ export default function ChatScreen({
                 ? current.findLastIndex((m) => m.pending && m.text === persisted.text)
                 : -1;
             if (pendingIndex === -1) return GiftedChat.append(current, [persisted]);
+            queuedRef.current.delete(current[pendingIndex]._id);
             return current.map((m, i) => (i === pendingIndex ? persisted : m));
           });
           break;
@@ -90,6 +97,7 @@ export default function ChatScreen({
           setMessages((current) => {
             const rejected = current.findLastIndex((m) => m.pending);
             if (rejected === -1) return current;
+            queuedRef.current.delete(current[rejected]._id);
             const notice: IMessage = {
               _id: `error-${Date.now()}-${rejected}`,
               text: `Not sent: ${event.body ?? 'message rejected'}`,
@@ -128,6 +136,7 @@ export default function ChatScreen({
    * replaces the pending bubble with the persisted message.
    */
   const onSend = useCallback((outgoing: IMessage[] = []) => {
+    if (connectionRef.current !== 'open') outgoing.forEach((message) => queuedRef.current.add(message._id));
     setMessages((current) =>
       GiftedChat.append(
         current,
