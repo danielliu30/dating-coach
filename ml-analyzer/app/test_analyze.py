@@ -137,12 +137,38 @@ def test_heuristic_feedback_hints_without_drafting_replies() -> None:
 
     assert response.overall.strengths == ["Message 1 landed: it drew a detailed reply ('My sister said the ridge views are wort…')."]
     assert response.overall.improvements == [
-        "Message 3 ('Nice') only drew a short reply ('ok') — it may not have given them much to engage with.",
-        "Message 5 ('So what are you up to this weekend?') got no reply — worth a look at what made it hard to answer.",
+        "Message 3 ('Nice') only drew a short reply ('ok'). That's the pattern, not the reason — is it worth thinking about?",
+        "Message 5 ('So what are you up to this weekend?') got no reply. That's the pattern, not the reason — is it worth thinking about?",
     ]
     for hint in response.overall.improvements:
         assert "ask" not in hint.lower() and "say" not in hint.lower()
     assert "fellow climber" in response.overall.summary
+
+
+REJECTION_DIAGNOSIS = ("because", "reject", "lost interest", "turned them off", "put them off", "made it hard", "the reason they", "why they")
+
+
+def test_heuristic_never_diagnoses_why_the_match_pulled_back() -> None:
+    """Improvements and the summary describe outcomes and hand them back as questions; they never claim to know the match's reasons."""
+    request = AnalyzeRequest(
+        conversation_id="conv-8",
+        preferences="someone who plans real dates",
+        messages=[
+            Message(position=0, sender="self", body="Hey, how was your weekend? Did you get out at all?"),
+            Message(position=1, sender="match", body="ok"),
+            Message(position=2, sender="self", body="What did you end up doing?"),
+            Message(position=3, sender="self", body="Still up for that coffee?"),
+        ],
+    )
+    response = asyncio.run(HeuristicScorer(segment_size=2).analyze(request))
+
+    assert response.overall.summary.startswith("Your messages are not getting traction")
+    assert len(response.overall.improvements) == 3
+    for text in [response.overall.summary, *response.overall.improvements, *(s.comment for s in response.segments)]:
+        lowered = text.lower()
+        assert not any(phrase in lowered for phrase in REJECTION_DIAGNOSIS), text
+    for hint in response.overall.improvements:
+        assert hint.endswith("is it worth thinking about?")
 
 
 def test_heuristic_match_only_stretch_is_neutral() -> None:
