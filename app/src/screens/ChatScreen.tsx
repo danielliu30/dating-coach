@@ -42,10 +42,22 @@ export default function ChatScreen({
       switch (event.type) {
         case 'history': {
           // History arrives on every (re)connect, before the socket's outbox is
-          // flushed, so bubbles still waiting on the server are kept in front
-          // of it rather than wiped; later echoes settle them.
+          // flushed. Pending bubbles that history already contains (sent, but
+          // the echo was lost with the connection) are settled by it; the rest
+          // are kept in front of it for later echoes to settle.
           const history = (event.messages ?? []).map(toGifted);
-          setMessages((current) => [...current.filter((m) => m.pending), ...history]);
+          setMessages((current) => {
+            const known = new Set(current.map((m) => m._id));
+            const pending = current.filter((m) => m.pending);
+            history
+              .filter((m) => m.user._id === user?.id && !known.has(m._id))
+              .reverse()
+              .forEach((m) => {
+                const i = pending.findLastIndex((p) => p.text === m.text);
+                if (i !== -1) pending.splice(i, 1);
+              });
+            return [...pending, ...history];
+          });
           break;
         }
         case 'message': {

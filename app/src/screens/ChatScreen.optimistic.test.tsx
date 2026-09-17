@@ -198,4 +198,25 @@ describe('ChatScreen optimistic sending', () => {
     expect(screen.getAllByText('spaced out')).toHaveLength(1);
     expect(screen.queryAllByTestId('pending')).toHaveLength(0);
   });
+
+  it('settles a pending bubble that reconnect history already contains', async () => {
+    mount();
+    await waitFor(() => expect(mockSockets).toHaveLength(1));
+    await typeAndSend('made it');
+    await typeAndSend('still waiting');
+
+    act(() =>
+      latest().handlers.onEvent({
+        type: 'history',
+        messages: [
+          { id: 'h2', thread_id: 'th1', sender_id: 'me', body: 'made it', created_at: '2030-01-07T18:00:00Z' },
+        ],
+      }),
+    );
+
+    expect(screen.getAllByText('made it')).toHaveLength(1);
+    expect(screen.getAllByTestId('sent')).toHaveLength(1);
+    expect(screen.getAllByTestId('pending')).toHaveLength(1);
+    expect(screen.getByText('still waiting')).toBeTruthy();
+  });
 });
