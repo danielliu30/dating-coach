@@ -323,6 +323,30 @@ func (s *Service) UpdateDatingProfile(ctx context.Context, principal Principal, 
 	return profileOf(user), nil
 }
 
+const (
+	// MinPasswordLen is the shortest password SignUp accepts, in characters.
+	MinPasswordLen = 8
+	// MaxPasswordLen is the longest password SignUp accepts, in bytes. It is
+	// bcrypt's hard input limit: GenerateFromPassword fails above it.
+	MaxPasswordLen = 72
+)
+
+// validatePassword reports whether password is acceptable for a new account.
+// It returns an ErrInvalidInput-wrapped error when the password is shorter than
+// MinPasswordLen characters, longer than MaxPasswordLen bytes, or made up entirely
+// of whitespace; the password itself is never included in the error.
+func validatePassword(password string) error {
+	switch {
+	case utf8.RuneCountInString(password) < MinPasswordLen:
+		return fmt.Errorf("%w: password must be at least %d characters", ErrInvalidInput, MinPasswordLen)
+	case len(password) > MaxPasswordLen:
+		return fmt.Errorf("%w: password must be at most %d bytes", ErrInvalidInput, MaxPasswordLen)
+	case strings.TrimSpace(password) == "":
+		return fmt.Errorf("%w: password cannot be only whitespace", ErrInvalidInput)
+	}
+	return nil
+}
+
 // SignUp creates the account and returns a verify-scoped session: the token it
 // carries reaches the /auth endpoints only, so a brand new account can finish
 // verification but cannot touch coaching, chat or analysis until it trades the
