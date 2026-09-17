@@ -118,6 +118,7 @@ export default function CoachDetailScreen({
     setBusy(true);
     setError(null);
     setStatus(null);
+    setCheckoutUrl(null);
     try {
       const session = await api.bookSession({
         coach_id: coachID,
