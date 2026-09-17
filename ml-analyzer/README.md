@@ -26,6 +26,12 @@ The LLM backend enforces this by rejecting any completion that reads as a
 suggested reply and falling back to the heuristic scorer. (`ML_BACKEND=trained`
 is the exception — see the backends section.)
 
+Feedback is meant to build a transferable skill, not to fix one message:
+`patterns` names behaviour that recurs across the conversation and the principle
+behind it, and `reflection_questions` hands the diagnosis back to the customer.
+Coaching the pattern rather than drafting the reply is what keeps the customer's
+voice their own — the analyzer never writes their next message for them.
+
 ### Image track
 
 Each photo is judged on two things: is it sharp and well lit, and is the
@@ -85,11 +91,11 @@ Response:
 | --- | --- | --- |
 | `model_version` | string | Which backend/model produced the scores. Stored with the result. |
 | `segments[]` | array | `start_position`, `end_position`, `engagement_score` (0–1), `label` (`engaging`\|`neutral`\|`flat`), `comment`. |
-| `overall` | object | `engagement_score`, `summary`, `strengths[]`, `improvements[]`. |
+| `overall` | object | `engagement_score`, `summary`, `strengths[]`, `improvements[]`, `patterns[]` (recurring behaviour across the conversation and the principle behind it; empty when nothing recurs), `reflection_questions[]` (open questions for the customer to self-diagnose; empty when there are no patterns). |
 
 `label` is always derived from the score (≥0.66 engaging, ≥0.4 neutral, else
-flat), so it is consistent across backends. `comment`, `summary` and
-`improvements` describe reply outcomes (no reply / short reply / engaged
+flat), so it is consistent across backends. `comment`, `summary`, `improvements`,
+`patterns` and `reflection_questions` describe reply outcomes (no reply / short reply / engaged
 reply) and hint at what to reconsider; they never contain a drafted message.
 
 ### `POST /analyze/images` (photos)
