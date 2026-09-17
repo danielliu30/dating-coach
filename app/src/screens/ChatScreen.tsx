@@ -43,21 +43,27 @@ export default function ChatScreen({
         case 'history':
           setMessages((event.messages ?? []).map(toGifted));
           break;
-        case 'message':
+        case 'message': {
           if (!event.message_id) return;
-          setMessages((current) =>
-            current.some((m) => m._id === event.message_id)
-              ? current
-              : GiftedChat.append(current, [
-                  {
-                    _id: event.message_id as string,
-                    text: event.body ?? '',
-                    createdAt: event.created_at ? new Date(event.created_at) : new Date(),
-                    user: { _id: event.sender_id ?? 'unknown' },
-                  },
-                ]),
-          );
+          const persisted: IMessage = {
+            _id: event.message_id,
+            text: event.body ?? '',
+            createdAt: event.created_at ? new Date(event.created_at) : new Date(),
+            user: { _id: event.sender_id ?? 'unknown' },
+            sent: true,
+          };
+          setMessages((current) => {
+            if (current.some((m) => m._id === persisted._id)) return current;
+            // Our own echo settles the oldest pending bubble with the same text.
+            const pendingIndex =
+              event.sender_id === user?.id
+                ? current.findLastIndex((m) => m.pending && m.text === persisted.text)
+                : -1;
+            if (pendingIndex === -1) return GiftedChat.append(current, [persisted]);
+            return current.map((m, i) => (i === pendingIndex ? persisted : m));
+          });
           break;
+        }
         case 'typing':
           if (event.sender_id && event.sender_id !== user?.id) setPeerTyping(Boolean(event.typing));
           break;
@@ -82,8 +88,18 @@ export default function ChatScreen({
     };
   }, [onEvent, signedIn, threadID]);
 
-  // The socket echoes the persisted message back, so sending is fire-and-forget.
+  /**
+   * Shows each outgoing message at once as a pending bubble and hands it to the
+   * socket, which queues it while disconnected. The server's echo (see onEvent)
+   * replaces the pending bubble with the persisted message.
+   */
   const onSend = useCallback((outgoing: IMessage[] = []) => {
+    setMessages((current) =>
+      GiftedChat.append(
+        current,
+        outgoing.map((message) => ({ ...message, pending: true, sent: false })),
+      ),
+    );
     outgoing.forEach((message) => socketRef.current?.send(message.text));
     socketRef.current?.typing(false);
   }, []);
