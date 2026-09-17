@@ -9,7 +9,16 @@ from pydantic import ValidationError
 
 from app.config import Settings
 from app.main import app
-from app.schemas import AnalyzeRequest, ImageAnalyzeRequest, ImageRef, Message, ReviewComment, ReviewSummaryRequest, Segment
+from app.schemas import (
+    AnalyzeRequest,
+    ImageAnalyzeRequest,
+    ImageRef,
+    Message,
+    Overall,
+    ReviewComment,
+    ReviewSummaryRequest,
+    Segment,
+)
 from app.scoring.base import message_range
 from app.scoring.heuristic import HeuristicScorer, review_self_messages
 from app.scoring.image import HeuristicImageScorer, build_image_scorer, image_dimensions
@@ -150,6 +159,21 @@ def test_heuristic_match_only_stretch_is_neutral() -> None:
     assert response.segments[0].engagement_score == 0.5
     assert response.segments[0].comment == "No messages from you in this stretch; the match was carrying it."
     assert response.overall.strengths == [] and response.overall.improvements == []
+
+
+def test_overall_reflection_fields_default_empty() -> None:
+    """``reflection_questions`` / ``patterns`` are optional and default to empty lists, so the wire shape stays valid without them."""
+    overall = Overall(engagement_score=0.5)
+    assert overall.reflection_questions == [] and overall.patterns == []
+    assert Overall(**{"engagement_score": 0.5, "summary": "ok"}).model_dump()["patterns"] == []
+
+    response = client.post(
+        "/analyze",
+        json={"conversation_id": "conv-shape", "messages": [{"position": 0, "sender": "match", "body": "Hey there, how was your week?"}]},
+    )
+    assert response.status_code == 200
+    body = response.json()["overall"]
+    assert body["reflection_questions"] == [] and body["patterns"] == []
 
 
 def test_analyze_request_preferences_are_optional() -> None:
