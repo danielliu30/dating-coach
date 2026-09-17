@@ -240,7 +240,7 @@ def reflection_questions(
 
 
 class HeuristicScorer(Scorer):
-    version = "heuristic-v2"
+    version = "heuristic-v3"
 
     def __init__(self, segment_size: int = 4) -> None:
         self.segment_size = segment_size
@@ -267,6 +267,7 @@ class HeuristicScorer(Scorer):
             )
 
         overall_score = clamp(statistics.fmean(r.score for r in reviews)) if reviews else 0.5
+        patterns = reciprocity_patterns(request.messages)
 
         return AnalyzeResponse(
             model_version=self.version,
@@ -276,6 +277,8 @@ class HeuristicScorer(Scorer):
                 summary=_summary(reviews, request.preferences),
                 strengths=_strengths(reviews),
                 improvements=_improvements(reviews),
+                reflection_questions=reflection_questions(reviews, patterns, request.preferences),
+                patterns=patterns,
             ),
         )
 

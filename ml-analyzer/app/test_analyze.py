@@ -171,6 +171,48 @@ def test_heuristic_never_diagnoses_why_the_match_pulled_back() -> None:
         assert hint.endswith("is it worth thinking about?")
 
 
+def test_heuristic_populates_reflection_questions_and_patterns() -> None:
+    """analyze() fills ``overall.reflection_questions`` for any self messages and ``overall.patterns`` when the customer over-invests; neither drafts or directs."""
+    over_investing = AnalyzeRequest(
+        conversation_id="conv-9",
+        preferences="someone who plans real dates",
+        messages=[
+            Message(position=0, sender="self", body="How was your weekend? Did you get out at all?"),
+            Message(position=1, sender="match", body="ok"),
+            Message(position=2, sender="self", body="What did you end up doing? I went to that new climbing gym by the river."),
+            Message(position=3, sender="self", body="Still up for that coffee sometime this week?"),
+            Message(position=4, sender="self", body="No worries if you're busy, just let me know."),
+        ],
+    )
+    response = asyncio.run(HeuristicScorer(segment_size=2).analyze(over_investing))
+
+    assert response.overall.patterns == reciprocity_patterns(over_investing.messages)
+    assert len(response.overall.patterns) == 3
+    assert response.overall.reflection_questions == [
+        "Setting how they responded aside for a moment: did you actually enjoy this conversation?",
+        "Were you putting in more effort than they were, and did that feel okay to you?",
+        "You said you are looking for: someone who plans real dates. Did this conversation feel like it was heading there?",
+    ]
+    for text in [*response.overall.patterns, *response.overall.reflection_questions]:
+        lowered = text.lower()
+        assert "ask" not in lowered and "say" not in lowered and "you should" not in lowered, text
+        assert not any(phrase in lowered for phrase in REJECTION_DIAGNOSIS), text
+
+    balanced = AnalyzeRequest(
+        conversation_id="conv-10",
+        messages=[
+            Message(position=0, sender="self", body="How was the hike?"),
+            Message(position=1, sender="match", body="Great, the ridge was clear all the way. Have you done it?"),
+        ],
+    )
+    balanced_response = asyncio.run(HeuristicScorer(segment_size=2).analyze(balanced))
+    assert balanced_response.overall.patterns == []
+    assert balanced_response.overall.reflection_questions == [
+        "Setting how they responded aside for a moment: did you actually enjoy this conversation?"
+    ]
+    assert balanced_response.model_dump()["overall"]["patterns"] == []
+
+
 def test_heuristic_match_only_stretch_is_neutral() -> None:
     """A window with none of the customer's messages is reported as neutral context, not scored."""
     request = AnalyzeRequest(
