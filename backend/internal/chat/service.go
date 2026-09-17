@@ -209,8 +209,10 @@ func (s *Service) History(ctx context.Context, threadID, actorID uuid.UUID, limi
 	return out, nil
 }
 
-// Send persists a message and broadcasts it to the thread.
-func (s *Service) Send(ctx context.Context, threadID, senderID uuid.UUID, body string) (Message, error) {
+// Send persists a message and broadcasts it to the thread. clientID, when
+// non-empty, is carried on the broadcast unchanged so the sending client can
+// match the echo to its own pending message; it is never stored.
+func (s *Service) Send(ctx context.Context, threadID, senderID uuid.UUID, body, clientID string) (Message, error) {
 	body = strings.TrimSpace(body)
 	if body == "" {
 		return Message{}, fmt.Errorf("%w: message body is empty", ErrInvalidInput)
@@ -237,19 +239,27 @@ func (s *Service) Send(ctx context.Context, threadID, senderID uuid.UUID, body s
 		Body:      row.Body,
 		CreatedAt: row.CreatedAt.UTC().Format(time.RFC3339),
 	}
-	if err := s.hub.Publish(ctx, threadID, Event{
-		Type:      EventMessage,
-		ThreadID:  msg.ThreadID,
-		MessageID: msg.ID,
-		SenderID:  msg.SenderID,
-		Body:      msg.Body,
-		CreatedAt: msg.CreatedAt,
-	}); err != nil {
+	if err := s.hub.Publish(ctx, threadID, echoEvent(msg, clientID)); err != nil {
 		// The message is durably stored, so reporting failure here would only make
 		// senders retry and store duplicates. Peers pick it up from the transcript.
 		slog.Error("broadcast chat message", "error", err, "thread_id", threadID, "message_id", msg.ID)
 	}
 	return msg, nil
+}
+
+// echoEvent is the message event broadcast for a freshly stored msg. clientID
+// is the sender's own id for the send, echoed so only that client can match
+// it; it is empty for REST sends and then omitted from the frame.
+func echoEvent(msg Message, clientID string) Event {
+	return Event{
+		Type:      EventMessage,
+		ThreadID:  msg.ThreadID,
+		MessageID: msg.ID,
+		ClientID:  clientID,
+		SenderID:  msg.SenderID,
+		Body:      msg.Body,
+		CreatedAt: msg.CreatedAt,
+	}
 }
 
 // Typing broadcasts a typing indicator; it is not persisted.

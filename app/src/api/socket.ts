@@ -109,8 +109,13 @@ export class ChatSocket {
     this.retry = setTimeout(() => this.connect(), delay);
   }
 
-  send(body: string): void {
-    this.emit({ type: 'message', body });
+  /**
+   * Sends a chat message, or queues it while the socket is down. clientID, when
+   * given, rides on the frame and comes back on the server's echo or rejection
+   * of this exact send, so the caller can match either to what it rendered.
+   */
+  send(body: string, clientID?: string): void {
+    this.emit(clientID === undefined ? { type: 'message', body } : { type: 'message', body, client_id: clientID });
   }
 
   typing(typing: boolean): void {

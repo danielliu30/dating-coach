@@ -2,8 +2,11 @@ package chat
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -80,5 +83,24 @@ func TestStartThreadRequiresApprovedCoach(t *testing.T) {
 	again, err := svc.StartThread(ctx, client, coach, nil)
 	if err != nil || again.ID != thread.ID {
 		t.Fatalf("re-open existing thread = %+v, %v; want %s", again, err, thread.ID)
+	}
+}
+
+func TestEchoEventCarriesClientID(t *testing.T) {
+	msg := Message{ID: "m1", ThreadID: "t1", SenderID: "u1", Body: "hi", CreatedAt: "2030-01-01T00:00:00Z"}
+
+	got := echoEvent(msg, "c1")
+	want := Event{Type: EventMessage, ThreadID: "t1", MessageID: "m1", ClientID: "c1", SenderID: "u1", Body: "hi", CreatedAt: "2030-01-01T00:00:00Z"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("echoEvent = %+v, want %+v", got, want)
+	}
+
+	// REST sends have no client id and must not put an empty one on the wire.
+	raw, err := json.Marshal(echoEvent(msg, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "client_id") {
+		t.Fatalf("echo without client id serialised %s", raw)
 	}
 }
