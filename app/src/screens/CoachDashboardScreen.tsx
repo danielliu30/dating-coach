@@ -1,5 +1,5 @@
 import { useNavigation, type NavigationProp } from '@react-navigation/native';
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { api } from '../api/client';
@@ -41,6 +41,9 @@ export default function CoachDashboardScreen(): React.ReactElement {
   const [meetingUrls, setMeetingUrls] = useState<Record<string, string>>({});
   const [actError, setActError] = useState<string | null>(null);
   // In-flight request per session id; sessions absent from the map are idle.
+  // The ref is the lock (checked synchronously, so two taps in one render
+  // cannot both start); the state mirrors it for rendering.
+  const busyRef = useRef<Record<string, SessionAction>>({});
   const [busy, setBusy] = useState<Record<string, SessionAction>>({});
 
   /** Whether `action` on `session` is the request currently in flight. */
@@ -50,8 +53,9 @@ export default function CoachDashboardScreen(): React.ReactElement {
     session.id in busy && busy[session.id] !== action;
 
   const act = async (session: CoachingSession, action: SessionAction) => {
-    if (session.id in busy) return;
-    setBusy((current) => ({ ...current, [session.id]: action }));
+    if (session.id in busyRef.current) return;
+    busyRef.current = { ...busyRef.current, [session.id]: action };
+    setBusy(busyRef.current);
     setActError(null);
     try {
       if (action === 'notes') {
@@ -65,7 +69,9 @@ export default function CoachDashboardScreen(): React.ReactElement {
     } catch (err) {
       setActError(err instanceof Error ? err.message : 'could not update session');
     } finally {
-      setBusy(({ [session.id]: _done, ...rest }) => rest);
+      const { [session.id]: _done, ...rest } = busyRef.current;
+      busyRef.current = rest;
+      setBusy(rest);
     }
   };
 

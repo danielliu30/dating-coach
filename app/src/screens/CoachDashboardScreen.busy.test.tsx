@@ -109,4 +109,21 @@ describe('CoachDashboardScreen action busy state', () => {
     await waitFor(() => expect(spinners()).toHaveLength(0));
     expect(buttons('Completed')[1]).toBeEnabled();
   });
+
+  it('starts only one request when two actions on a card are tapped before a re-render', async () => {
+    mocked.setSessionNotes.mockImplementationOnce(() => new Promise(() => {}));
+    mocked.setSessionStatus.mockImplementationOnce(() => new Promise(() => {}));
+    render(<CoachDashboardScreen />);
+    await waitFor(() => expect(buttons('Save notes')).toHaveLength(2));
+
+    const notes = buttons('Save notes')[0];
+    const completed = buttons('Completed')[0];
+    act(() => {
+      fireEvent.press(notes);
+      fireEvent.press(completed);
+    });
+
+    await waitFor(() => expect(mocked.setSessionNotes).toHaveBeenCalledTimes(1));
+    expect(mocked.setSessionStatus).not.toHaveBeenCalled();
+  });
 });
