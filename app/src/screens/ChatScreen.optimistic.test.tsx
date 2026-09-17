@@ -147,4 +147,55 @@ describe('ChatScreen optimistic sending', () => {
     // Our pending "ping" and the coach's "ping" are different messages.
     expect(screen.getAllByText('ping')).toHaveLength(2);
   });
+
+  it('keeps pending bubbles when reconnect history arrives before their echoes', async () => {
+    mount();
+    await waitFor(() => expect(mockSockets).toHaveLength(1));
+    act(() => latest().handlers.onStatus?.('closed'));
+    await typeAndSend('queued while offline');
+
+    act(() =>
+      latest().handlers.onEvent({
+        type: 'history',
+        messages: [
+          { id: 'h1', thread_id: 'th1', sender_id: 'coach', body: 'earlier', created_at: '2030-01-07T17:00:00Z' },
+        ],
+      }),
+    );
+
+    expect(screen.getByText('earlier')).toBeTruthy();
+    expect(screen.getByText('queued while offline')).toBeTruthy();
+    expect(screen.getAllByTestId('pending')).toHaveLength(1);
+  });
+
+  it('drops the rejected bubble and explains why when the server refuses a send', async () => {
+    mount();
+    await waitFor(() => expect(mockSockets).toHaveLength(1));
+    await typeAndSend('into a closed thread');
+
+    act(() => latest().handlers.onEvent({ type: 'error', body: 'thread is closed' }));
+
+    expect(screen.queryByText('into a closed thread')).toBeNull();
+    expect(screen.queryAllByTestId('pending')).toHaveLength(0);
+    expect(screen.getByText('Not sent: thread is closed')).toBeTruthy();
+  });
+
+  it('matches the echo even though the server trims the body', async () => {
+    mount();
+    await waitFor(() => expect(mockSockets).toHaveLength(1));
+    await typeAndSend('  spaced out  ');
+
+    act(() =>
+      latest().handlers.onEvent({
+        type: 'message',
+        message_id: 'm3',
+        sender_id: 'me',
+        body: 'spaced out',
+        created_at: '2030-01-07T18:00:00Z',
+      }),
+    );
+
+    expect(screen.getAllByText('spaced out')).toHaveLength(1);
+    expect(screen.queryAllByTestId('pending')).toHaveLength(0);
+  });
 });

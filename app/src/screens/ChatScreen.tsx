@@ -40,9 +40,14 @@ export default function ChatScreen({
   const onEvent = useCallback(
     (event: ChatEvent) => {
       switch (event.type) {
-        case 'history':
-          setMessages((event.messages ?? []).map(toGifted));
+        case 'history': {
+          // History arrives on every (re)connect, before the socket's outbox is
+          // flushed, so bubbles still waiting on the server are kept in front
+          // of it rather than wiped; later echoes settle them.
+          const history = (event.messages ?? []).map(toGifted);
+          setMessages((current) => [...current.filter((m) => m.pending), ...history]);
           break;
+        }
         case 'message': {
           if (!event.message_id) return;
           const persisted: IMessage = {
@@ -67,6 +72,23 @@ export default function ChatScreen({
         case 'typing':
           if (event.sender_id && event.sender_id !== user?.id) setPeerTyping(Boolean(event.typing));
           break;
+        case 'error': {
+          // The server only reports errors for rejected sends, and answers them
+          // in order, so the oldest pending bubble is the one it refused.
+          setMessages((current) => {
+            const rejected = current.findLastIndex((m) => m.pending);
+            if (rejected === -1) return current;
+            const notice: IMessage = {
+              _id: `error-${Date.now()}-${rejected}`,
+              text: `Not sent: ${event.body ?? 'message rejected'}`,
+              createdAt: new Date(),
+              user: { _id: 'system' },
+              system: true,
+            };
+            return [notice, ...current.filter((_, i) => i !== rejected)];
+          });
+          break;
+        }
         default:
           break;
       }
@@ -97,7 +119,8 @@ export default function ChatScreen({
     setMessages((current) =>
       GiftedChat.append(
         current,
-        outgoing.map((message) => ({ ...message, pending: true, sent: false })),
+        // The server trims bodies, so the echo is matched against trimmed text.
+        outgoing.map((message) => ({ ...message, text: message.text.trim(), pending: true, sent: false })),
       ),
     );
     outgoing.forEach((message) => socketRef.current?.send(message.text));
