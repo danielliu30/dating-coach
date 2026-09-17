@@ -43,7 +43,7 @@ def test_analyze_heuristic() -> None:
 
 
 def test_overall_patterns_default_empty() -> None:
-    """Overall pattern fields default to empty and remain empty for a basic analysis."""
+    """Overall pattern fields default to empty; a basic analysis has no patterns but always one inward reflection question."""
     assert Overall(engagement_score=0.5).patterns == []
     assert Overall(engagement_score=0.5).reflection_questions == []
 
@@ -61,7 +61,9 @@ def test_overall_patterns_default_empty() -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["overall"]["patterns"] == []
-    assert body["overall"]["reflection_questions"] == []
+    assert body["overall"]["reflection_questions"] == [
+        "Setting how they responded aside for a moment: did you actually enjoy this conversation?"
+    ]
 
 
 def test_analyze_images_endpoint_fallback() -> None:
