@@ -20,6 +20,7 @@ export default function VerifyEmailScreen({
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [resending, setResending] = useState(false);
   const [verified, setVerified] = useState(false);
 
   // A verify that hands back a session moves the app to the tabs by itself.
@@ -44,15 +45,19 @@ export default function VerifyEmailScreen({
     }
   }, [verify, email, code]);
 
-  const resend = async () => {
+  const resend = useCallback(async () => {
+    if (resending) return;
+    setResending(true);
     setError(null);
     try {
       await resendVerification(email.trim());
       setStatus('Verification code sent.');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'could not resend');
+    } finally {
+      setResending(false);
     }
-  };
+  }, [resending, resendVerification, email]);
 
   return (
     <AuthLayout>
@@ -91,8 +96,14 @@ export default function VerifyEmailScreen({
       <View style={styles.hint}>
         <Ionicons name="time-outline" size={14} color={colors.muted} />
         <Text style={type.caption}>Codes expire after 3 minutes.</Text>
-        <Pressable accessibilityRole="button" onPress={resend} hitSlop={8}>
-          <Text style={styles.link}>Resend code</Text>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityState={{ disabled: resending, busy: resending }}
+          disabled={resending}
+          onPress={() => void resend()}
+          hitSlop={8}
+        >
+          <Text style={[styles.link, resending && styles.linkDisabled]}>{resending ? 'Sending…' : 'Resend code'}</Text>
         </Pressable>
       </View>
       {token ? null : (
@@ -125,5 +136,6 @@ const styles = StyleSheet.create({
   status: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   hint: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, flexWrap: 'wrap' },
   link: { fontFamily: fonts.sansBold, fontSize: 14, color: colors.primaryDeep },
+  linkDisabled: { color: colors.muted },
   back: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
 });
