@@ -46,9 +46,10 @@ Return STRICT JSON only, no prose, with this shape:
   "segments": [
     {"start_position": int, "end_position": int, "engagement_score": float 0-1,
      "comment": "one sentence about how the customer's messages in this stretch landed"}
-  ],
-  "overall": {"engagement_score": float 0-1, "summary": "2 sentences",
-              "strengths": ["..."], "improvements": ["..."]}
+    ],
+    "overall": {"engagement_score": float 0-1, "summary": "2 sentences",
+              "strengths": ["..."], "improvements": ["..."],
+              "patterns": ["..."], "reflection_questions": ["..."]}
 }
 
 Rules:
@@ -70,9 +71,18 @@ customer's final message has no reply recorded, the match may simply not have \
 answered yet: mention it neutrally, do not count it as a flaw.
 - "strengths" acknowledge the customer's messages that produced a good or \
 successful response, cited the same way.
+- "patterns" (0-5) name behaviour that RECURS across the customer's messages \
+and the principle behind it, e.g. several stalled messages that gave the match \
+nothing concrete to answer, or several landed messages that shared a trait. \
+Count them ("3 of your 4 messages that stalled ..."). A pattern is a habit to \
+carry to the next conversation, never a rewrite of one message.
+- "reflection_questions" (0-3) are open questions the customer answers for \
+themselves about their own habits ("What did your messages that drew detail \
+have in common?"). They must never contain or imply the wording of a reply.
 - NEVER suggest, draft or rewrite what the customer should say or should have \
 said. No example replies, no "try asking ...", no "you could say ...". The \
 customer always drives the conversation; you only hint at what to look at.
+This applies to every field, including patterns and reflection_questions.
 - When the customer's stated preferences are given, relate the hints to them \
 (e.g. whether their messages surface what they are actually looking for).
 - Judge concrete behaviour, not grammar. Never moralise, never mention that \
@@ -176,6 +186,7 @@ class LLMScorer(Scorer):
         overall = payload.get("overall", {})
         prose = [s.comment for s in segments] + [str(overall.get("summary", ""))]
         prose += [str(x) for x in overall.get("strengths", [])] + [str(x) for x in overall.get("improvements", [])]
+        prose += [str(x) for x in overall.get("patterns", [])] + [str(x) for x in overall.get("reflection_questions", [])]
         _reject_drafting(prose, sources)
         scores = [s.engagement_score for s in segments]
         return AnalyzeResponse(
@@ -188,6 +199,8 @@ class LLMScorer(Scorer):
                 summary=str(overall.get("summary", ""))[:1000],
                 strengths=[str(s)[:300] for s in overall.get("strengths", [])][:5],
                 improvements=[str(s)[:300] for s in overall.get("improvements", [])][:5],
+                patterns=[str(s)[:300] for s in overall.get("patterns", [])][:5],
+                reflection_questions=[str(s)[:300] for s in overall.get("reflection_questions", [])][:3],
             ),
         )
 
