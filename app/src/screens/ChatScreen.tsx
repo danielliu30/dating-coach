@@ -33,6 +33,29 @@ export default function ChatScreen({
   // next reconnect without tearing the open one down.
   const tokenRef = useRef(token);
   tokenRef.current = token;
+  const connectionRef = useRef(connection);
+  connectionRef.current = connection;
+  // Ids of pending bubbles the server has not seen yet: sent while disconnected,
+  // so still in the socket's outbox. Opening a connection flushes the outbox,
+  // but the server may still reject them, so they only stop counting as queued
+  // once that connection ends (or their echo/rejection arrives).
+  const queuedRef = useRef(new Set<string | number>());
+  const flushedRef = useRef(new Set<string | number>());
+
+  /**
+   * Mirrors the socket status into state and tracks which queued bubbles have
+   * been handed to the server: ids flushed on a connection leave `queuedRef`
+   * when that connection closes, so a later history can settle them.
+   */
+  const onStatus = useCallback((status: 'connecting' | 'open' | 'closed') => {
+    if (status === 'open') {
+      flushedRef.current = new Set(queuedRef.current);
+    } else if (status === 'closed') {
+      flushedRef.current.forEach((id) => queuedRef.current.delete(id));
+      flushedRef.current.clear();
+    }
+    setConnection(status);
+  }, []);
   const signedIn = token !== null;
 
   useEffect(() => navigation.setOptions({ title }), [navigation, title]);
@@ -40,27 +63,70 @@ export default function ChatScreen({
   const onEvent = useCallback(
     (event: ChatEvent) => {
       switch (event.type) {
-        case 'history':
-          setMessages((event.messages ?? []).map(toGifted));
+        case 'history': {
+          // History arrives on every (re)connect, before the socket's outbox is
+          // flushed. A pending bubble the server did receive (sent on an open
+          // socket, echo lost with the connection) is settled by a matching
+          // history message; bubbles still queued in the outbox are kept as is,
+          // since an older identical message is not theirs.
+          const history = (event.messages ?? []).map(toGifted);
+          setMessages((current) => {
+            const known = new Set(current.map((m) => m._id));
+            const pending = current.filter((m) => m.pending);
+            history
+              .filter((m) => m.user._id === user?.id && !known.has(m._id))
+              .reverse()
+              .forEach((m) => {
+                const i = pending.findLastIndex((p) => !queuedRef.current.has(p._id) && p.text === m.text);
+                if (i !== -1) pending.splice(i, 1);
+              });
+            return [...pending, ...history];
+          });
           break;
-        case 'message':
+        }
+        case 'message': {
           if (!event.message_id) return;
-          setMessages((current) =>
-            current.some((m) => m._id === event.message_id)
-              ? current
-              : GiftedChat.append(current, [
-                  {
-                    _id: event.message_id as string,
-                    text: event.body ?? '',
-                    createdAt: event.created_at ? new Date(event.created_at) : new Date(),
-                    user: { _id: event.sender_id ?? 'unknown' },
-                  },
-                ]),
-          );
+          const persisted: IMessage = {
+            _id: event.message_id,
+            text: event.body ?? '',
+            createdAt: event.created_at ? new Date(event.created_at) : new Date(),
+            user: { _id: event.sender_id ?? 'unknown' },
+            sent: true,
+          };
+          setMessages((current) => {
+            if (current.some((m) => m._id === persisted._id)) return current;
+            // Our own echo settles the oldest pending bubble with the same text.
+            const pendingIndex =
+              event.sender_id === user?.id
+                ? current.findLastIndex((m) => m.pending && m.text === persisted.text)
+                : -1;
+            if (pendingIndex === -1) return GiftedChat.append(current, [persisted]);
+            queuedRef.current.delete(current[pendingIndex]._id);
+            return current.map((m, i) => (i === pendingIndex ? persisted : m));
+          });
           break;
+        }
         case 'typing':
           if (event.sender_id && event.sender_id !== user?.id) setPeerTyping(Boolean(event.typing));
           break;
+        case 'error': {
+          // The server only reports errors for rejected sends, and answers them
+          // in order, so the oldest pending bubble is the one it refused.
+          setMessages((current) => {
+            const rejected = current.findLastIndex((m) => m.pending);
+            if (rejected === -1) return current;
+            queuedRef.current.delete(current[rejected]._id);
+            const notice: IMessage = {
+              _id: `error-${Date.now()}-${rejected}`,
+              text: `Not sent: ${event.body ?? 'message rejected'}`,
+              createdAt: new Date(),
+              user: { _id: 'system' },
+              system: true,
+            };
+            return [notice, ...current.filter((_, i) => i !== rejected)];
+          });
+          break;
+        }
         default:
           break;
       }
@@ -72,7 +138,7 @@ export default function ChatScreen({
     if (!signedIn) return;
     const socket = new ChatSocket(threadID, () => tokenRef.current, {
       onEvent,
-      onStatus: setConnection,
+      onStatus,
     });
     socketRef.current = socket;
     socket.connect();
@@ -80,10 +146,22 @@ export default function ChatScreen({
       socket.close();
       socketRef.current = null;
     };
-  }, [onEvent, signedIn, threadID]);
+  }, [onEvent, onStatus, signedIn, threadID]);
 
-  // The socket echoes the persisted message back, so sending is fire-and-forget.
+  /**
+   * Shows each outgoing message at once as a pending bubble and hands it to the
+   * socket, which queues it while disconnected. The server's echo (see onEvent)
+   * replaces the pending bubble with the persisted message.
+   */
   const onSend = useCallback((outgoing: IMessage[] = []) => {
+    if (connectionRef.current !== 'open') outgoing.forEach((message) => queuedRef.current.add(message._id));
+    setMessages((current) =>
+      GiftedChat.append(
+        current,
+        // The server trims bodies, so the echo is matched against trimmed text.
+        outgoing.map((message) => ({ ...message, text: message.text.trim(), pending: true, sent: false })),
+      ),
+    );
     outgoing.forEach((message) => socketRef.current?.send(message.text));
     socketRef.current?.typing(false);
   }, []);
