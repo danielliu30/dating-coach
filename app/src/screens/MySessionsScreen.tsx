@@ -46,10 +46,14 @@ const calendarParts = (iso: string): { month: string; day: string } => {
   };
 };
 
+/** A request a client can fire from a session card: cancel, or reschedule to a given start. */
+type SessionAction = 'cancel' | `reschedule:${string}`;
+
 export default function MySessionsScreen(): React.ReactElement {
   const navigation = useNavigation<NavigationProp<RootTabParams>>();
   const { data, error, loading, reload } = useAsync(() => api.mySessions());
-  const [busyID, setBusyID] = useState<string | null>(null);
+  // In-flight request per session id; sessions absent from the map are idle.
+  const [busy, setBusy] = useState<Record<string, SessionAction>>({});
   const [reschedulingID, setReschedulingID] = useState<string | null>(null);
   const [slots, setSlots] = useState<Slot[] | null>(null);
   const [slotError, setSlotError] = useState<string | null>(null);
@@ -75,8 +79,19 @@ export default function MySessionsScreen(): React.ReactElement {
     }
   };
 
+  /** Marks `action` in flight for `sessionID`; returns false if that session is already busy. */
+  const begin = (sessionID: string, action: SessionAction): boolean => {
+    if (sessionID in busy) return false;
+    setBusy((current) => ({ ...current, [sessionID]: action }));
+    return true;
+  };
+  const end = (sessionID: string) => setBusy(({ [sessionID]: _done, ...rest }) => rest);
+  const isBusy = (sessionID: string, action: SessionAction): boolean => busy[sessionID] === action;
+  const isBlocked = (sessionID: string, action: SessionAction): boolean =>
+    sessionID in busy && busy[sessionID] !== action;
+
   const reschedule = async (session: CoachingSession, start: string) => {
-    setBusyID(session.id);
+    if (!begin(session.id, `reschedule:${start}`)) return;
     setSlotError(null);
     try {
       await api.rescheduleSession(session.id, start);
@@ -86,12 +101,12 @@ export default function MySessionsScreen(): React.ReactElement {
     } catch (err) {
       setSlotError(err instanceof Error ? err.message : 'could not reschedule');
     } finally {
-      setBusyID(null);
+      end(session.id);
     }
   };
 
   const cancel = async (sessionID: string) => {
-    setBusyID(sessionID);
+    if (!begin(sessionID, 'cancel')) return;
     setActionError(null);
     try {
       await api.cancelSession(sessionID);
@@ -99,7 +114,7 @@ export default function MySessionsScreen(): React.ReactElement {
     } catch (err) {
       setActionError({ sessionID, message: err instanceof Error ? err.message : 'could not cancel the session' });
     } finally {
-      setBusyID(null);
+      end(sessionID);
     }
   };
 
@@ -245,7 +260,8 @@ export default function MySessionsScreen(): React.ReactElement {
                       <Button
                         label="Cancel"
                         variant="secondary"
-                        loading={busyID === item.id}
+                        loading={isBusy(item.id, 'cancel')}
+                        disabled={isBlocked(item.id, 'cancel')}
                         onPress={() => void cancel(item.id)}
                       />
                     </View>
@@ -266,7 +282,8 @@ export default function MySessionsScreen(): React.ReactElement {
                       key={slot.start}
                       label={formatWhen(slot.start)}
                       variant="secondary"
-                      loading={busyID === item.id}
+                      loading={isBusy(item.id, `reschedule:${slot.start}`)}
+                      disabled={isBlocked(item.id, `reschedule:${slot.start}`)}
                       onPress={() => void reschedule(item, slot.start)}
                     />
                   ))}
