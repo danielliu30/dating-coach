@@ -383,7 +383,8 @@ export default function CoachDetailScreen({
 
         <Text style={styles.label}>Open slots · next 7 days</Text>
         {slots.loading && openSlots.length === 0 ? <Loading /> : null}
-        {!slots.loading && slots.data && openSlots.length === 0 ? (
+        {!slots.loading && slots.error ? <Text style={shared.error}>{slots.error}</Text> : null}
+        {!slots.loading && !slots.error && slots.data && openSlots.length === 0 ? (
           <MetaRow icon="calendar-clear-outline" text="No open slots in this window. Try another length." />
         ) : null}
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>

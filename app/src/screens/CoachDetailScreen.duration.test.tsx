@@ -95,6 +95,18 @@ describe('CoachDetailScreen duration', () => {
     expect(screen.getAllByRole('button', { name: /Jan 8/ })).toHaveLength(1);
   });
 
+  it('shows the refresh error instead of "no open slots" when the new length fails to load', async () => {
+    mount();
+    await waitFor(() => expect(screen.getAllByRole('button', { name: /Jan 7/ }).length).toBe(2));
+
+    mocked.openSlots.mockRejectedValueOnce(new Error('slots unavailable'));
+    fireEvent.press(durationRadio(60));
+
+    await screen.findByText('slots unavailable');
+    expect(screen.queryByText(/No open slots in this window/)).toBeNull();
+    expect(screen.queryAllByRole('button', { name: /Jan 7/ })).toHaveLength(0);
+  });
+
   it('keeps the selected slot when the same length is pressed again', async () => {
     mount();
     await waitFor(() => expect(screen.getAllByRole('button', { name: /Jan 7/ }).length).toBeGreaterThan(0));
