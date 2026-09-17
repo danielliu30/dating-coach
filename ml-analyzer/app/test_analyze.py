@@ -265,6 +265,7 @@ def test_reflection_questions_turn_inward_without_directing() -> None:
     assert reflection_questions(reviews, [], None) == [
         "Setting how they responded aside for a moment: did you actually enjoy this conversation?"
     ]
+    assert reflection_questions(reviews, [], "   \n") == reflection_questions(reviews, [], None)
 
     full = reflection_questions(reviews, ["You sent 3 messages in this conversation and none came back."], "a fellow climber")
     assert len(full) == 3
