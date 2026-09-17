@@ -217,8 +217,8 @@ MIN_PATTERN_COUNT = 2
 
 
 def _has_open_question(message: Message) -> bool:
-    """Return whether a message contains an open question or ends in a question mark."""
-    return bool(OPEN_QUESTION.search(message.body)) or message.body.strip().endswith("?")
+    """Return whether a message contains an open (wh-word) question per ``OPEN_QUESTION``; a bare ``?`` is not enough since it may be a closed yes/no question."""
+    return bool(OPEN_QUESTION.search(message.body))
 
 
 def _patterns(reviews: Sequence[SelfMessageReview]) -> List[str]:

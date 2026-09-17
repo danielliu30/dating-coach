@@ -11,7 +11,7 @@ from app.config import Settings
 from app.main import app
 from app.schemas import AnalyzeRequest, AnalyzeResponse, ImageAnalyzeRequest, ImageRef, Message, Overall, ReviewComment, ReviewSummaryRequest, Segment
 from app.scoring.base import message_range
-from app.scoring.heuristic import HeuristicScorer, review_self_messages
+from app.scoring.heuristic import HeuristicScorer, _patterns, review_self_messages
 from app.scoring.image import HeuristicImageScorer, build_image_scorer, image_dimensions
 
 client = TestClient(app)
@@ -218,6 +218,27 @@ def test_heuristic_patterns_empty_when_nothing_recurs() -> None:
     assert match_only_response.overall.patterns == []
     assert match_only_response.overall.reflection_questions == []
     assert AnalyzeResponse.model_validate(match_only_response.model_dump()) == match_only_response
+
+
+def test_heuristic_open_question_ignores_closed_questions() -> None:
+    """Only wh-word questions count as open when recurring landed messages are classified."""
+    closed_messages = [
+        Message(position=0, sender="self", body="Do you climb?"),
+        Message(position=1, sender="match", body="I climb indoors twice a week and often go outdoors on weekends."),
+        Message(position=2, sender="self", body="Been there before?"),
+        Message(position=3, sender="match", body="I visited once last summer and loved the views from the summit."),
+    ]
+    assert _patterns(review_self_messages(closed_messages)) == []
+
+    open_messages = [
+        Message(position=0, sender="self", body="What got you into climbing?"),
+        Message(position=1, sender="match", body="My brother introduced me years ago and I never stopped going."),
+        Message(position=2, sender="self", body="How was the trip?"),
+        Message(position=3, sender="match", body="The weather was perfect and we found a quiet trail near town."),
+    ]
+    patterns = _patterns(review_self_messages(open_messages))
+    assert len(patterns) == 1
+    assert patterns[0].startswith("2 of your 2 messages that landed included an open question")
 
 
 def test_heuristic_match_only_stretch_is_neutral() -> None:
