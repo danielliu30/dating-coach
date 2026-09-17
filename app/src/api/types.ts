@@ -190,6 +190,8 @@ export interface ChatEvent {
   type: ChatEventType;
   thread_id?: string;
   message_id?: string;
+  /** Sender-chosen id of a `message` send; echoed on its `message` echo and any `error` rejecting it. */
+  client_id?: string;
   sender_id?: string;
   body?: string;
   typing?: boolean;
