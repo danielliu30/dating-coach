@@ -563,6 +563,59 @@ def test_llm_parse_rejects_drafted_replies() -> None:
             scorer._parse(json.dumps(bad), boundaries, sources)
 
 
+def test_llm_parse_rejects_diagnosing_why_the_match_replied() -> None:
+    """A completion that explains the match's motives is a failed completion (triggers the fallback); citations are exempt."""
+    from app.config import Settings
+    from app.scoring.llm import LLMScorer
+
+    settings = Settings(
+        backend="llm", llm_provider="openai", llm_api_key="k", llm_model="m", llm_base_url="http://x",
+        llm_timeout=1.0, model_dir="", segment_size=2,
+    )
+    scorer = LLMScorer(settings)
+    boundaries = [(0, 1)]
+    good = {
+        "segments": [{"start_position": 0, "end_position": 1, "engagement_score": 0.4, "comment": "Message 1 drew a one-word reply."}],
+        "overall": {"engagement_score": 0.4, "summary": "Two of three messages got short replies.", "strengths": [], "improvements": []},
+    }
+    assert scorer._parse(json.dumps(good), boundaries).overall.summary == good["overall"]["summary"]
+
+    diagnoses = (
+        "They replied briefly because they lost interest.",
+        "Message 3 got no reply because it turned them off.",
+        "The long opener probably scared her off.",
+        "It reads like they weren't interested after Message 2.",
+        "This is where you were rejected.",
+        "You may have been too intense for them.",
+    )
+    for field in ("summary", "improvements", "reflection_questions", "patterns", "strengths"):
+        for diagnosis in diagnoses:
+            value = diagnosis if field == "summary" else [diagnosis]
+            bad = dict(good, overall=dict(good["overall"], **{field: value}))
+            with pytest.raises(ValueError, match="diagnosed why the match replied"):
+                scorer._parse(json.dumps(bad), boundaries)
+    bad_comment = dict(good, segments=[dict(good["segments"][0], comment=diagnoses[0])])
+    with pytest.raises(ValueError, match="diagnosed why the match replied"):
+        scorer._parse(json.dumps(bad_comment), boundaries)
+
+    sources = ["I only ask because I'm curious what you do all day"]
+    cited = 'Message 2 ("I only ask because I\'m curious") drew a one-word reply.'
+    fine = dict(good, overall=dict(good["overall"], improvements=[cited]))
+    assert scorer._parse(json.dumps(fine), boundaries, sources).overall.improvements == [cited]
+    uncited = dict(good, overall=dict(good["overall"], improvements=["I only ask because I'm curious drew nothing."]))
+    with pytest.raises(ValueError, match="diagnosed why the match replied"):
+        scorer._parse(json.dumps(uncited), boundaries, sources)
+
+    for outcome_only in (
+        "Message 3 got no reply.",
+        "Their replies got shorter after Message 4.",
+        "Most of the questions in this stretch were yours.",
+        "Did you enjoy this conversation, setting their replies aside?",
+    ):
+        ok = dict(good, overall=dict(good["overall"], patterns=[outcome_only]))
+        assert scorer._parse(json.dumps(ok), boundaries).overall.patterns == [outcome_only]
+
+
 def test_llm_strip_citations_blanks_only_provable_customer_quotes() -> None:
     """``_strip_citations`` blanks ``Message N ("...")`` spans that match a source and leaves everything else."""
     from app.scoring.llm import _strip_citations

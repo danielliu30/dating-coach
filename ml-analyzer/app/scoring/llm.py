@@ -27,6 +27,16 @@ DRAFTING = re.compile(
     re.IGNORECASE,
 )
 
+# Phrases that claim to know why the match replied the way they did. SYSTEM_PROMPT forbids
+# them outright ("you cannot know that"), so any hit means the model diagnosed the match.
+DIAGNOSIS = re.compile(
+    r"\b(because|lost interest|(not|wasn'?t|isn'?t|weren'?t) interested|"
+    r"(turned?|put|scared|pushed) (her|him|them) (off|away)|turn-?off|"
+    r"reject(ed|ion|s)?|(didn'?t|did not|doesn'?t|does not) (like|fancy|care for) you|"
+    r"(bored|annoyed|overwhelmed) (her|him|them)|too (needy|eager|keen|intense|much) for (her|him|them))\b",
+    re.IGNORECASE,
+)
+
 # The one citation syntax SYSTEM_PROMPT mandates, ``Message N ("...")``, up to and including the
 # opening quote (group 1). Citations written any other way are simply not exempted.
 CITATION_START = re.compile(r"message\s+\d+\s*\(\s*([\"\u201c])", re.IGNORECASE)
@@ -208,6 +218,7 @@ class LLMScorer(Scorer):
         prose += [str(x) for x in overall.get("strengths", [])] + [str(x) for x in overall.get("improvements", [])]
         prose += [str(x) for x in overall.get("reflection_questions", [])] + [str(x) for x in overall.get("patterns", [])]
         _reject_drafting(prose, sources)
+        _reject_diagnosis(prose, sources)
         scores = [s.engagement_score for s in segments]
         return AnalyzeResponse(
             model_version=self.version,
@@ -245,6 +256,23 @@ def _reject_drafting(texts: Sequence[str], sources: Sequence[str] = ()) -> None:
     for text in texts:
         if DRAFTING.search(_strip_citations(text, sources)):
             raise ValueError(f"llm drafted a reply for the customer: {text[:80]!r}")
+
+
+def _reject_diagnosis(texts: Sequence[str], sources: Sequence[str] = ()) -> None:
+    """Raise ``ValueError`` if any feedback text claims to know why the match replied as they did.
+
+    The manifesto's rule is that nobody can know why a match pulled back, so
+    feedback may describe outcomes only. A completion containing ``DIAGNOSIS``
+    language ("because", "lost interest", "turned them off", "rejected", ...)
+    is treated as failed and the caller falls back to the heuristic scorer,
+    whose wording never diagnoses. Provable customer citations are blanked
+    first via ``_strip_citations`` so a customer who wrote "because" in their
+    own message can still be quoted. Deliberately broad: a needless fallback is
+    safe, an invented explanation reaching the customer is not.
+    """
+    for text in texts:
+        if DIAGNOSIS.search(_strip_citations(text, sources)):
+            raise ValueError(f"llm diagnosed why the match replied: {text[:80]!r}")
 
 
 def _strip_citations(text: str, sources: Sequence[str] = ()) -> str:
