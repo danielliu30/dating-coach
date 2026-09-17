@@ -477,6 +477,30 @@ func TestValidatePassword(t *testing.T) {
 	}
 }
 
+// TestSignUpRejectsInvalidPassword pins that SignUp applies validatePassword
+// before any query or hashing runs: an over-long or whitespace-only password
+// comes back as ErrInvalidInput (HTTP 400) rather than reaching bcrypt, so a
+// Service without a database is enough.
+func TestSignUpRejectsInvalidPassword(t *testing.T) {
+	svc := &Service{}
+	for name, password := range map[string]string{
+		"too short":     "short",
+		"over 72 bytes": strings.Repeat("a", MaxPasswordLen+1),
+		"whitespace":    strings.Repeat(" ", MinPasswordLen),
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := svc.SignUp(context.Background(), SignUpInput{
+				Email:       "password-test@example.com",
+				Password:    password,
+				DisplayName: "Password Test",
+			})
+			if !errors.Is(err, ErrInvalidInput) {
+				t.Fatalf("got %v, want ErrInvalidInput", err)
+			}
+		})
+	}
+}
+
 // TestUpdateDatingProfileRejectsOverlongPreferences pins the free-text cap:
 // the ML analyzer refuses longer preferences, so the API must too, before any
 // query runs.
