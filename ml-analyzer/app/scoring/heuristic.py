@@ -141,9 +141,13 @@ MIN_SELF_FOR_RECIPROCITY = 3
 RECIPROCITY_RATIO = 1.75
 
 
-def _asks_question(message: Message) -> bool:
-    """True when the message poses a question: a ``?`` closing a sentence or an open-question word anywhere."""
-    return bool(ASKS_BACK.search(message.body) or OPEN_QUESTION.search(message.body))
+def _question_count(message: Message) -> int:
+    """Number of questions in the message, counted as ``?`` marks that close a sentence.
+
+    Punctuation only: a wh-word in a statement ("I know what you mean") is not a
+    question, and one bubble holding two questions counts as two.
+    """
+    return len(ASKS_BACK.findall(message.body))
 
 
 def _times(ratio: float) -> str:
@@ -160,9 +164,10 @@ def reciprocity_patterns(messages: Sequence[Message]) -> List[str]:
 
     Compares the customer's side of ``messages`` to the match's on three
     signals: message count, total word count and who is carrying the
-    questions. Each signal that shows a clear imbalance (a ratio of at least
-    ``RECIPROCITY_RATIO`` in the customer's direction, or every question being
-    the customer's) yields one short, descriptive sentence, e.g. "You sent about
+    questions (``?``-terminated sentences, see ``_question_count``). Each
+    signal that shows a clear imbalance (a ratio of at least
+    ``RECIPROCITY_RATIO`` in the customer's direction, or every question
+    being the customer's) yields one short, descriptive sentence, e.g. "You sent about
     twice as many messages as they did in this conversation." Nothing is said
     about *why* the match engaged less and nothing is drafted; the caller
     surfaces the list as ``Overall.patterns``. Returns an empty list when the
@@ -193,8 +198,8 @@ def reciprocity_patterns(messages: Sequence[Message]) -> List[str]:
     if their_words and own_words / their_words >= RECIPROCITY_RATIO:
         patterns.append(f"You wrote about {_times(own_words / their_words)} as many words as they did across the conversation.")
 
-    own_questions = sum(1 for m in own if _asks_question(m))
-    their_questions = sum(1 for m in theirs if _asks_question(m))
+    own_questions = sum(_question_count(m) for m in own)
+    their_questions = sum(_question_count(m) for m in theirs)
     if own_questions >= 2 and their_questions == 0:
         patterns.append(
             f"The questions in this conversation were all yours ({own_questions} of them); none came back from their side."
