@@ -26,6 +26,25 @@ The LLM backend enforces this by rejecting any completion that reads as a
 suggested reply and falling back to the heuristic scorer. (`ML_BACKEND=trained`
 is the exception — see the backends section.)
 
+**Product thesis.** The message track is the "Dating Humane" manifesto
+(surfaced on the app landing page, `app/src/components/Landing.tsx`) made
+concrete. It is built around agency:
+
+- *Coach self-awareness, not just outcomes.* Alongside "did they like me?" the
+  analysis asks "did I like them?": `overall.reflection_questions` are open,
+  inward questions (did you enjoy this? were you putting in more than they
+  were, and did that feel okay?) that never tell the customer what to do.
+- *Name patterns as questions.* Recurring behaviour — including reciprocity,
+  i.e. investing more energy than the person on the other side — is stated as
+  an observation in `overall.patterns` and handed back: "here's a pattern we've
+  noticed; is this worth thinking about?"
+- *Never draft.* Your words should still be your words. No field ever contains
+  a suggested or rewritten message, and the anti-drafting guard covers the new
+  fields too.
+- *Never diagnose rejection.* Feedback describes what happened (no reply, a
+  short reply, an engaged reply); it never claims to know *why* the match
+  pulled back. We can't know that.
+
 ### Image track
 
 Each photo is judged on two things: is it sharp and well lit, and is the
@@ -85,12 +104,21 @@ Response:
 | --- | --- | --- |
 | `model_version` | string | Which backend/model produced the scores. Stored with the result. |
 | `segments[]` | array | `start_position`, `end_position`, `engagement_score` (0–1), `label` (`engaging`\|`neutral`\|`flat`), `comment`. |
-| `overall` | object | `engagement_score`, `summary`, `strengths[]`, `improvements[]`. |
+| `overall` | object | `engagement_score`, `summary`, `strengths[]`, `improvements[]`, `reflection_questions[]`, `patterns[]`. |
+
+`overall.reflection_questions[]` are open, non-directive questions that turn the
+analysis inward ("did you actually enjoy this conversation?"); the heuristic
+always emits at least one when the customer wrote anything.
+`overall.patterns[]` are short observations naming recurring behaviour across
+the whole conversation — e.g. "You sent about twice as many messages as they
+did in this conversation (5 to 2)." — and are empty when nothing recurs. Both
+default to `[]`, so clients that predate them are unaffected.
 
 `label` is always derived from the score (≥0.66 engaging, ≥0.4 neutral, else
 flat), so it is consistent across backends. `comment`, `summary` and
 `improvements` describe reply outcomes (no reply / short reply / engaged
-reply) and hint at what to reconsider; they never contain a drafted message.
+reply) and hand them back as something to think about; they never contain a
+drafted message and never state why the match replied the way they did.
 
 ### `POST /analyze/images` (photos)
 
