@@ -451,6 +451,9 @@ def test_llm_prompt_reviews_only_self_messages_and_never_drafts() -> None:
 
     assert 'Evaluate ONLY messages from "self"' in SYSTEM_PROMPT
     assert "NEVER suggest, draft or rewrite what the customer should say" in SYSTEM_PROMPT
+    assert '"reflection_questions": ["..."], "patterns": ["..."]' in SYSTEM_PROMPT
+    assert "NEVER infer or state WHY the match" in SYSTEM_PROMPT and "You cannot know that." in SYSTEM_PROMPT
+    assert 'This applies to "reflection_questions" and "patterns"' in SYSTEM_PROMPT
 
 
 def test_llm_parse_rejects_drafted_replies() -> None:
@@ -510,6 +513,42 @@ def test_llm_parse_rejects_drafted_replies() -> None:
         bad = dict(good, overall=dict(good["overall"], improvements=[disguised]))
         with pytest.raises(ValueError, match="drafted a reply"):
             scorer._parse(json.dumps(bad), boundaries, sources)
+
+
+def test_llm_parse_reads_and_guards_reflection_fields() -> None:
+    """``reflection_questions``/``patterns`` are parsed and capped like strengths, default to empty, and are covered by the drafting scan."""
+    from app.config import Settings
+    from app.scoring.llm import LLMScorer
+
+    settings = Settings(
+        backend="llm", llm_provider="openai", llm_api_key="k", llm_model="m", llm_base_url="http://x",
+        llm_timeout=1.0, model_dir="", segment_size=2,
+    )
+    scorer = LLMScorer(settings)
+    boundaries = [(0, 1)]
+    base = {
+        "segments": [{"start_position": 0, "end_position": 1, "engagement_score": 0.7, "comment": "Message 1 drew a detailed reply."}],
+        "overall": {"engagement_score": 0.7, "summary": "Landing well.", "strengths": [], "improvements": []},
+    }
+    legacy = scorer._parse(json.dumps(base), boundaries).overall
+    assert legacy.reflection_questions == [] and legacy.patterns == []
+
+    filled = dict(base, overall=dict(
+        base["overall"],
+        reflection_questions=[f"Did you enjoy round {i}?" for i in range(7)],
+        patterns=["x" * 400],
+    ))
+    parsed = scorer._parse(json.dumps(filled), boundaries).overall
+    assert parsed.reflection_questions == [f"Did you enjoy round {i}?" for i in range(5)]
+    assert parsed.patterns == ["x" * 300]
+
+    for field, draft in (
+        ("reflection_questions", "Could you try asking about her weekend next time?"),
+        ("patterns", "Most of your openers stalled; you could say something about her photos instead."),
+    ):
+        bad = dict(base, overall=dict(base["overall"], **{field: [draft]}))
+        with pytest.raises(ValueError, match="drafted a reply"):
+            scorer._parse(json.dumps(bad), boundaries)
 
 
 def _png_base64(width: int, height: int) -> str:
