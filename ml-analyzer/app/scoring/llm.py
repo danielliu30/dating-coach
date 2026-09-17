@@ -46,8 +46,8 @@ Return STRICT JSON only, no prose, with this shape:
   "segments": [
     {"start_position": int, "end_position": int, "engagement_score": float 0-1,
      "comment": "one sentence about how the customer's messages in this stretch landed"}
-    ],
-    "overall": {"engagement_score": float 0-1, "summary": "2 sentences",
+  ],
+  "overall": {"engagement_score": float 0-1, "summary": "2 sentences",
               "strengths": ["..."], "improvements": ["..."],
               "patterns": ["..."], "reflection_questions": ["..."]}
 }
