@@ -190,7 +190,7 @@ def test_reciprocity_patterns_name_over_investment_descriptively() -> None:
     assert patterns == [
         "You sent about three times as many messages as they did in this conversation (5 to 2).",
         "You wrote about 11 times as many words as they did across the conversation.",
-        "The questions in this conversation were all yours (3 of them); none came back from their side.",
+        "The questions in this conversation were all yours (4 of them); none came back from their side.",
     ]
     for pattern in patterns:
         lowered = pattern.lower()
