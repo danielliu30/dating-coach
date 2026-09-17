@@ -84,4 +84,29 @@ describe('CoachDashboardScreen action busy state', () => {
     expect(spinners()).toHaveLength(0);
     expect(buttons('Completed')[0]).toBeEnabled();
   });
+
+  it('tracks requests on different cards independently', async () => {
+    let finishA: () => void = () => {};
+    let finishB: () => void = () => {};
+    mocked.setSessionNotes.mockImplementationOnce(() => new Promise((resolve) => (finishA = () => resolve(session('s1')))));
+    mocked.setSessionMeetingUrl.mockImplementationOnce(() => new Promise((resolve) => (finishB = () => resolve(session('s2')))));
+    render(<CoachDashboardScreen />);
+    await waitFor(() => expect(buttons('Save notes')).toHaveLength(2));
+
+    fireEvent.press(buttons('Save notes')[0]);
+    fireEvent.press(buttons('Save meeting link')[1]);
+    await waitFor(() => expect(mocked.setSessionMeetingUrl).toHaveBeenCalledTimes(1));
+    expect(spinners()).toHaveLength(2);
+
+    await act(async () => finishA());
+    await waitFor(() => expect(spinners()).toHaveLength(1));
+    // Card B is still held after card A settled.
+    expect(buttons('Save notes')[1]).toBeDisabled();
+    expect(buttons('Completed')[1]).toBeDisabled();
+    expect(buttons('Completed')[0]).toBeEnabled();
+
+    await act(async () => finishB());
+    await waitFor(() => expect(spinners()).toHaveLength(0));
+    expect(buttons('Completed')[1]).toBeEnabled();
+  });
 });

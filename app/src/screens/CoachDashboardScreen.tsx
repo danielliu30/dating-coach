@@ -40,18 +40,18 @@ export default function CoachDashboardScreen(): React.ReactElement {
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [meetingUrls, setMeetingUrls] = useState<Record<string, string>>({});
   const [actError, setActError] = useState<string | null>(null);
-  const [busy, setBusy] = useState<{ sessionID: string; action: SessionAction } | null>(null);
+  // In-flight request per session id; sessions absent from the map are idle.
+  const [busy, setBusy] = useState<Record<string, SessionAction>>({});
 
   /** Whether `action` on `session` is the request currently in flight. */
-  const isBusy = (session: CoachingSession, action: SessionAction): boolean =>
-    busy?.sessionID === session.id && busy.action === action;
+  const isBusy = (session: CoachingSession, action: SessionAction): boolean => busy[session.id] === action;
   /** Whether some other request on `session` is in flight, so this action must wait. */
   const isBlocked = (session: CoachingSession, action: SessionAction): boolean =>
-    busy?.sessionID === session.id && busy.action !== action;
+    session.id in busy && busy[session.id] !== action;
 
   const act = async (session: CoachingSession, action: SessionAction) => {
-    if (busy?.sessionID === session.id) return;
-    setBusy({ sessionID: session.id, action });
+    if (session.id in busy) return;
+    setBusy((current) => ({ ...current, [session.id]: action }));
     setActError(null);
     try {
       if (action === 'notes') {
@@ -65,7 +65,7 @@ export default function CoachDashboardScreen(): React.ReactElement {
     } catch (err) {
       setActError(err instanceof Error ? err.message : 'could not update session');
     } finally {
-      setBusy(null);
+      setBusy(({ [session.id]: _done, ...rest }) => rest);
     }
   };
 
