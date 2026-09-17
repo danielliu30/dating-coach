@@ -20,7 +20,7 @@ from app.schemas import (
     Segment,
 )
 from app.scoring.base import message_range
-from app.scoring.heuristic import HeuristicScorer, reciprocity_patterns, review_self_messages
+from app.scoring.heuristic import HeuristicScorer, reciprocity_patterns, reflection_questions, review_self_messages
 from app.scoring.image import HeuristicImageScorer, build_image_scorer, image_dimensions
 
 client = TestClient(app)
@@ -239,6 +239,30 @@ def test_reciprocity_patterns_stay_silent_when_balanced_or_too_short() -> None:
 
     unanswered = [Message(position=i, sender="self", body="Hey, are you around this week?") for i in range(3)]
     assert reciprocity_patterns(unanswered) == ["You sent 3 messages in this conversation and none came back."]
+
+
+def test_reflection_questions_turn_inward_without_directing() -> None:
+    """Every review set gets an enjoyment question; reciprocity and preferences each add one; none tell the customer what to do."""
+    reviews = review_self_messages(
+        [
+            Message(position=0, sender="self", body="How was the hike?"),
+            Message(position=1, sender="match", body="fine"),
+        ]
+    )
+    assert reflection_questions(reviews, [], None) == [
+        "Setting how they responded aside for a moment: did you actually enjoy this conversation?"
+    ]
+
+    full = reflection_questions(reviews, ["You sent 3 messages in this conversation and none came back."], "a fellow climber")
+    assert len(full) == 3
+    assert full[1] == "Were you putting in more effort than they were, and did that feel okay to you?"
+    assert full[2].startswith("You said you are looking for: a fellow climber.")
+    for question in full:
+        lowered = question.lower()
+        assert question.endswith("?")
+        assert "ask" not in lowered and "say" not in lowered and "you should" not in lowered and "reject" not in lowered
+
+    assert reflection_questions([], ["a pattern"], "prefs") == []
 
 
 def test_overall_reflection_fields_default_empty() -> None:

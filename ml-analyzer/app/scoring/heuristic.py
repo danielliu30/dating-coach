@@ -211,6 +211,33 @@ def reciprocity_patterns(messages: Sequence[Message]) -> List[str]:
     return patterns
 
 
+def reflection_questions(
+    reviews: Sequence[SelfMessageReview], patterns: Sequence[str], preferences: Optional[str]
+) -> List[str]:
+    """Open questions that turn the analysis inward: "did I like them?", not only "did they like me?".
+
+    Always leads with an enjoyment question when the customer wrote anything,
+    so every analysis prompts the customer to weigh their own experience of
+    the conversation, not just how it landed. Adds an effort/reciprocity
+    question when ``patterns`` (from ``reciprocity_patterns``) is non-empty
+    and a preferences question when the customer stated what they are
+    looking for. Every question is non-directive: it never tells the
+    customer what to do, drafts nothing and never speculates about the
+    match's reasons. Returns an empty list when ``reviews`` is empty, since
+    there is nothing of the customer's to reflect on.
+    """
+    if not reviews:
+        return []
+    questions = ["Setting how they responded aside for a moment: did you actually enjoy this conversation?"]
+    if patterns:
+        questions.append("Were you putting in more effort than they were, and did that feel okay to you?")
+    if preferences:
+        questions.append(
+            f"You said you are looking for: {preferences.strip()[:200]}. Did this conversation feel like it was heading there?"
+        )
+    return questions
+
+
 class HeuristicScorer(Scorer):
     version = "heuristic-v2"
 
