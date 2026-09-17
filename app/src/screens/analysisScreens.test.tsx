@@ -105,6 +105,27 @@ describe('AnalysisResultScreen', () => {
     expect(screen.getByText('Asked a real question')).toBeTruthy();
     expect(screen.getByText('model v1.2')).toBeTruthy();
     expect(screen.getByText('Messages 1–3')).toBeTruthy();
+    expect(screen.queryByText('A pattern we noticed')).toBeNull();
+    expect(screen.queryByText('Worth asking yourself')).toBeNull();
+  });
+
+  it('renders patterns and reflection questions when the analyzer sends them', async () => {
+    mocked.analysisResult.mockResolvedValue(
+      resultFixture({
+        overall: {
+          ...resultFixture().overall!,
+          patterns: ['You sent about twice as many messages as they did in this conversation (4 to 2).'],
+          reflection_questions: ['Setting how they responded aside for a moment: did you actually enjoy this conversation?'],
+        },
+      }),
+    );
+    render(<AnalysisResultScreen {...props} />);
+    await flush();
+
+    expect(screen.getByText('A pattern we noticed')).toBeTruthy();
+    expect(screen.getByText(/twice as many messages/)).toBeTruthy();
+    expect(screen.getByText('Worth asking yourself')).toBeTruthy();
+    expect(screen.getByText(/did you actually enjoy this conversation/)).toBeTruthy();
   });
 
   it('shows the loading state for pending/running and polls every 2s until it settles', async () => {
