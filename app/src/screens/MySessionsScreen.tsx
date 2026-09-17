@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, type NavigationProp } from '@react-navigation/native';
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { FlatList, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { api } from '../api/client';
@@ -53,6 +53,9 @@ export default function MySessionsScreen(): React.ReactElement {
   const navigation = useNavigation<NavigationProp<RootTabParams>>();
   const { data, error, loading, reload } = useAsync(() => api.mySessions());
   // In-flight request per session id; sessions absent from the map are idle.
+  // The ref is the lock (checked synchronously, so two taps in one render
+  // cannot both start); the state mirrors it for rendering.
+  const busyRef = useRef<Record<string, SessionAction>>({});
   const [busy, setBusy] = useState<Record<string, SessionAction>>({});
   const [reschedulingID, setReschedulingID] = useState<string | null>(null);
   const [slots, setSlots] = useState<Slot[] | null>(null);
@@ -81,11 +84,16 @@ export default function MySessionsScreen(): React.ReactElement {
 
   /** Marks `action` in flight for `sessionID`; returns false if that session is already busy. */
   const begin = (sessionID: string, action: SessionAction): boolean => {
-    if (sessionID in busy) return false;
-    setBusy((current) => ({ ...current, [sessionID]: action }));
+    if (sessionID in busyRef.current) return false;
+    busyRef.current = { ...busyRef.current, [sessionID]: action };
+    setBusy(busyRef.current);
     return true;
   };
-  const end = (sessionID: string) => setBusy(({ [sessionID]: _done, ...rest }) => rest);
+  const end = (sessionID: string) => {
+    const { [sessionID]: _done, ...rest } = busyRef.current;
+    busyRef.current = rest;
+    setBusy(rest);
+  };
   const isBusy = (sessionID: string, action: SessionAction): boolean => busy[sessionID] === action;
   const isBlocked = (sessionID: string, action: SessionAction): boolean =>
     sessionID in busy && busy[sessionID] !== action;

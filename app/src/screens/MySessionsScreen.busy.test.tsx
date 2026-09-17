@@ -99,4 +99,20 @@ describe('MySessionsScreen action busy state', () => {
     await waitFor(() => expect(spinners()).toHaveLength(0));
     expect(slotButtons()[0]).toBeEnabled();
   });
+
+  it('starts only one request when two actions are tapped before a re-render', async () => {
+    mocked.rescheduleSession.mockImplementationOnce(() => new Promise(() => {}));
+    mocked.cancelSession.mockImplementationOnce(() => new Promise(() => {}));
+    await openRescheduleList();
+
+    const cancel = screen.getByRole('button', { name: 'Cancel' });
+    const slot = slotButtons()[0];
+    act(() => {
+      fireEvent.press(slot);
+      fireEvent.press(cancel);
+    });
+
+    await waitFor(() => expect(mocked.rescheduleSession).toHaveBeenCalledTimes(1));
+    expect(mocked.cancelSession).not.toHaveBeenCalled();
+  });
 });
