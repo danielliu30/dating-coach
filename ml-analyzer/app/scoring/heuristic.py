@@ -139,15 +139,18 @@ def review_self_messages(messages: Sequence[Message]) -> List[SelfMessageReview]
 MIN_SELF_FOR_RECIPROCITY = 3
 # Customer-to-match ratio (message count or word count) from which the imbalance is named.
 RECIPROCITY_RATIO = 1.75
+# A run of ``?`` closing a sentence, allowing trailing emphasis or closing quotes/brackets ("?!", '?"', "?)").
+QUESTION_MARK = re.compile(r"\?+[!\"'\u201d\u2019)\]]*(?=\s|$)")
 
 
 def _question_count(message: Message) -> int:
-    """Number of questions in the message, counted as ``?`` marks that close a sentence.
+    """Number of questions in the message, counted as sentence-closing ``?`` runs (see ``QUESTION_MARK``).
 
     Punctuation only: a wh-word in a statement ("I know what you mean") is not a
-    question, and one bubble holding two questions counts as two.
+    question, one bubble holding two questions counts as two, and "??" or "?!"
+    counts once.
     """
-    return len(ASKS_BACK.findall(message.body))
+    return len(QUESTION_MARK.findall(message.body))
 
 
 def _times(ratio: float) -> str:
