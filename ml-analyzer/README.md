@@ -42,8 +42,10 @@ concrete. It is built around agency:
   a suggested or rewritten message, and the anti-drafting guard covers the new
   fields too.
 - *Never diagnose rejection.* Feedback describes what happened (no reply, a
-  short reply, an engaged reply); it never claims to know *why* the match
-  pulled back. We can't know that.
+  short reply, an engaged reply) and does not claim to know *why* the match
+  pulled back. We can't know that. The heuristic scorer's wording is fixed and
+  tested for this; for the LLM backend it is a prompt rule, enforced only by
+  the anti-drafting scan today (a rejection-diagnosis scan is not implemented).
 
 ### Image track
 
@@ -118,7 +120,8 @@ default to `[]`, so clients that predate them are unaffected.
 flat), so it is consistent across backends. `comment`, `summary` and
 `improvements` describe reply outcomes (no reply / short reply / engaged
 reply) and hand them back as something to think about; they never contain a
-drafted message and never state why the match replied the way they did.
+drafted message (enforced by the LLM parser) and are not meant to state why
+the match replied the way they did (a prompt rule for the LLM backend).
 
 ### `POST /analyze/images` (photos)
 
