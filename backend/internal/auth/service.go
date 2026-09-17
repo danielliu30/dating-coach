@@ -324,7 +324,7 @@ func (s *Service) UpdateDatingProfile(ctx context.Context, principal Principal, 
 }
 
 const (
-	// MinPasswordLen is the shortest password SignUp accepts, in bytes.
+	// MinPasswordLen is the shortest password SignUp accepts, in characters.
 	MinPasswordLen = 8
 	// MaxPasswordLen is the longest password SignUp accepts, in bytes. It is
 	// bcrypt's hard input limit: GenerateFromPassword fails above it.
@@ -333,11 +333,11 @@ const (
 
 // validatePassword reports whether password is acceptable for a new account.
 // It returns an ErrInvalidInput-wrapped error when the password is shorter than
-// MinPasswordLen bytes, longer than MaxPasswordLen bytes, or made up entirely
+// MinPasswordLen characters, longer than MaxPasswordLen bytes, or made up entirely
 // of whitespace; the password itself is never included in the error.
 func validatePassword(password string) error {
 	switch {
-	case len(password) < MinPasswordLen:
+	case utf8.RuneCountInString(password) < MinPasswordLen:
 		return fmt.Errorf("%w: password must be at least %d characters", ErrInvalidInput, MinPasswordLen)
 	case len(password) > MaxPasswordLen:
 		return fmt.Errorf("%w: password must be at most %d bytes", ErrInvalidInput, MaxPasswordLen)

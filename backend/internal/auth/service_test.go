@@ -440,8 +440,8 @@ func TestNormaliseChoicesCanonicalisesAndRejectsUnknown(t *testing.T) {
 	}
 }
 
-// TestValidatePassword pins the three password rules: the byte bounds — the
-// upper one being bcrypt's input limit, which would otherwise surface as an
+// TestValidatePassword pins the three password rules: the character minimum,
+// the byte maximum — bcrypt's input limit, which would otherwise surface as an
 // internal error from GenerateFromPassword — and the whitespace-only refusal.
 func TestValidatePassword(t *testing.T) {
 	cases := []struct {
@@ -454,6 +454,7 @@ func TestValidatePassword(t *testing.T) {
 		{"exactly max", strings.Repeat("a", MaxPasswordLen), false},
 		{"multibyte within max", strings.Repeat("é", MaxPasswordLen/2), false},
 		{"too short", strings.Repeat("a", MinPasswordLen-1), true},
+		{"multibyte too short", strings.Repeat("é", MinPasswordLen-1), true},
 		{"one byte over max", strings.Repeat("a", MaxPasswordLen+1), true},
 		{"multibyte over max", strings.Repeat("é", MaxPasswordLen/2+1), true},
 		{"only spaces", strings.Repeat(" ", MinPasswordLen), true},
