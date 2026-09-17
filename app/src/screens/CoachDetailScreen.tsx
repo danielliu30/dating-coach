@@ -110,6 +110,17 @@ export default function CoachDetailScreen({
     }
   };
 
+  /**
+   * Switches the session length. Open slots are re-fetched for the new length,
+   * so a slot chosen for the previous length is dropped rather than carried over
+   * into a booking with a different `duration_minutes`.
+   */
+  const pickDuration = (minutes: number) => {
+    if (minutes === duration) return;
+    setDuration(minutes);
+    setSelected(null);
+  };
+
   const book = async () => {
     if (!selected) {
       setError('Pick a time slot first.');
@@ -357,7 +368,7 @@ export default function CoachDetailScreen({
                 key={minutes}
                 accessibilityRole="radio"
                 accessibilityState={{ selected: active }}
-                onPress={() => setDuration(minutes)}
+                onPress={() => pickDuration(minutes)}
                 style={[styles.duration, active && styles.durationActive]}
               >
                 <Text style={[styles.durationValue, active && { color: colors.primaryText }]}>{minutes}</Text>
