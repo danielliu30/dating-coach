@@ -12,7 +12,7 @@ Dating Coach is a platform that helps people get better at dating conversations.
 
 1. **Human coaching.** Clients browse a directory of professional coaches, book a session against the coach's real, published availability, or open a live chat with a coach. Coaches (accounts with the `coach` role) get their own dashboard of upcoming sessions and active chats.
 
-2. **AI conversation and photo analysis.** A client pastes in a conversation from a dating app and receives scores for each stretch of the conversation plus concrete hints about how *their own* messages landed. Separately, a client can submit profile photos and receive a verdict, per photo, on clarity and on whether they are clearly the subject. Both kinds of feedback are tailored to the preferences the client has written about what they are looking for.
+2. **AI conversation and photo analysis.** A client pastes in a conversation from a dating app and receives scores for each stretch of the conversation plus concrete hints about how *their own* messages landed. The same analysis service also has a photo track that gives a verdict, per profile photo, on clarity and on whether the client is clearly the subject. Both kinds of feedback are tailored to the preferences the client has written about what they are looking for. Today the conversation track is wired end-to-end through the app and backend; the photo track is implemented in the analysis service (the `/analyze/images` endpoint) but not yet exposed through the app or the backend API.
 
 The two surfaces are complementary: the AI gives fast, always-on, low-cost feedback on real conversations; the human coaches handle the deeper, personal work.
 
@@ -54,13 +54,15 @@ The client pastes a conversation. Each message is tagged as either theirs (`self
 
 ### The photo track
 
-The client submits one to ten profile photos. Each is judged on two questions: is it sharp and well lit, and is the client unmistakably the focal point of the frame? Each photo gets a clarity score, a subject-focus score, a yes/no on each, and a short piece of feedback; the set gets an overall summary with strengths and improvements. **Photos are not stored** — the result is returned immediately and nothing is kept.
+The analysis service accepts one to ten profile photos. Each is judged on two questions: is it sharp and well lit, and is the client unmistakably the focal point of the frame? Each photo gets a clarity score, a subject-focus score, a yes/no on each, and a short piece of feedback; the set gets an overall summary with strengths and improvements. **Photos are not stored** — the result is returned immediately and nothing is kept.
 
 Without a vision-capable model configured, the fallback can only read image dimensions and format; it cannot see who is in the frame, so it returns a neutral focus score and says so rather than guessing.
 
+As noted in Section 1, this track exists in the analysis service today but is not yet reachable from the app or the backend API.
+
 ### Tailored to the client's preferences
 
-On the Account screen the client writes, in their own words, what they are looking for (stored as `dating_preferences`). The backend attaches this text to every analysis request, so message feedback can relate hints to it ("check whether your messages reflect that") and photo feedback can be framed against it. The app never sends preferences with a request itself, so the feedback always uses the client's current wording.
+On the Account screen the client writes, in their own words, what they are looking for (stored as `dating_preferences`). The backend attaches this text to every conversation-analysis request, so message feedback can relate hints to it ("check whether your messages reflect that"); the photo track accepts the same preferences text so its feedback can be framed the same way. The app never sends preferences with a request itself, so the feedback always uses the client's current wording.
 
 ---
 
@@ -91,7 +93,8 @@ flowchart TD
     MQ --> WORKER
     WORKER -->|"POST /analyze (messages)"| ML
     WORKER -->|"stores result, notifies user"| PG
-    API -->|"POST /analyze/images (photos, nothing stored)"| ML
+    PHOTOS["POST /analyze/images (photo track on the ML analyzer; no API or app caller yet)"]
+    PHOTOS -.-> ML
 ```
 
 How a conversation analysis flows:
@@ -100,7 +103,7 @@ How a conversation analysis flows:
 2. The **worker** picks up the job, attaches the client's preferences, and calls the ML analyzer over HTTP.
 3. The worker stores the per-segment scores and the overall verdict with the result, records which model produced it, and notifies the user. The app polls for the finished result.
 
-Photo analysis is simpler: the API calls the ML analyzer directly and returns the answer; nothing is stored.
+Photo analysis is designed to be simpler: a synchronous HTTP call to the ML analyzer that returns the answer with nothing stored. That endpoint exists on the ML analyzer; the backend route and app screen that would call it are not built yet.
 
 Two design choices worth noting:
 
@@ -133,9 +136,9 @@ One honest caveat, straight from the repository: the current `trained` backend p
 
 - **Consent-gated training data.** A conversation is only eligible for training when the client has explicitly consented to it; the export query and `train.py` both filter on that flag. The documented ground rules also require an opt-out path that deletes a user's training rows.
 - **Pseudonymisation before data leaves the database.** The training guidelines require names, handles and links to be pseudonymised before any dataset is exported, and require the evaluation set to be kept user-disjoint from the training set.
-- **Photos are never stored.** Photo analysis is synchronous: the images are analysed and the result returned, with nothing persisted by either the backend or the ML service.
+- **Photos are never stored.** The photo track is synchronous: the images are analysed and the result returned, with nothing persisted by the ML service.
 - **The ML service holds no data.** It has no database. It receives a request, returns an answer, and is done.
-- **Account deletion is guaranteed to complete.** Deleting an account writes a tombstone and a record into a deletion "outbox" in a single database statement. From that instant the account is locked out — sign-in refuses it and its session cannot be renewed. A background worker then removes every row belonging to the account (cascading across all tables), and a relay ensures every recorded deletion is eventually processed even if the original request's own cleanup attempt failed. Deletions that keep failing land in a dead-letter queue whose depth is logged so operators can alert on it.
+- **Account deletion is durable and lock-out is immediate.** Deleting an account writes a tombstone and a record into a deletion "outbox" in a single database statement. From that instant the account is locked out — sign-in refuses it and its session cannot be renewed. A background worker then removes every row belonging to the account (cascading across all tables), and a relay re-queues any recorded deletion the original request failed to hand off, so a deletion is never silently lost. Deletions that keep failing are parked in a dead-letter queue (a holding area for jobs that could not be completed) whose depth is logged so operators can alert on it and intervene — those accounts stay locked out but their rows remain until the failure is resolved.
 - **Short-lived sessions.** Access tokens live 15 minutes and are paired with rotating refresh tokens stored hashed; replaying a spent refresh token revokes every session on that account.
 
 ---
