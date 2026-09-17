@@ -356,8 +356,8 @@ func (s *Service) SignUp(ctx context.Context, in SignUpInput) (Session, error) {
 	if _, err := mail.ParseAddress(email); err != nil {
 		return Session{}, fmt.Errorf("%w: email is not valid", ErrInvalidInput)
 	}
-	if len(in.Password) < 8 {
-		return Session{}, fmt.Errorf("%w: password must be at least 8 characters", ErrInvalidInput)
+	if err := validatePassword(in.Password); err != nil {
+		return Session{}, err
 	}
 	displayName := strings.TrimSpace(in.DisplayName)
 	if displayName == "" {
