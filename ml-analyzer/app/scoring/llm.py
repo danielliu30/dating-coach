@@ -242,32 +242,41 @@ def _reject_drafting(texts: Sequence[str], sources: Sequence[str] = ()) -> None:
     message that itself sounds like drafting can still cause a needless (but
     safe) fallback.
     """
+    for text in texts:
+        if DRAFTING.search(_strip_citations(text, sources)):
+            raise ValueError(f"llm drafted a reply for the customer: {text[:80]!r}")
+
+
+def _strip_citations(text: str, sources: Sequence[str] = ()) -> str:
+    """Return ``text`` with every provable customer citation blanked, ready for a wording scan.
+
+    A span is blanked only when it is written in the prompt's ``Message N
+    ("...")`` syntax (``CITATION_START``), is at least ``MIN_QUOTE_WORDS`` long
+    and is, case- and whitespace-insensitively, a substring of one of the
+    ``sources`` bodies; the ``Message N (`` prefix and everything else is kept.
+    For a citation whose quote itself contains quotes, the longest closing
+    quote that still matches a source wins, so the customer message is exempted
+    whole. With no ``sources`` nothing is blanked.
+    """
     normalised_sources = [_squash(s) for s in sources if s.strip()]
 
-    def citation_end(text: str, start: int) -> Optional[int]:
-        """Index just past the longest closing quote after ``start`` whose contents are a customer quote, else ``None``.
-
-        Trying every closing quote (longest first) lets a customer message that
-        itself contains quotes be cited whole.
-        """
+    def citation_end(start: int) -> Optional[int]:
         for closing in reversed(list(CLOSING_QUOTE.finditer(text, start + 1))):
             inner = _squash(text[start + 1 : closing.start()])
             if len(inner.split()) >= MIN_QUOTE_WORDS and any(inner in s for s in normalised_sources):
                 return closing.end()
         return None
 
-    for text in texts:
-        scanned, cursor = [], 0
-        for match in CITATION_START.finditer(text):
-            start = match.start(1)
-            end = citation_end(text, start) if start >= cursor else None
-            if end is None:
-                continue
-            scanned.append(text[cursor:start] + " ")
-            cursor = end
-        scanned.append(text[cursor:])
-        if DRAFTING.search("".join(scanned)):
-            raise ValueError(f"llm drafted a reply for the customer: {text[:80]!r}")
+    kept, cursor = [], 0
+    for match in CITATION_START.finditer(text):
+        start = match.start(1)
+        end = citation_end(start) if start >= cursor else None
+        if end is None:
+            continue
+        kept.append(text[cursor:start] + " ")
+        cursor = end
+    kept.append(text[cursor:])
+    return "".join(kept)
 
 
 def _squash(text: str) -> str:
