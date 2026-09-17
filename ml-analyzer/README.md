@@ -44,8 +44,8 @@ concrete. It is built around agency:
 - *Never diagnose rejection.* Feedback describes what happened (no reply, a
   short reply, an engaged reply) and does not claim to know *why* the match
   pulled back. We can't know that. The heuristic scorer's wording is fixed and
-  tested for this; for the LLM backend it is a prompt rule, enforced only by
-  the anti-drafting scan today (a rejection-diagnosis scan is not implemented).
+  tested for this. For the LLM backend it is a prompt rule only: the parser
+  rejects drafted replies but has no scan for rejection-diagnosis language.
 
 ### Image track
 
