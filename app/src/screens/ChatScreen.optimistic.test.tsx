@@ -1,0 +1,263 @@
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import React from 'react';
+
+import type { ChatEvent } from '../api/types';
+import ChatScreen from './ChatScreen';
+
+interface Handlers {
+  onEvent: (event: ChatEvent) => void;
+  onStatus?: (status: 'connecting' | 'open' | 'closed') => void;
+}
+
+const mockSockets: { threadID: string; handlers: Handlers; send: jest.Mock }[] = [];
+
+type Msg = { _id: string | number; text: string; createdAt: Date; pending?: boolean; user: { _id: string } };
+
+// Gifted Chat pulls in reanimated/worklets natives that do not load under jest, so
+// stand in a list + input that call the same props. `append` keeps the real
+// newest-first ordering the screen relies on.
+jest.mock('react-native-gifted-chat', () => {
+  const React = require('react');
+  const { Pressable, Text, TextInput, View } = require('react-native');
+  function GiftedChat({
+    messages,
+    onSend,
+    textInputProps,
+  }: {
+    messages: Msg[];
+    onSend: (m: Msg[]) => void;
+    textInputProps: { onChangeText: (t: string) => void; placeholder: string };
+  }) {
+    const [text, setText] = React.useState('');
+    return React.createElement(
+      View,
+      null,
+      messages.map((m) =>
+        React.createElement(Text, { key: String(m._id), testID: m.pending ? 'pending' : 'sent' }, m.text),
+      ),
+      React.createElement(TextInput, {
+        placeholder: textInputProps.placeholder,
+        value: text,
+        onChangeText: (t: string) => {
+          setText(t);
+          textInputProps.onChangeText(t);
+        },
+      }),
+      React.createElement(
+        Pressable,
+        {
+          onPress: () => {
+            onSend([{ _id: `local-${Date.now()}-${Math.random()}`, text, createdAt: new Date(), user: { _id: 'me' } }]);
+            setText('');
+          },
+        },
+        React.createElement(Text, null, 'Send'),
+      ),
+    );
+  }
+  GiftedChat.append = (current: Msg[] = [], incoming: Msg[] = []) => [...incoming].reverse().concat(current);
+  return { GiftedChat, Bubble: View, InputToolbar: View };
+});
+
+jest.mock('../api/socket', () => ({
+  ChatSocket: jest.fn().mockImplementation((threadID: string, _token: () => string | null, handlers: Handlers) => {
+    const socket = { threadID, handlers, send: jest.fn(), typing: jest.fn(), connect: jest.fn(), close: jest.fn() };
+    mockSockets.push(socket);
+    return socket;
+  }),
+}));
+
+jest.mock('../state/auth', () => ({
+  useAuth: () => ({ token: 't', user: { id: 'me', display_name: 'Riley', role: 'user' } }),
+}));
+
+const latest = () => {
+  const socket = mockSockets.at(-1);
+  if (!socket) throw new Error('no socket was created');
+  return socket;
+};
+
+function mount() {
+  const ScreenAny = ChatScreen as unknown as React.ComponentType<{ route: unknown; navigation: unknown }>;
+  return render(
+    <ScreenAny route={{ params: { threadID: 'th1', title: 'Casey Coach' } }} navigation={{ setOptions: jest.fn() }} />,
+  );
+}
+
+async function typeAndSend(text: string) {
+  fireEvent.changeText(screen.getByPlaceholderText('Message your coach'), text);
+  fireEvent.press(await screen.findByText('Send'));
+}
+
+describe('ChatScreen optimistic sending', () => {
+  beforeEach(() => {
+    mockSockets.length = 0;
+  });
+
+  it('shows a sent message immediately while the socket is disconnected', async () => {
+    mount();
+    await waitFor(() => expect(mockSockets).toHaveLength(1));
+    act(() => latest().handlers.onStatus?.('closed'));
+
+    await typeAndSend('are you there?');
+
+    expect(await screen.findByText('are you there?')).toBeTruthy();
+    expect(screen.getAllByTestId('pending')).toHaveLength(1);
+    expect(latest().send).toHaveBeenCalledWith('are you there?');
+  });
+
+  it('replaces the pending bubble with the server echo instead of duplicating it', async () => {
+    mount();
+    await waitFor(() => expect(mockSockets).toHaveLength(1));
+    act(() => latest().handlers.onStatus?.('open'));
+
+    await typeAndSend('hello coach');
+    expect(await screen.findByText('hello coach')).toBeTruthy();
+
+    act(() =>
+      latest().handlers.onEvent({
+        type: 'message',
+        message_id: 'm1',
+        sender_id: 'me',
+        body: 'hello coach',
+        created_at: '2030-01-07T18:00:00Z',
+      }),
+    );
+
+    expect(screen.getAllByText('hello coach')).toHaveLength(1);
+    expect(screen.queryAllByTestId('pending')).toHaveLength(0);
+    expect(screen.getAllByTestId('sent')).toHaveLength(1);
+  });
+
+  it('still appends messages from the other side', async () => {
+    mount();
+    await waitFor(() => expect(mockSockets).toHaveLength(1));
+
+    await typeAndSend('ping');
+    act(() =>
+      latest().handlers.onEvent({
+        type: 'message',
+        message_id: 'm2',
+        sender_id: 'coach',
+        body: 'ping',
+        created_at: '2030-01-07T18:00:00Z',
+      }),
+    );
+
+    // Our pending "ping" and the coach's "ping" are different messages.
+    expect(screen.getAllByText('ping')).toHaveLength(2);
+  });
+
+  it('keeps pending bubbles when reconnect history arrives before their echoes', async () => {
+    mount();
+    await waitFor(() => expect(mockSockets).toHaveLength(1));
+    act(() => latest().handlers.onStatus?.('closed'));
+    await typeAndSend('queued while offline');
+
+    act(() =>
+      latest().handlers.onEvent({
+        type: 'history',
+        messages: [
+          { id: 'h1', thread_id: 'th1', sender_id: 'coach', body: 'earlier', created_at: '2030-01-07T17:00:00Z' },
+        ],
+      }),
+    );
+
+    expect(screen.getByText('earlier')).toBeTruthy();
+    expect(screen.getByText('queued while offline')).toBeTruthy();
+    expect(screen.getAllByTestId('pending')).toHaveLength(1);
+  });
+
+  it('drops the rejected bubble and explains why when the server refuses a send', async () => {
+    mount();
+    await waitFor(() => expect(mockSockets).toHaveLength(1));
+    await typeAndSend('into a closed thread');
+
+    act(() => latest().handlers.onEvent({ type: 'error', body: 'thread is closed' }));
+
+    expect(screen.queryByText('into a closed thread')).toBeNull();
+    expect(screen.queryAllByTestId('pending')).toHaveLength(0);
+    expect(screen.getByText('Not sent: thread is closed')).toBeTruthy();
+  });
+
+  it('matches the echo even though the server trims the body', async () => {
+    mount();
+    await waitFor(() => expect(mockSockets).toHaveLength(1));
+    await typeAndSend('  spaced out  ');
+
+    act(() =>
+      latest().handlers.onEvent({
+        type: 'message',
+        message_id: 'm3',
+        sender_id: 'me',
+        body: 'spaced out',
+        created_at: '2030-01-07T18:00:00Z',
+      }),
+    );
+
+    expect(screen.getAllByText('spaced out')).toHaveLength(1);
+    expect(screen.queryAllByTestId('pending')).toHaveLength(0);
+  });
+
+  it('settles a pending bubble that reconnect history already contains', async () => {
+    mount();
+    await waitFor(() => expect(mockSockets).toHaveLength(1));
+    act(() => latest().handlers.onStatus?.('open'));
+    await typeAndSend('made it');
+    await typeAndSend('still waiting');
+
+    act(() =>
+      latest().handlers.onEvent({
+        type: 'history',
+        messages: [
+          { id: 'h2', thread_id: 'th1', sender_id: 'me', body: 'made it', created_at: '2030-01-07T18:00:00Z' },
+        ],
+      }),
+    );
+
+    expect(screen.getAllByText('made it')).toHaveLength(1);
+    expect(screen.getAllByTestId('sent')).toHaveLength(1);
+    expect(screen.getAllByTestId('pending')).toHaveLength(1);
+    expect(screen.getByText('still waiting')).toBeTruthy();
+  });
+
+  it('does not let an older identical message settle a bubble still queued offline', async () => {
+    mount();
+    await waitFor(() => expect(mockSockets).toHaveLength(1));
+    act(() => latest().handlers.onStatus?.('closed'));
+    await typeAndSend('OK');
+
+    act(() =>
+      latest().handlers.onEvent({
+        type: 'history',
+        messages: [{ id: 'old', thread_id: 'th1', sender_id: 'me', body: 'OK', created_at: '2030-01-01T00:00:00Z' }],
+      }),
+    );
+
+    expect(screen.getAllByText('OK')).toHaveLength(2);
+    expect(screen.getAllByTestId('pending')).toHaveLength(1);
+  });
+
+  it('lets history settle a queued bubble once the connection that flushed it has closed', async () => {
+    mount();
+    await waitFor(() => expect(mockSockets).toHaveLength(1));
+    act(() => latest().handlers.onStatus?.('closed'));
+    await typeAndSend('OK');
+
+    // Reconnect flushes the outbox; the server persists "OK" but the echo is lost with the drop.
+    act(() => latest().handlers.onStatus?.('open'));
+    act(() => latest().handlers.onEvent({ type: 'history', messages: [] }));
+    expect(screen.getAllByTestId('pending')).toHaveLength(1);
+    act(() => latest().handlers.onStatus?.('closed'));
+    act(() => latest().handlers.onStatus?.('open'));
+    act(() =>
+      latest().handlers.onEvent({
+        type: 'history',
+        messages: [{ id: 'ok1', thread_id: 'th1', sender_id: 'me', body: 'OK', created_at: '2030-01-07T18:00:00Z' }],
+      }),
+    );
+
+    expect(screen.getAllByText('OK')).toHaveLength(1);
+    expect(screen.queryAllByTestId('pending')).toHaveLength(0);
+  });
+});
