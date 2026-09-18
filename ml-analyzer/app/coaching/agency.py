@@ -1,9 +1,14 @@
 """Deterministic enforcement of the AGENCY pillar on generated feedback.
 
 A prompt cannot guarantee behaviour, so every piece of feedback the model
-returns is scanned against keyword/pattern prefilters, one per agency rule.
+returns is scanned against keyword/pattern prefilters, one per agency rule:
+
+- ``DRAFTING``: ghostwriting a reply for the customer.
+- ``MIND_READING``: asserting the match's motives, intent or feelings.
+- ``PRESCRIPTION``: telling the customer whom to date, keep or drop.
+
 Any hit means the completion is treated as failed and the caller falls back
-to a scorer that cannot violate the rule.
+to a scorer that cannot violate the rules.
 """
 
 from __future__ import annotations
@@ -18,7 +23,48 @@ DRAFTING = re.compile(
     r"(you )?should have (said|asked|written)|say something like|for example[,:]? ask|"
     r"ask (her|him|them) (something like|about)|next time,? (say|ask)|instead,? (say|ask)|"
     r"consider (asking|saying)|perhaps (say|ask)|you (could|should) (reply|respond) with|"
+    r"(just|simply) (say|ask|text|send|reply|write)|"
     r"a better (reply|response|message) (would be|is|might be))\b",
+    re.IGNORECASE,
+)
+
+# Third-person references to the match. Feedback only ever talks about "self", so any
+# claim about what "she/he/they" wants or feels is a claim about the match.
+_MATCH = r"(she|he|they|this (person|match|guy|girl)|the match|your match)"
+_MATCH_OBJ = r"(her|him|them|this (person|match|guy|girl)|the match|your match)"
+_IS = r"(?:'s|'re| is| are| was| were| seems?| sounds?| looks?)"
+
+# Phrases that assert the match's motives, intent, interest or feelings, which the
+# coach cannot know: only the customer's own behaviour and its visible outcome is fair game.
+MIND_READING = re.compile(
+    rf"\b({_MATCH}{_IS}(?: (?:just|clearly|obviously|probably|definitely|simply|only|not really))?"
+    r" (?:not (?:that |really |very )?(?:into|interested|attracted|invested|serious|keen)|"
+    r"into you|interested in you|using you|playing (?:you|games)|stringing you along|"
+    r"leading you on|breadcrumbing|losing interest|bored(?: of| with)? you|ghosting you|"
+    r"wasting your time|keeping you (?:as|around)|(?:a|your) backup|an option|"
+    r"testing you|(?:seeing|talking to) (?:other|someone)|out of your league|"
+    r"only (?:after|in it for|looking for|want(?:s|ing)?) (?:sex|attention|validation|a hookup|an ego boost))|"
+    rf"{_MATCH} (?:doesn't|don't|does not|do not|didn't|did not|never) (?:really |actually )?"
+    r"(?:like|want|care about|respect|fancy|value) you|"
+    rf"{_MATCH} (?:only|just) (?:wants?|wanted) (?:sex|attention|validation|a hookup|an ego boost)|"
+    rf"{_MATCH} (?:was|were|is|are) (?:never|not) (?:going to|gonna) (?:reply|answer|text back|commit))\b",
+    re.IGNORECASE,
+)
+
+# Phrases that tell the customer what to do with the relationship or whom to date,
+# instead of handing them the pattern to decide on themselves.
+PRESCRIPTION = re.compile(
+    r"\b((?:just |should |need to |time to |better to |you can )?(?:drop|dump|ditch|block|unmatch|leave|ghost)"
+    rf" {_MATCH_OBJ}|"
+    r"move on\b(?! to\b)|walk away|cut (?:her|him|them|it|this) (?:off|loose)|cut your losses|"
+    r"stop (?:texting|messaging|talking to|seeing|pursuing|chasing|wasting time on) (?:her|him|them|this)|"
+    r"give up on (?:her|him|them|this)|let (?:her|him|them|this one) go|"
+    r"(?:you're|you are|you'd be) better off (?:without|alone|elsewhere)|"
+    r"you deserve (?:better|someone|more)|(?:she|he|they)(?:'s|'re| is| are) not (?:worth|right for you|the one|good enough|your type)|"
+    r"you (?:should|need to|ought to|have to|must) (?:date|see|pursue|find|look for|go for|pick|choose|be with|end|break|ask (?:her|him|them) out)"
+    r"(?: (?:someone|somebody|people|a (?:man|woman|guy|girl|partner)|(?:it|this|things) off|up|it|this|things))?|"
+    r"find someone (?:who|else|better|new)|not (?:the|a) (?:right|good) (?:match|fit) for you|"
+    r"(?:this|it|she|he|they) (?:is|isn't|is not|are|aren't|are not) (?:going anywhere|worth (?:it|your time|pursuing)))\b",
     re.IGNORECASE,
 )
 
@@ -41,6 +87,8 @@ class AgencyRule:
 
 RULES: Tuple[AgencyRule, ...] = (
     AgencyRule("drafting", DRAFTING, "llm drafted a reply for the customer"),
+    AgencyRule("mind_reading", MIND_READING, "llm mind-read the match"),
+    AgencyRule("prescription", PRESCRIPTION, "llm prescribed the customer's dating life"),
 )
 
 
