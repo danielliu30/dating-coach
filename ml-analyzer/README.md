@@ -26,11 +26,26 @@ The LLM backend enforces this by rejecting any completion that reads as a
 suggested reply and falling back to the heuristic scorer. (`ML_BACKEND=trained`
 is the exception — see the backends section.)
 
-Feedback is meant to build a transferable skill, not to fix one message:
-`patterns` names behaviour that recurs across the conversation and the principle
-behind it, and `reflection_questions` hands the diagnosis back to the customer.
-Coaching the pattern rather than drafting the reply is what keeps the customer's
-voice their own — the analyzer never writes their next message for them.
+**Product thesis.** The message track is the "Dating Humane" manifesto
+(surfaced on the app landing page, `app/src/components/Landing.tsx`) made
+concrete. It is built around agency:
+
+- *Coach self-awareness, not just outcomes.* Alongside "did they like me?" the
+  analysis asks "did I like them?": `overall.reflection_questions` are open,
+  inward questions (did you enjoy this? were you putting in more than they
+  were, and did that feel okay?) that never tell the customer what to do.
+- *Name patterns as questions.* Recurring behaviour — including reciprocity,
+  i.e. investing more energy than the person on the other side — is stated as
+  an observation in `overall.patterns` and handed back: "here's a pattern we've
+  noticed; is this worth thinking about?"
+- *Never draft.* Your words should still be your words. No field ever contains
+  a suggested or rewritten message, and the anti-drafting guard covers the new
+  fields too.
+- *Never diagnose rejection.* Feedback describes what happened (no reply, a
+  short reply, an engaged reply) and does not claim to know *why* the match
+  pulled back. We can't know that. The heuristic scorer's wording is fixed and
+  tested for this. For the LLM backend it is a prompt rule only: the parser
+  rejects drafted replies but has no scan for rejection-diagnosis language.
 
 ### Image track
 
@@ -91,12 +106,22 @@ Response:
 | --- | --- | --- |
 | `model_version` | string | Which backend/model produced the scores. Stored with the result. |
 | `segments[]` | array | `start_position`, `end_position`, `engagement_score` (0–1), `label` (`engaging`\|`neutral`\|`flat`), `comment`. |
-| `overall` | object | `engagement_score`, `summary`, `strengths[]`, `improvements[]`, `patterns[]` (recurring behaviour across the conversation and the principle behind it; empty when nothing recurs), `reflection_questions[]` (open questions for the customer to self-diagnose; empty when there are no patterns). |
+| `overall` | object | `engagement_score`, `summary`, `strengths[]`, `improvements[]`, `reflection_questions[]`, `patterns[]`. |
+
+`overall.reflection_questions[]` are open, non-directive questions that turn the
+analysis inward ("did you actually enjoy this conversation?"); the heuristic
+always emits at least one when the customer wrote anything.
+`overall.patterns[]` are short observations naming recurring behaviour across
+the whole conversation — e.g. "You sent about twice as many messages as they
+did in this conversation (5 to 2)." — and are empty when nothing recurs. Both
+default to `[]`, so clients that predate them are unaffected.
 
 `label` is always derived from the score (≥0.66 engaging, ≥0.4 neutral, else
-flat), so it is consistent across backends. `comment`, `summary`, `improvements`,
-`patterns` and `reflection_questions` describe reply outcomes (no reply / short reply / engaged
-reply) and hint at what to reconsider; they never contain a drafted message.
+flat), so it is consistent across backends. `comment`, `summary` and
+`improvements` describe reply outcomes (no reply / short reply / engaged
+reply) and hand them back as something to think about; they never contain a
+drafted message (enforced by the LLM parser) and are not meant to state why
+the match replied the way they did (a prompt rule for the LLM backend).
 
 ### `POST /analyze/images` (photos)
 
