@@ -204,9 +204,12 @@ class LLMScorer(Scorer):
         segments: List[Segment] = [by_boundary[b] for b in boundaries]
 
         overall = payload.get("overall", {})
+        strengths = _string_list(overall, "strengths")
+        improvements = _string_list(overall, "improvements")
+        reflection_questions = _string_list(overall, "reflection_questions")
+        patterns = _string_list(overall, "patterns")
         prose = [s.comment for s in segments] + [str(overall.get("summary", ""))]
-        prose += [str(x) for x in overall.get("strengths", [])] + [str(x) for x in overall.get("improvements", [])]
-        prose += [str(x) for x in overall.get("reflection_questions", [])] + [str(x) for x in overall.get("patterns", [])]
+        prose += strengths + improvements + reflection_questions + patterns
         _reject_drafting(prose, sources)
         scores = [s.engagement_score for s in segments]
         return AnalyzeResponse(
@@ -217,12 +220,26 @@ class LLMScorer(Scorer):
                     overall.get("engagement_score", sum(scores) / len(scores) if scores else 0.5)
                 ),
                 summary=str(overall.get("summary", ""))[:1000],
-                strengths=[str(s)[:300] for s in overall.get("strengths", [])][:5],
-                improvements=[str(s)[:300] for s in overall.get("improvements", [])][:5],
-                reflection_questions=[str(s)[:300] for s in overall.get("reflection_questions", [])][:5],
-                patterns=[str(s)[:300] for s in overall.get("patterns", [])][:5],
+                strengths=strengths,
+                improvements=improvements,
+                reflection_questions=reflection_questions,
+                patterns=patterns,
             ),
         )
+
+
+def _string_list(overall: Dict[str, Any], key: str, limit: int = 5, max_chars: int = 300) -> List[str]:
+    """Return ``overall[key]`` as a list of at most ``limit`` strings, each cut to ``max_chars``.
+
+    A missing key yields ``[]``. Anything other than a JSON array of strings (a
+    bare string, an object, a number, an array with non-string items) raises
+    ``ValueError`` so the caller treats the completion as failed and falls back
+    to the heuristic scorer instead of publishing a mangled list.
+    """
+    value = overall.get(key, [])
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ValueError(f"llm returned overall.{key} that is not a list of strings: {str(value)[:80]!r}")
+    return [item[:max_chars] for item in value][:limit]
 
 
 def _reject_drafting(texts: Sequence[str], sources: Sequence[str] = ()) -> None:
