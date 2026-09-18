@@ -122,11 +122,13 @@ export async function startService(name: string, { attempts = 3, settleMs = 10_0
   for (let attempt = 1; attempt <= attempts; attempt++) {
     await compose(['start', name]);
     const deadline = Date.now() + settleMs;
-    do {
+    for (;;) {
       state = await serviceState(name);
       if (state === 'running') return;
-      await sleep(500);
-    } while (Date.now() < deadline);
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) break;
+      await sleep(Math.min(500, remainingMs));
+    }
   }
   throw new Error(
     `${name} is ${state || 'absent'} after ${attempts} × compose start:\n\n${await serviceDiagnostics(name)}`,
