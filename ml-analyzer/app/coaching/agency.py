@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Optional, Pattern, Sequence, Tuple
+from typing import List, Optional, Pattern, Sequence, Tuple
 
 # Phrases that mean the model drafted a reply for the customer instead of hinting.
 DRAFTING = re.compile(
@@ -61,8 +61,9 @@ def enforce_agency(texts: Sequence[str], sources: Sequence[str] = ()) -> None:
     The error message starts with the matching rule's ``error`` so callers and
     logs can tell which rule fired.
     """
+    normalised_sources = _normalise_sources(sources)
     for text in texts:
-        stripped = strip_citations(text, sources)
+        stripped = _strip_normalised_citations(text, normalised_sources)
         for rule in RULES:
             if rule.pattern.search(stripped):
                 raise ValueError(f"{rule.error}: {text[:80]!r}")
@@ -79,7 +80,16 @@ def strip_citations(text: str, sources: Sequence[str] = ()) -> str:
     quote that still matches a source wins, so the customer message is exempted
     whole. With no ``sources`` nothing is blanked.
     """
-    normalised_sources = [squash(s) for s in sources if s.strip()]
+    return _strip_normalised_citations(text, _normalise_sources(sources))
+
+
+def _normalise_sources(sources: Sequence[str]) -> List[str]:
+    """``squash`` every non-blank source once, so a batch of texts can be stripped without re-normalising per text."""
+    return [squash(s) for s in sources if s.strip()]
+
+
+def _strip_normalised_citations(text: str, normalised_sources: Sequence[str]) -> str:
+    """``strip_citations`` for sources already passed through ``_normalise_sources``."""
 
     def citation_end(start: int) -> Optional[int]:
         for closing in reversed(list(CLOSING_QUOTE.finditer(text, start + 1))):
