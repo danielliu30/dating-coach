@@ -56,13 +56,14 @@ MIND_READING = re.compile(
 # ``leave`` and ``block`` also describe what a message does to the match ("leaves them little
 # to answer", "blocks him from elaborating"), so they only count with a directive in front or
 # as a bare imperative opening a clause and ending it ("Leave him.", "..., and block her").
-_DIRECTIVE = r"(?:just |should |need to |time to |better to |you can |you could |you'd better |please |now |honestly,? |seriously,? )"
+_DIRECTIVE = r"(?:just |should |need to |time to |better to |you can |you could |you'd better )"
+_POLITE = r"(?:(?:please|now|honestly|seriously),? )?"
 _CLAUSE_START = r"(?:^|(?<=[.!?;:]\s)|(?<=\band )|(?<=\bor )|(?<=\bbut )|(?<=\bthen ))"
 _CLAUSE_END = r"(?=\s*(?:[.!?,;:]|$|and\b|or\b))"
 PRESCRIPTION = re.compile(
     rf"\b({_DIRECTIVE}?(?:drop|dump|ditch|unmatch|ghost) {_MATCH_OBJ}|"
     rf"{_DIRECTIVE}(?:leave|block) {_MATCH_OBJ}|"
-    rf"{_CLAUSE_START}(?:leave|block) {_MATCH_OBJ}{_CLAUSE_END}|"
+    rf"{_CLAUSE_START}{_POLITE}(?:leave|block) {_MATCH_OBJ}{_CLAUSE_END}|"
     rf"(?:you )?(?:shouldn't|should not|don't|do not|mustn't|must not|can't|cannot) "
     r"(?:date|see|pursue|keep seeing|keep talking to|go out with|be with|text|message|chase|trust|wait for|leave|block) "
     rf"{_MATCH_OBJ}|"
