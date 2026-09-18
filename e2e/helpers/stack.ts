@@ -102,9 +102,37 @@ export async function stopService(name: string): Promise<void> {
   await compose(['stop', name]);
 }
 
-/** Starts a previously stopped compose service (`docker compose start <name>`). */
-export async function startService(name: string): Promise<void> {
-  await compose(['start', name]);
+/** `docker compose ps` state of a service's container (`running`, `exited`, `restarting`, ...); '' when it has none. */
+export async function serviceState(name: string): Promise<string> {
+  const out = await compose(['ps', '-a', '--format', '{{.State}}', name]);
+  return out.trim().split('\n')[0] ?? '';
+}
+
+/**
+ * Starts a previously stopped compose service (`docker compose start <name>`)
+ * and confirms its container is actually `running`. A zero exit from
+ * `compose start` alone does not prove the container is up, and a container
+ * that is not would otherwise only surface as a health-poll timeout; the start is
+ * re-issued up to `attempts` times, each followed by a `settleMs` window in
+ * which the state is polled every 500ms. Throws with `serviceDiagnostics`
+ * when the container is still not running after the last attempt.
+ */
+export async function startService(name: string, { attempts = 3, settleMs = 10_000 } = {}): Promise<void> {
+  let state = '';
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    await compose(['start', name]);
+    const deadline = Date.now() + settleMs;
+    for (;;) {
+      state = await serviceState(name);
+      if (state === 'running') return;
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) break;
+      await sleep(Math.min(500, remainingMs));
+    }
+  }
+  throw new Error(
+    `${name} is ${state || 'absent'} after ${attempts} × compose start:\n\n${await serviceDiagnostics(name)}`,
+  );
 }
 
 /**
