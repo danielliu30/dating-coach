@@ -559,6 +559,10 @@ def test_enforce_agency_rejects_mind_reading_and_prescription_but_passes_reflect
         "She isn't interested in you.",
         "They aren't really into you.",
         "He wasn't going to reply anyway.",
+        "She likes you but is afraid to commit.",
+        "He wants a relationship.",
+        "They feel uncomfortable.",
+        "She's probably nervous.",
     ):
         with pytest.raises(ValueError, match="^llm mind-read the match"):
             enforce_agency([text])
@@ -590,6 +594,11 @@ def test_enforce_agency_rejects_mind_reading_and_prescription_but_passes_reflect
         "Don't block her, but leave him and move on.",
         "Move on.",
         "You need to walk away.",
+        "Ask her out.",
+        "Keep seeing him.",
+        "End things with them.",
+        "Find someone else.",
+        "Honestly, break it off.",
     ):
         with pytest.raises(ValueError, match="^llm prescribed the customer's dating life"):
             enforce_agency([text])
@@ -625,6 +634,9 @@ def test_enforce_agency_rejects_mind_reading_and_prescription_but_passes_reflect
         "Sam asked two questions and you answered one.",
         "Your messages move on quickly before the match has finished a thought.",
         "Message 4 moves on straight to a new topic; the match had walked away from the previous one.",
+        "Message 6 asked whether she likes hiking and drew a long reply.",
+        "You asked him out in Message 3 and he said yes.",
+        "Whether you keep seeing him is your call; what did you notice about your own pacing?",
     ]
     enforce_agency(fine, match_name="Sam")
 

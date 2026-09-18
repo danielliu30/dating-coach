@@ -131,7 +131,7 @@ Request:
 | --- | --- | --- |
 | `conversation_id` | string | Echo of the backend's row id. |
 | `platform` | string | Optional, defaults to `unknown`. |
-| `match_name` | string | Optional, used only in the prompt. |
+| `match_name` | string | Optional. Used in the prompt, and by the agency gate so that claims or advice naming the match ("Sam isn't into you") are caught like pronoun forms. |
 | `messages[]` | array | `position` (0-based), `sender` (`self`\|`match`), `body`, optional `sent_at`. Only `self` messages are scored. |
 | `preferences` | string | Optional, ≤2000 chars. What the customer is looking for; feedback is tailored to it. |
 

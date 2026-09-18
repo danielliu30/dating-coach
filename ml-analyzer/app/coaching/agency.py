@@ -49,7 +49,15 @@ MIND_READING = re.compile(
     rf"{_MATCH} (?:doesn't|don't|does not|do not|didn't|did not|never) (?:really |actually )?"
     r"(?:like|want|care about|respect|fancy|value) you|"
     rf"{_MATCH} (?:only|just) (?:wants?|wanted) (?:sex|attention|validation|a hookup|an ego boost)|"
-    rf"{_MATCH}(?: (?:was|were|is|are) (?:never|not)|{_ISNT}) (?:going to|gonna) (?:reply|answer|text back|commit))\b",
+    rf"{_MATCH}(?: (?:was|were|is|are) (?:never|not)|{_ISNT}) (?:going to|gonna) (?:reply|answer|text back|commit)|"
+    rf"{_MATCH}(?: (?:really|clearly|obviously|probably|definitely|secretly|still))? "
+    r"(?:likes|loves|fancies|wants|needs|misses|trusts|fears|resents|adores) you|"
+    rf"{_MATCH}(?: (?:really|clearly|obviously|probably|definitely))? wants? "
+    r"(?:a relationship|commitment|something (?:serious|casual)|to (?:see|date|meet|be with) you|space|out|more from you)|"
+    rf"{_MATCH}(?: (?:really|clearly|obviously|probably|definitely))? feels? "
+    r"(?:uncomfortable|pressured|smothered|rushed|ignored|bored|unsafe|overwhelmed|rejected|neglected|the same(?: way)?)|"
+    rf"{_MATCH}{_IS}(?: (?:just|clearly|obviously|probably|definitely|too))? "
+    r"(?:afraid|scared|nervous|worried|hesitant|intimidated|unsure|shy|insecure|in love|attached|smitten|falling for you))\b",
     re.IGNORECASE,
 )
 
@@ -70,6 +78,9 @@ PRESCRIPTION = re.compile(
     r"(?:date|see|pursue|keep seeing|keep talking to|go out with|be with|text|message|chase|trust|wait for|leave|block) "
     rf"{_MATCH_OBJ}|"
     rf"(?:{_DIRECTIVE}|you (?:should|need to|ought to|have to|must) |{_CLAUSE_START}{_POLITE})(?:move on|walk away)(?! to\b)|"
+    rf"{_CLAUSE_START}{_POLITE}(?:ask {_MATCH_OBJ} out|(?:keep|stop) (?:seeing|texting|dating|talking to) {_MATCH_OBJ}|"
+    rf"end (?:it|this|things)(?: with {_MATCH_OBJ})?|break (?:it|things) off(?: with {_MATCH_OBJ})?|break up with {_MATCH_OBJ}|"
+    rf"(?:date|see|text|message|go out with|be with|commit to|pursue|forget|forgive|confront) {_MATCH_OBJ}){_CLAUSE_END}|"
     rf"cut (?:{_MATCH_OBJ}|it|this) (?:off|loose)|cut your losses|"
     rf"stop (?:texting|messaging|talking to|seeing|pursuing|chasing|wasting time on) (?:{_MATCH_OBJ}|this)|"
     rf"give up on (?:{_MATCH_OBJ}|this)|let (?:{_MATCH_OBJ}|this one) go|"
