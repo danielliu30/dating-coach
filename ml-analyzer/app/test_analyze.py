@@ -422,6 +422,8 @@ def test_enforce_agency_rejects_mind_reading_and_prescription_but_passes_reflect
         "This stretch is worth a look at what made it hard to answer.",
         "A one-line answer can leave them little to respond to.",
         "A closed question can block him from elaborating.",
+        "A short answer can leave them, and the conversation, with nowhere to go.",
+        "Closed questions may block him, as before, from opening up.",
         "Sam asked two questions and you answered one.",
     ]
     enforce_agency(fine, match_name="Sam")
