@@ -62,7 +62,7 @@ _CLAUSE_START = r"(?:^|(?<=[.!?;:]\s)|(?<=\band )|(?<=\bor )|(?<=\bbut )|(?<=\bt
 _CLAUSE_END = r"(?=\s*(?:[.!?,;:]|$|and\b|or\b))"
 PRESCRIPTION = re.compile(
     rf"\b({_DIRECTIVE}?(?:drop|dump|ditch|unmatch|ghost) {_MATCH_OBJ}|"
-    rf"{_DIRECTIVE}(?:leave|block) {_MATCH_OBJ}|"
+    rf"{_DIRECTIVE}{_POLITE}(?:leave|block) {_MATCH_OBJ}|"
     rf"{_CLAUSE_START}{_POLITE}(?:leave|block) {_MATCH_OBJ}{_CLAUSE_END}|"
     rf"(?:you )?(?:shouldn't|should not|don't|do not|mustn't|must not|can't|cannot) "
     r"(?:date|see|pursue|keep seeing|keep talking to|go out with|be with|text|message|chase|trust|wait for|leave|block) "
