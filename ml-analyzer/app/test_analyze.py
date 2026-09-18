@@ -619,6 +619,7 @@ def test_llm_parse_rejects_diagnosing_why_the_match_replied() -> None:
         "Your match probably felt bored by the logistics.",
         "They had decided not to continue.",
         "They are losing interest as the thread goes on.",
+        "She has been feeling bored since Message 3.",
     )
     for field in ("summary", "improvements", "reflection_questions", "patterns", "strengths"):
         for diagnosis in diagnoses:

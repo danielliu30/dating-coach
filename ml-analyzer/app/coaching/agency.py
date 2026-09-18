@@ -31,7 +31,7 @@ DRAFTING = re.compile(
 # bored?" is a reflection question). ``['’]`` matches ASCII and curly apostrophes so
 # "weren’t" is caught like "weren't".
 _MATCH = (
-    r"(they|she|he|(the|your|this) match)( (had|have|has|are|were|is|was|might|may|must|probably|likely|clearly|just|simply|also|then|have been|had been))*"
+    r"(they|she|he|(the|your|this) match)( (had|have|has|are|were|is|was|might|may|must|probably|likely|clearly|just|simply|also|then|been|being|feeling))*"
 )
 DIAGNOSIS = re.compile(
     r"\b(because (they|she|he|it|you|your|of)|due to|(that|this|which) is why|(the|one) reason (they|she|he|for)|why (they|she|he)|"
