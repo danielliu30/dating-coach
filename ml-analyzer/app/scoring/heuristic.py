@@ -135,6 +135,110 @@ def review_self_messages(messages: Sequence[Message]) -> List[SelfMessageReview]
     return reviews
 
 
+# Fewest customer messages before the conversation says anything about who is investing more.
+MIN_SELF_FOR_RECIPROCITY = 3
+# Customer-to-match ratio (message count or word count) from which the imbalance is named.
+RECIPROCITY_RATIO = 1.75
+# A run of ``?`` closing a sentence, allowing trailing emphasis or closing quotes/brackets ("?!", '?"', "?)").
+QUESTION_MARK = re.compile(r"\?+[!\"'\u201d\u2019)\]]*(?=\s|$)")
+
+
+def _question_count(message: Message) -> int:
+    """Number of questions in the message, counted as sentence-closing ``?`` runs (see ``QUESTION_MARK``).
+
+    Punctuation only: a wh-word in a statement ("I know what you mean") is not a
+    question, one bubble holding two questions counts as two, and "??" or "?!"
+    counts once.
+    """
+    return len(QUESTION_MARK.findall(message.body))
+
+
+def _times(ratio: float) -> str:
+    """Round a >1 ratio to the everyday phrase used in a pattern ("twice", "three times", "5 times")."""
+    if ratio < 2.5:
+        return "twice"
+    if ratio < 3.5:
+        return "three times"
+    return f"{round(ratio)} times"
+
+
+def reciprocity_patterns(messages: Sequence[Message]) -> List[str]:
+    """Name it when the customer is clearly investing more than the match, as observations to reflect on.
+
+    Compares the customer's side of ``messages`` to the match's on three
+    signals: message count, total word count and who is carrying the
+    questions (``?``-terminated sentences, see ``_question_count``). Each
+    signal that shows a clear imbalance (a ratio of at least
+    ``RECIPROCITY_RATIO`` in the customer's direction, or every question
+    being the customer's) yields one short, descriptive sentence, e.g. "You sent about
+    twice as many messages as they did in this conversation." Nothing is said
+    about *why* the match engaged less and nothing is drafted; the caller
+    surfaces the list as ``Overall.patterns``. Returns an empty list when the
+    customer wrote fewer than ``MIN_SELF_FOR_RECIPROCITY`` messages or when the
+    exchange is roughly balanced (or tilted the other way), so a short or
+    even conversation stays silent rather than manufacturing a pattern.
+    """
+    own = [m for m in messages if m.sender == "self"]
+    theirs = [m for m in messages if m.sender == "match"]
+    if len(own) < MIN_SELF_FOR_RECIPROCITY:
+        return []
+
+    patterns: List[str] = []
+
+    if not theirs:
+        patterns.append(f"You sent {len(own)} messages in this conversation and none came back.")
+        return patterns
+
+    count_ratio = len(own) / len(theirs)
+    if count_ratio >= RECIPROCITY_RATIO:
+        patterns.append(
+            f"You sent about {_times(count_ratio)} as many messages as they did in this conversation "
+            f"({len(own)} to {len(theirs)})."
+        )
+
+    own_words = sum(_word_count(m) for m in own)
+    their_words = sum(_word_count(m) for m in theirs)
+    if their_words and own_words / their_words >= RECIPROCITY_RATIO:
+        patterns.append(f"You wrote about {_times(own_words / their_words)} as many words as they did across the conversation.")
+
+    own_questions = sum(_question_count(m) for m in own)
+    their_questions = sum(_question_count(m) for m in theirs)
+    if own_questions >= 2 and their_questions == 0:
+        patterns.append(
+            f"The questions in this conversation were all yours ({own_questions} of them); none came back from their side."
+        )
+
+    return patterns
+
+
+def reflection_questions(
+    reviews: Sequence[SelfMessageReview], patterns: Sequence[str], preferences: Optional[str]
+) -> List[str]:
+    """Open questions that turn the analysis inward: "did I like them?", not only "did they like me?".
+
+    Always leads with an enjoyment question when the customer wrote anything,
+    so every analysis prompts the customer to weigh their own experience of
+    the conversation, not just how it landed. Adds an effort/reciprocity
+    question when ``patterns`` (from ``reciprocity_patterns``) is non-empty
+    and a preferences question when the customer stated what they are
+    looking for. Every question is non-directive: it never tells the
+    customer what to do, drafts nothing and never speculates about the
+    match's reasons. Returns an empty list when ``reviews`` is empty, since
+    there is nothing of the customer's to reflect on.
+    """
+    if not reviews:
+        return []
+    questions = ["Setting how they responded aside for a moment: did you actually enjoy this conversation?"]
+    if patterns:
+        questions.append("Were you putting in more effort than they were, and did that feel okay to you?")
+    preference = preferences.strip() if preferences else ""
+    if preference:
+        questions.append(
+            f"You said you are looking for: {preference[:200]}. Did this conversation feel like it was heading there?"
+        )
+    return questions
+
+
 class HeuristicScorer(Scorer):
     version = "heuristic-v2"
 
