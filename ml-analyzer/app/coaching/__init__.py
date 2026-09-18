@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .agency import RULES, AgencyRule, enforce_agency
+from .agency import RULES, AgencyRule, enforce_agency, strip_citations
 from .brain import AGENCY, BRAIN_VERSION, FEEDBACK, PILLARS, SUPPORT, Pillar, render_pillars
 
 __all__ = [
@@ -16,4 +16,5 @@ __all__ = [
     "AgencyRule",
     "RULES",
     "enforce_agency",
+    "strip_citations",
 ]
