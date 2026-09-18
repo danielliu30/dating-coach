@@ -377,9 +377,12 @@ def test_enforce_agency_rejects_mind_reading_and_prescription_but_passes_reflect
         "The match doesn't really like you.",
         "This person only wants validation.",
         "She was never going to text back.",
+        "She\u2019s not into you.",
     ):
         with pytest.raises(ValueError, match="^llm mind-read the match"):
             enforce_agency([text])
+    with pytest.raises(ValueError, match="^llm mind-read the match"):
+        enforce_agency(["Sam is clearly not interested in you."], match_name="Sam")
 
     for text in (
         "Drop them.",
@@ -389,6 +392,10 @@ def test_enforce_agency_rejects_mind_reading_and_prescription_but_passes_reflect
         "Walk away, you deserve better.",
         "Stop chasing her and find someone else.",
         "This isn't going anywhere.",
+        "You shouldn't date him.",
+        "Don\u2019t text her again.",
+        "Just block him.",
+        "You should leave them.",
     ):
         with pytest.raises(ValueError, match="^llm prescribed the customer's dating life"):
             enforce_agency([text])
@@ -407,8 +414,11 @@ def test_enforce_agency_rejects_mind_reading_and_prescription_but_passes_reflect
         "It may not have given them much to engage with.",
         "Message 2 asked about her dog and drew an engaged reply.",
         "This stretch is worth a look at what made it hard to answer.",
+        "A one-line answer can leave them little to respond to.",
+        "A closed question can block him from elaborating.",
+        "Sam asked two questions and you answered one.",
     ]
-    enforce_agency(fine)
+    enforce_agency(fine, match_name="Sam")
 
     # The fallback scorer's own wording must never trip the gate it falls back for.
     messages = [
