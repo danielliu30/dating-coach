@@ -53,9 +53,15 @@ MIND_READING = re.compile(
 
 # Phrases that tell the customer what to do with the relationship or whom to date,
 # instead of handing them the pattern to decide on themselves.
+# ``leave`` and ``block`` also describe what a message does to the match ("leaves them little
+# to answer", "blocks him from elaborating"), so they only count with a directive in front.
+_DIRECTIVE = r"(?:just |should |need to |time to |better to |you can |you could |you'd better )"
 PRESCRIPTION = re.compile(
-    r"\b((?:just |should |need to |time to |better to |you can )?(?:drop|dump|ditch|block|unmatch|leave|ghost)"
-    rf" {_MATCH_OBJ}|"
+    rf"\b({_DIRECTIVE}?(?:drop|dump|ditch|unmatch|ghost) {_MATCH_OBJ}|"
+    rf"{_DIRECTIVE}(?:leave|block) {_MATCH_OBJ}|"
+    rf"(?:you )?(?:shouldn't|should not|don't|do not|mustn't|must not|can't|cannot) "
+    r"(?:date|see|pursue|keep seeing|keep talking to|go out with|be with|text|message|chase|trust|wait for) "
+    rf"{_MATCH_OBJ}|"
     r"move on\b(?! to\b)|walk away|cut (?:her|him|them|it|this) (?:off|loose)|cut your losses|"
     r"stop (?:texting|messaging|talking to|seeing|pursuing|chasing|wasting time on) (?:her|him|them|this)|"
     r"give up on (?:her|him|them|this)|let (?:her|him|them|this one) go|"
@@ -76,6 +82,17 @@ CLOSING_QUOTE = re.compile(r"[\"\u201d]")
 MIN_QUOTE_WORDS = 3
 
 
+_APOSTROPHES = str.maketrans({"\u2019": "'", "\u2018": "'"})
+
+
+def _normalise_subject(text: str, match_name: Optional[str]) -> str:
+    """Fold curly apostrophes to ``'`` and rewrite ``match_name`` (if any) as "the match" so the rules can see it."""
+    text = text.translate(_APOSTROPHES)
+    if match_name and match_name.strip():
+        text = re.sub(rf"\b{re.escape(match_name.strip())}\b", "the match", text, flags=re.IGNORECASE)
+    return text
+
+
 @dataclass(frozen=True)
 class AgencyRule:
     """One agency violation to reject: a short ``name``, the ``pattern`` that detects it and the ``error`` prefix raised."""
@@ -92,8 +109,12 @@ RULES: Tuple[AgencyRule, ...] = (
 )
 
 
-def enforce_agency(texts: Sequence[str], sources: Sequence[str] = ()) -> None:
+def enforce_agency(texts: Sequence[str], sources: Sequence[str] = (), match_name: Optional[str] = None) -> None:
     """Raise ``ValueError`` if any feedback text breaks an agency rule in ``RULES``.
+
+    Before scanning, typographic apostrophes are folded to ``'`` so contractions
+    match, and every occurrence of ``match_name`` (when given) is read as "the
+    match", so "Sam isn't into you" is caught the same as "she isn't into you".
 
     Feedback is required to name and quote the customer's own messages
     briefly, so a quoted span is blanked before scanning only when it is
@@ -133,7 +154,7 @@ def enforce_agency(texts: Sequence[str], sources: Sequence[str] = ()) -> None:
             scanned.append(text[cursor:start] + " ")
             cursor = end
         scanned.append(text[cursor:])
-        stripped = "".join(scanned)
+        stripped = _normalise_subject("".join(scanned), match_name)
         for rule in RULES:
             if rule.pattern.search(stripped):
                 raise ValueError(f"{rule.error}: {text[:80]!r}")
