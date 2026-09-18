@@ -615,6 +615,10 @@ def test_llm_parse_rejects_diagnosing_why_the_match_replied() -> None:
         "The pacing made them lose interest.",
         "They decided not to continue after the weekend.",
         "The thread stalled because of the topic change.",
+        "The match lost interest after Message 4.",
+        "Your match probably felt bored by the logistics.",
+        "They had decided not to continue.",
+        "They are losing interest as the thread goes on.",
     )
     for field in ("summary", "improvements", "reflection_questions", "patterns", "strengths"):
         for diagnosis in diagnoses:
