@@ -33,11 +33,13 @@ DRAFTING = re.compile(
 _MATCH = r"(she|he|they|this (person|match|guy|girl)|the match|your match)"
 _MATCH_OBJ = r"(her|him|them|this (person|match|guy|girl)|the match|your match)"
 _IS = r"(?:'s|'re| is| are| was| were| seems?| sounds?| looks?)"
+_ISNT = r"(?: isn't| aren't| wasn't| weren't| is not| are not| was not| were not)"
 
 # Phrases that assert the match's motives, intent, interest or feelings, which the
 # coach cannot know: only the customer's own behaviour and its visible outcome is fair game.
 MIND_READING = re.compile(
-    rf"\b({_MATCH}{_IS}(?: (?:just|clearly|obviously|probably|definitely|simply|only|not really))?"
+    rf"\b({_MATCH}{_ISNT}(?: (?:really|that|very|actually))? (?:into|interested|attracted|invested|serious|keen)|"
+    rf"{_MATCH}{_IS}(?: (?:just|clearly|obviously|probably|definitely|simply|only|not really))?"
     r" (?:not (?:that |really |very )?(?:into|interested|attracted|invested|serious|keen)|"
     r"into you|interested in you|using you|playing (?:you|games)|stringing you along|"
     r"leading you on|breadcrumbing|losing interest|bored(?: of| with)? you|ghosting you|"
@@ -47,7 +49,7 @@ MIND_READING = re.compile(
     rf"{_MATCH} (?:doesn't|don't|does not|do not|didn't|did not|never) (?:really |actually )?"
     r"(?:like|want|care about|respect|fancy|value) you|"
     rf"{_MATCH} (?:only|just) (?:wants?|wanted) (?:sex|attention|validation|a hookup|an ego boost)|"
-    rf"{_MATCH} (?:was|were|is|are) (?:never|not) (?:going to|gonna) (?:reply|answer|text back|commit))\b",
+    rf"{_MATCH}(?: (?:was|were|is|are) (?:never|not)|{_ISNT}) (?:going to|gonna) (?:reply|answer|text back|commit))\b",
     re.IGNORECASE,
 )
 
@@ -67,15 +69,16 @@ PRESCRIPTION = re.compile(
     rf"(?:you )?(?:shouldn't|should not|don't|do not|mustn't|must not|can't|cannot) "
     r"(?:date|see|pursue|keep seeing|keep talking to|go out with|be with|text|message|chase|trust|wait for|leave|block) "
     rf"{_MATCH_OBJ}|"
-    r"move on\b(?! to\b)|walk away|cut (?:her|him|them|it|this) (?:off|loose)|cut your losses|"
-    r"stop (?:texting|messaging|talking to|seeing|pursuing|chasing|wasting time on) (?:her|him|them|this)|"
-    r"give up on (?:her|him|them|this)|let (?:her|him|them|this one) go|"
+    rf"(?:{_DIRECTIVE}|you (?:should|need to|ought to|have to|must) |{_CLAUSE_START}{_POLITE})(?:move on|walk away)(?! to\b)|"
+    rf"cut (?:{_MATCH_OBJ}|it|this) (?:off|loose)|cut your losses|"
+    rf"stop (?:texting|messaging|talking to|seeing|pursuing|chasing|wasting time on) (?:{_MATCH_OBJ}|this)|"
+    rf"give up on (?:{_MATCH_OBJ}|this)|let (?:{_MATCH_OBJ}|this one) go|"
     r"(?:you're|you are|you'd be) better off (?:without|alone|elsewhere)|"
-    r"you deserve (?:better|someone|more)|(?:she|he|they)(?:'s|'re| is| are) not (?:worth|right for you|the one|good enough|your type)|"
-    r"you (?:should|need to|ought to|have to|must) (?:date|see|pursue|find|look for|go for|pick|choose|be with|end|break|ask (?:her|him|them) out)"
+    rf"you deserve (?:better|someone|more)|{_MATCH}(?:{_IS} not|{_ISNT}) (?:worth|right for you|the one|good enough|your type)|"
+    rf"you (?:should|need to|ought to|have to|must) (?:date|see|pursue|find|look for|go for|pick|choose|be with|end|break|ask {_MATCH_OBJ} out)"
     r"(?: (?:someone|somebody|people|a (?:man|woman|guy|girl|partner)|(?:it|this|things) off|up|it|this|things))?|"
     r"find someone (?:who|else|better|new)|not (?:the|a) (?:right|good) (?:match|fit) for you|"
-    r"(?:this|it|she|he|they) (?:is|isn't|is not|are|aren't|are not) (?:going anywhere|worth (?:it|your time|pursuing)))\b",
+    rf"(?:this|it|{_MATCH}) (?:is|isn't|is not|are|aren't|are not) (?:going anywhere|worth (?:it|your time|pursuing)))\b",
     re.IGNORECASE,
 )
 

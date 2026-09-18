@@ -556,11 +556,15 @@ def test_enforce_agency_rejects_mind_reading_and_prescription_but_passes_reflect
         "This person only wants validation.",
         "She was never going to text back.",
         "She\u2019s not into you.",
+        "She isn't interested in you.",
+        "They aren't really into you.",
+        "He wasn't going to reply anyway.",
     ):
         with pytest.raises(ValueError, match="^llm mind-read the match"):
             enforce_agency([text])
-    with pytest.raises(ValueError, match="^llm mind-read the match"):
-        enforce_agency(["Sam is clearly not interested in you."], match_name="Sam")
+    for text in ("Sam is clearly not interested in you.", "Sam isn't interested in you."):
+        with pytest.raises(ValueError, match="^llm mind-read the match"):
+            enforce_agency([text], match_name="Sam")
     with pytest.raises(ValueError, match="^llm mind-read the match"):
         enforce_agency(["J.J. is clearly not interested in you."], match_name="J.J.")
     # A curly-quoted citation of a straight-quoted customer message is still exempt.
@@ -584,9 +588,19 @@ def test_enforce_agency_rejects_mind_reading_and_prescription_but_passes_reflect
         "You should honestly block him.",
         "Just please leave them.",
         "Don't block her, but leave him and move on.",
+        "Move on.",
+        "You need to walk away.",
     ):
         with pytest.raises(ValueError, match="^llm prescribed the customer's dating life"):
             enforce_agency([text])
+    for text in (
+        "Stop seeing Sam.",
+        "Give up on Sam and let Sam go.",
+        "Sam isn't worth your time.",
+        "You should ask Sam out.",
+    ):
+        with pytest.raises(ValueError, match="^llm prescribed the customer's dating life"):
+            enforce_agency([text], match_name="Sam")
 
     with pytest.raises(ValueError, match="^llm drafted a reply"):
         enforce_agency(["Try asking about her weekend."])
@@ -609,6 +623,8 @@ def test_enforce_agency_rejects_mind_reading_and_prescription_but_passes_reflect
         "Your follow-up questions now block her from elaborating.",
         "Those one-liners honestly leave them, and you, with nothing to build on.",
         "Sam asked two questions and you answered one.",
+        "Your messages move on quickly before the match has finished a thought.",
+        "Message 4 moves on straight to a new topic; the match had walked away from the previous one.",
     ]
     enforce_agency(fine, match_name="Sam")
 
