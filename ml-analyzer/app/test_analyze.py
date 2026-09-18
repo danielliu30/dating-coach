@@ -563,6 +563,9 @@ def test_enforce_agency_rejects_mind_reading_and_prescription_but_passes_reflect
         "He wants a relationship.",
         "They feel uncomfortable.",
         "She's probably nervous.",
+        "I know she likes you.",
+        "I assume they feel uncomfortable.",
+        "You can tell he wants a relationship.",
     ):
         with pytest.raises(ValueError, match="^llm mind-read the match"):
             enforce_agency([text])
@@ -640,6 +643,7 @@ def test_enforce_agency_rejects_mind_reading_and_prescription_but_passes_reflect
         "You cannot know whether she likes you from this exchange.",
         "Nothing here can tell you if he wants a relationship.",
         "A slow reply does not prove they feel uncomfortable.",
+        "Don't assume she's nervous; look at what your own messages did.",
     ]
     enforce_agency(fine, match_name="Sam")
 

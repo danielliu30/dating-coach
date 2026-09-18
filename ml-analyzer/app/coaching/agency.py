@@ -36,7 +36,15 @@ _IS = r"(?:'s|'re| is| are| was| were| seems?| sounds?| looks?)"
 _ISNT = r"(?: isn't| aren't| wasn't| weren't| is not| are not| was not| were not)"
 # Positive claims ("she likes you") are only assertions when not framed as unknowable:
 # "you cannot know whether she likes you" refuses the inference rather than making it.
-_HEDGED = r"(?<!\bwhether )(?<!\bif )(?<!\bknow )(?<!\btell )(?<!\bprove )(?<!\bassume )(?<!\bassuming )(?<!\bguess )"
+# Only "whether"/"if" and explicitly negated knowledge verbs count; "I know she likes you"
+# and "I assume they feel uncomfortable" are still assertions.
+_HEDGED = (
+    r"(?<!\bwhether )(?<!\bif )"
+    r"(?<!\bcannot know )(?<!\bcan't know )(?<!\bnot know )(?<!\bnever know )"
+    r"(?<!\bcannot tell )(?<!\bcan't tell )(?<!\bnot tell )"
+    r"(?<!\bnot prove )(?<!\bdoesn't prove )(?<!\bcannot prove )(?<!\bcan't prove )"
+    r"(?<!\bnot assume )(?<!\bdon't assume )(?<!\bnot guess )(?<!\bdon't guess )"
+)
 
 # Phrases that assert the match's motives, intent, interest or feelings, which the
 # coach cannot know: only the customer's own behaviour and its visible outcome is fair game.
