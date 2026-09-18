@@ -38,14 +38,22 @@ _ISNT = r"(?: isn't| aren't| wasn't| weren't| is not| are not| was not| were not
 # "you cannot know whether she likes you" refuses the inference rather than making it.
 # Only "whether"/"if" and explicitly negated knowledge verbs count; "I know she likes you"
 # and "I assume they feel uncomfortable" are still assertions.
-_NEGATORS = (
-    "not", "never", "cannot", "can't", "don't", "doesn't", "didn't", "won't",
-    "shouldn't", "mustn't", "couldn't", "wouldn't", "shouldn't ever", "can't really",
+# Factive past/present forms ("didn't know she likes you") still present the claim as true,
+# so only modal/imperative negation hedges knowledge verbs; entailment verbs take any negation.
+_HEDGES = tuple(
+    f"{neg} {verb}"
+    for neg, verb in [
+        (n, v)
+        for n in ("cannot", "can't", "couldn't", "never", "shouldn't", "mustn't", "wouldn't", "don't")
+        for v in ("know", "tell", "assume", "guess", "conclude", "infer", "say")
+    ]
+    + [
+        (n, v)
+        for n in ("not", "doesn't", "didn't", "cannot", "can't", "couldn't", "won't", "wouldn't")
+        for v in ("prove", "mean")
+    ]
 )
-_KNOWLEDGE_VERBS = ("know", "tell", "prove", "assume", "guess", "mean", "conclude", "infer", "say")
-_HEDGED = r"(?<!\bwhether )(?<!\bif )" + "".join(
-    rf"(?<!\b{neg} {verb} )" for neg in _NEGATORS for verb in _KNOWLEDGE_VERBS
-)
+_HEDGED = r"(?<!\bwhether )(?<!\bif )" + "".join(rf"(?<!\b{h} )" for h in _HEDGES)
 
 # Phrases that assert the match's motives, intent, interest or feelings, which the
 # coach cannot know: only the customer's own behaviour and its visible outcome is fair game.

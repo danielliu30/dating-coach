@@ -566,6 +566,8 @@ def test_enforce_agency_rejects_mind_reading_and_prescription_but_passes_reflect
         "I know she likes you.",
         "I assume they feel uncomfortable.",
         "You can tell he wants a relationship.",
+        "You didn't know she likes you until today.",
+        "You don't realise they feel uncomfortable.",
     ):
         with pytest.raises(ValueError, match="^llm mind-read the match"):
             enforce_agency([text])
