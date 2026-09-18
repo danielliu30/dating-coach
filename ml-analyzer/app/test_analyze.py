@@ -326,6 +326,23 @@ def test_llm_prompt_is_composed_from_the_brain() -> None:
     assert scorer._parse(json.dumps(good), [(0, 1)]).model_version.endswith(BRAIN_VERSION)
 
 
+def test_enforce_agency_is_the_shared_drafting_gate() -> None:
+    """``enforce_agency`` rejects drafting, exempts provable citations, and is the check ``LLMScorer`` uses."""
+    from app.coaching import RULES, enforce_agency
+    from app.scoring import llm
+
+    assert [rule.name for rule in RULES] == ["drafting"]
+    assert llm.enforce_agency is enforce_agency
+
+    sources = ["You could say I'm obsessed with climbing, but lately I mostly stay home"]
+    enforce_agency(['Message 3 ("You could say I\'m obsessed with climbing") got no reply.'], sources)
+    enforce_agency(["Message 3 did not invite the match to respond with much detail."])
+    with pytest.raises(ValueError, match="^llm drafted a reply for the customer"):
+        enforce_agency(["Fine so far.", "Try asking: What are you passionate about?"])
+    with pytest.raises(ValueError, match="drafted a reply"):
+        enforce_agency(['"You could say I\'m obsessed with climbing" would land better.'], sources)
+
+
 def test_llm_parse_rejects_drafted_replies() -> None:
     """A completion that drafts what the customer should say is a failed completion (triggers the fallback)."""
     from app.config import Settings
