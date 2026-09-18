@@ -41,8 +41,8 @@ _ISNT = r"(?: isn't| aren't| wasn't| weren't| is not| are not| was not| were not
 # Factive past/present forms ("didn't know she likes you") still present the claim as true,
 # so only modal/imperative negation hedges factive verbs; non-factive inference/reporting and
 # entailment verbs ("didn't assume", "doesn't prove") deny the claim under any negation.
-_MODAL_NEG = ("cannot", "can't", "couldn't", "never", "shouldn't", "mustn't", "wouldn't", "don't")
-_ANY_NEG = _MODAL_NEG + ("not", "doesn't", "didn't", "won't", "haven't", "hasn't")
+_MODAL_NEG = ("cannot", "can't", "couldn't", "never", "shouldn't", "mustn't", "wouldn't")
+_ANY_NEG = _MODAL_NEG + ("don't", "not", "doesn't", "didn't", "won't", "haven't", "hasn't")
 _FACTIVE = ("know", "tell", "realise", "realize")
 _NON_FACTIVE = ("assume", "guess", "conclude", "infer", "say", "claim", "suggest", "prove", "mean", "imply")
 _HEDGES = tuple(
