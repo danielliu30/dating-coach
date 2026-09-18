@@ -610,6 +610,11 @@ def test_llm_parse_rejects_diagnosing_why_the_match_replied() -> None:
         "It's unclear why they dropped off, but the tone shifted.",
         "The silence was due to the topic change.",
         "It reads like they weren\u2019t interested after Message 2.",
+        "They felt bored, so they stopped replying.",
+        "She seemed overwhelmed by the three questions.",
+        "The pacing made them lose interest.",
+        "They decided not to continue after the weekend.",
+        "The thread stalled because of the topic change.",
     )
     for field in ("summary", "improvements", "reflection_questions", "patterns", "strengths"):
         for diagnosis in diagnoses:
@@ -621,11 +626,11 @@ def test_llm_parse_rejects_diagnosing_why_the_match_replied() -> None:
     with pytest.raises(ValueError, match="diagnosed why the match replied"):
         scorer._parse(json.dumps(bad_comment), boundaries)
 
-    sources = ["I only ask because I'm curious what you do all day"]
-    cited = 'Message 2 ("I only ask because I\'m curious") drew a one-word reply.'
+    sources = ["I only ask because you seem busy every weekend"]
+    cited = 'Message 2 ("I only ask because you seem busy") drew a one-word reply.'
     fine = dict(good, overall=dict(good["overall"], improvements=[cited]))
     assert scorer._parse(json.dumps(fine), boundaries, sources).overall.improvements == [cited]
-    uncited = dict(good, overall=dict(good["overall"], improvements=["I only ask because I'm curious drew nothing."]))
+    uncited = dict(good, overall=dict(good["overall"], improvements=["I only ask because you seem busy drew nothing."]))
     with pytest.raises(ValueError, match="diagnosed why the match replied"):
         scorer._parse(json.dumps(uncited), boundaries, sources)
 
@@ -634,6 +639,8 @@ def test_llm_parse_rejects_diagnosing_why_the_match_replied() -> None:
         "Their replies got shorter after Message 4.",
         "Most of the questions in this stretch were yours.",
         "Did you enjoy this conversation, setting their replies aside?",
+        "Do you ask questions because the silence feels uncomfortable?",
+        "Message 5 was the longest, and it got the shortest reply.",
     ):
         ok = dict(good, overall=dict(good["overall"], patterns=[outcome_only]))
         assert scorer._parse(json.dumps(ok), boundaries).overall.patterns == [outcome_only]

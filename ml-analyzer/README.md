@@ -45,7 +45,7 @@ concrete. It is built around agency:
   short reply, an engaged reply) and does not claim to know *why* the match
   pulled back. We can't know that. The heuristic scorer's wording is fixed and
   tested for this; the LLM parser rejects any completion whose feedback
-  contains diagnosis language ("because", "lost interest", "turned them off",
+  contains diagnosis language ("because they", "lost interest", "felt bored", "turned them off",
   "rejected", ...) and falls back to the heuristic scorer, just as it does for
   drafted replies.
 
