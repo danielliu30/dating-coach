@@ -95,11 +95,14 @@ export default function ChatScreen({
           };
           setMessages((current) => {
             if (current.some((m) => m._id === persisted._id)) return current;
-            // Our own echo settles the oldest pending bubble with the same text.
-            const pendingIndex =
-              event.sender_id === user?.id
-                ? current.findLastIndex((m) => m.pending && m.text === persisted.text)
-                : -1;
+            // Our own echo names the bubble it settles; an echo from a server
+            // that does not settles the oldest pending bubble with the same text.
+            let pendingIndex = -1;
+            if (event.client_id) {
+              pendingIndex = current.findIndex((m) => m.pending && String(m._id) === event.client_id);
+            } else if (event.sender_id === user?.id) {
+              pendingIndex = current.findLastIndex((m) => m.pending && m.text === persisted.text);
+            }
             if (pendingIndex === -1) return GiftedChat.append(current, [persisted]);
             queuedRef.current.delete(current[pendingIndex]._id);
             return current.map((m, i) => (i === pendingIndex ? persisted : m));
@@ -110,10 +113,12 @@ export default function ChatScreen({
           if (event.sender_id && event.sender_id !== user?.id) setPeerTyping(Boolean(event.typing));
           break;
         case 'error': {
-          // The server only reports errors for rejected sends, and answers them
-          // in order, so the oldest pending bubble is the one it refused.
+          // The server only reports errors for rejected sends and names the
+          // send it refused; without a name, the oldest pending bubble is taken.
           setMessages((current) => {
-            const rejected = current.findLastIndex((m) => m.pending);
+            const rejected = event.client_id
+              ? current.findIndex((m) => m.pending && String(m._id) === event.client_id)
+              : current.findLastIndex((m) => m.pending);
             if (rejected === -1) return current;
             queuedRef.current.delete(current[rejected]._id);
             const notice: IMessage = {
@@ -162,7 +167,7 @@ export default function ChatScreen({
         outgoing.map((message) => ({ ...message, text: message.text.trim(), pending: true, sent: false })),
       ),
     );
-    outgoing.forEach((message) => socketRef.current?.send(message.text));
+    outgoing.forEach((message) => socketRef.current?.send(message.text, String(message._id)));
     socketRef.current?.typing(false);
   }, []);
 

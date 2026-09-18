@@ -11,7 +11,7 @@ from app.config import Settings
 from app.main import app
 from app.schemas import AnalyzeRequest, ImageAnalyzeRequest, ImageRef, Message, Overall, ReviewComment, ReviewSummaryRequest, Segment
 from app.scoring.base import message_range
-from app.scoring.heuristic import HeuristicScorer, review_self_messages
+from app.scoring.heuristic import HeuristicScorer, reciprocity_patterns, reflection_questions, review_self_messages
 from app.scoring.image import HeuristicImageScorer, build_image_scorer, image_dimensions
 
 client = TestClient(app)
@@ -43,7 +43,7 @@ def test_analyze_heuristic() -> None:
 
 
 def test_overall_patterns_default_empty() -> None:
-    """Overall pattern fields default to empty and remain empty for a basic analysis."""
+    """Overall pattern fields default to empty; a basic analysis has no patterns but always one inward reflection question."""
     assert Overall(engagement_score=0.5).patterns == []
     assert Overall(engagement_score=0.5).reflection_questions == []
 
@@ -61,7 +61,9 @@ def test_overall_patterns_default_empty() -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["overall"]["patterns"] == []
-    assert body["overall"]["reflection_questions"] == []
+    assert body["overall"]["reflection_questions"] == [
+        "Setting how they responded aside for a moment: did you actually enjoy this conversation?"
+    ]
 
 
 def test_analyze_images_endpoint_fallback() -> None:
@@ -150,12 +152,80 @@ def test_heuristic_feedback_hints_without_drafting_replies() -> None:
 
     assert response.overall.strengths == ["Message 1 landed: it drew a detailed reply ('My sister said the ridge views are wort…')."]
     assert response.overall.improvements == [
-        "Message 3 ('Nice') only drew a short reply ('ok') — it may not have given them much to engage with.",
-        "Message 5 ('So what are you up to this weekend?') got no reply — worth a look at what made it hard to answer.",
+        "Message 3 ('Nice') only drew a short reply ('ok'). That's the pattern, not the reason — is it worth thinking about?",
+        "Message 5 ('So what are you up to this weekend?') got no reply. That's the pattern, not the reason — is it worth thinking about?",
     ]
     for hint in response.overall.improvements:
         assert "ask" not in hint.lower() and "say" not in hint.lower()
     assert "fellow climber" in response.overall.summary
+
+
+REJECTION_DIAGNOSIS = ("because", "reject", "lost interest", "turned them off", "put them off", "made it hard", "the reason they", "why they")
+
+
+def test_heuristic_never_diagnoses_why_the_match_pulled_back() -> None:
+    """Improvements and the summary describe outcomes and hand them back as questions; they never claim to know the match's reasons."""
+    request = AnalyzeRequest(
+        conversation_id="conv-8",
+        preferences="someone who plans real dates",
+        messages=[
+            Message(position=0, sender="self", body="Hey, how was your weekend? Did you get out at all?"),
+            Message(position=1, sender="match", body="ok"),
+            Message(position=2, sender="self", body="What did you end up doing?"),
+            Message(position=3, sender="self", body="Still up for that coffee?"),
+        ],
+    )
+    response = asyncio.run(HeuristicScorer(segment_size=2).analyze(request))
+
+    assert response.overall.summary.startswith("Your messages are not getting traction")
+    assert len(response.overall.improvements) == 3
+    for text in [response.overall.summary, *response.overall.improvements, *(s.comment for s in response.segments)]:
+        lowered = text.lower()
+        assert not any(phrase in lowered for phrase in REJECTION_DIAGNOSIS), text
+    for hint in response.overall.improvements:
+        assert hint.endswith("is it worth thinking about?")
+
+
+def test_heuristic_populates_reflection_questions_and_patterns() -> None:
+    """analyze() fills ``overall.reflection_questions`` for any self messages and ``overall.patterns`` when the customer over-invests; neither drafts or directs."""
+    over_investing = AnalyzeRequest(
+        conversation_id="conv-9",
+        preferences="someone who plans real dates",
+        messages=[
+            Message(position=0, sender="self", body="How was your weekend? Did you get out at all?"),
+            Message(position=1, sender="match", body="ok"),
+            Message(position=2, sender="self", body="What did you end up doing? I went to that new climbing gym by the river."),
+            Message(position=3, sender="self", body="Still up for that coffee sometime this week?"),
+            Message(position=4, sender="self", body="No worries if you're busy, just let me know."),
+        ],
+    )
+    response = asyncio.run(HeuristicScorer(segment_size=2).analyze(over_investing))
+
+    assert response.overall.patterns == reciprocity_patterns(over_investing.messages)
+    assert len(response.overall.patterns) == 3
+    assert response.overall.reflection_questions == [
+        "Setting how they responded aside for a moment: did you actually enjoy this conversation?",
+        "Were you putting in more effort than they were, and did that feel okay to you?",
+        "You said you are looking for: someone who plans real dates. Did this conversation feel like it was heading there?",
+    ]
+    for text in [*response.overall.patterns, *response.overall.reflection_questions]:
+        lowered = text.lower()
+        assert "ask" not in lowered and "say" not in lowered and "you should" not in lowered, text
+        assert not any(phrase in lowered for phrase in REJECTION_DIAGNOSIS), text
+
+    balanced = AnalyzeRequest(
+        conversation_id="conv-10",
+        messages=[
+            Message(position=0, sender="self", body="How was the hike?"),
+            Message(position=1, sender="match", body="Great, the ridge was clear all the way. Have you done it?"),
+        ],
+    )
+    balanced_response = asyncio.run(HeuristicScorer(segment_size=2).analyze(balanced))
+    assert balanced_response.overall.patterns == []
+    assert balanced_response.overall.reflection_questions == [
+        "Setting how they responded aside for a moment: did you actually enjoy this conversation?"
+    ]
+    assert balanced_response.model_dump()["overall"]["patterns"] == []
 
 
 def test_heuristic_match_only_stretch_is_neutral() -> None:
@@ -172,6 +242,111 @@ def test_heuristic_match_only_stretch_is_neutral() -> None:
     assert response.segments[0].engagement_score == 0.5
     assert response.segments[0].comment == "No messages from you in this stretch; the match was carrying it."
     assert response.overall.strengths == [] and response.overall.improvements == []
+
+
+def test_reciprocity_patterns_name_over_investment_descriptively() -> None:
+    """When the customer sends far more, writes far more and carries every question, each imbalance is one plain observation."""
+    messages = [
+        Message(position=0, sender="self", body="Hey! How was your weekend, did you make it to that concert in the end?"),
+        Message(position=1, sender="match", body="yeah it was fun"),
+        Message(position=2, sender="self", body="What did they open with? I heard the set list changed halfway through the tour."),
+        Message(position=3, sender="self", body="Also, are you still up for coffee this week? I know a place near the park."),
+        Message(position=4, sender="match", body="maybe"),
+        Message(position=5, sender="self", body="Which day works best for you?"),
+        Message(position=6, sender="self", body="No worries if not."),
+    ]
+    patterns = reciprocity_patterns(messages)
+
+    assert patterns == [
+        "You sent about three times as many messages as they did in this conversation (5 to 2).",
+        "You wrote about 11 times as many words as they did across the conversation.",
+        "The questions in this conversation were all yours (4 of them); none came back from their side.",
+    ]
+    for pattern in patterns:
+        lowered = pattern.lower()
+        assert "ask" not in lowered and "say" not in lowered and "reject" not in lowered and "because" not in lowered
+
+
+def test_reciprocity_patterns_stay_silent_when_balanced_or_too_short() -> None:
+    """A balanced exchange, a short one, or one the match carries produces no pattern."""
+    balanced = [
+        Message(position=0, sender="self", body="How was the hike? Did the ridge live up to it?"),
+        Message(position=1, sender="match", body="It was gorgeous, what about your weekend?"),
+        Message(position=2, sender="self", body="Quiet, mostly cooking."),
+        Message(position=3, sender="match", body="What did you make? I am hopeless in the kitchen."),
+        Message(position=4, sender="self", body="A very ambitious lasagna."),
+        Message(position=5, sender="match", body="Now I want lasagna."),
+    ]
+    assert reciprocity_patterns(balanced) == []
+
+    short = [
+        Message(position=0, sender="self", body="Hey, how was your weekend? Did you get out at all?"),
+        Message(position=1, sender="match", body="ok"),
+        Message(position=2, sender="self", body="What did you end up doing?"),
+    ]
+    assert reciprocity_patterns(short) == []
+
+    they_carry = [Message(position=i, sender="self", body="Nice") for i in range(3)] + [
+        Message(position=3 + i, sender="match", body="I spent the whole day out on the water, what about you?") for i in range(4)
+    ]
+    assert reciprocity_patterns(they_carry) == []
+
+    statements = [
+        Message(position=0, sender="self", body="I know what you mean about the commute."),
+        Message(position=1, sender="match", body="Right, it is the worst part of my day honestly."),
+        Message(position=2, sender="self", body="That is how I felt when I lived downtown too."),
+        Message(position=3, sender="match", body="Downtown was fun for a while, then it got old."),
+        Message(position=4, sender="self", body="Same, the noise wore me down eventually."),
+    ]
+    assert reciprocity_patterns(statements) == []
+
+    two_in_one_bubble = [
+        Message(position=0, sender="self", body="How was work? Did you eat?"),
+        Message(position=1, sender="match", body="Long day, grabbed noodles on the way home."),
+        Message(position=2, sender="self", body="Sounds good."),
+        Message(position=3, sender="match", body="It hit the spot."),
+        Message(position=4, sender="self", body="See you later."),
+    ]
+    assert reciprocity_patterns(two_in_one_bubble) == [
+        "The questions in this conversation were all yours (2 of them); none came back from their side."
+    ]
+
+    emphatic_reply = [
+        Message(position=0, sender="self", body="How was work??"),
+        Message(position=1, sender="match", body='Fine, and you?! I liked your "long day" comment.'),
+        Message(position=2, sender="self", body="Did you eat?"),
+        Message(position=3, sender="match", body="(Did you?)"),
+        Message(position=4, sender="self", body="See you later."),
+    ]
+    assert reciprocity_patterns(emphatic_reply) == []
+
+    unanswered = [Message(position=i, sender="self", body="Hey, are you around this week?") for i in range(3)]
+    assert reciprocity_patterns(unanswered) == ["You sent 3 messages in this conversation and none came back."]
+
+
+def test_reflection_questions_turn_inward_without_directing() -> None:
+    """Every review set gets an enjoyment question; reciprocity and preferences each add one; none tell the customer what to do."""
+    reviews = review_self_messages(
+        [
+            Message(position=0, sender="self", body="How was the hike?"),
+            Message(position=1, sender="match", body="fine"),
+        ]
+    )
+    assert reflection_questions(reviews, [], None) == [
+        "Setting how they responded aside for a moment: did you actually enjoy this conversation?"
+    ]
+    assert reflection_questions(reviews, [], "   \n") == reflection_questions(reviews, [], None)
+
+    full = reflection_questions(reviews, ["You sent 3 messages in this conversation and none came back."], "a fellow climber")
+    assert len(full) == 3
+    assert full[1] == "Were you putting in more effort than they were, and did that feel okay to you?"
+    assert full[2].startswith("You said you are looking for: a fellow climber.")
+    for question in full:
+        lowered = question.lower()
+        assert question.endswith("?")
+        assert "ask" not in lowered and "say" not in lowered and "you should" not in lowered and "reject" not in lowered
+
+    assert reflection_questions([], ["a pattern"], "prefs") == []
 
 
 def test_overall_reflection_fields_default_empty() -> None:
@@ -298,6 +473,9 @@ def test_llm_prompt_reviews_only_self_messages_and_never_drafts() -> None:
 
     assert 'Evaluate ONLY messages from "self"' in SYSTEM_PROMPT
     assert "NEVER suggest, draft or rewrite what the customer should say" in SYSTEM_PROMPT
+    assert '"reflection_questions": ["..."], "patterns": ["..."]' in SYSTEM_PROMPT
+    assert "NEVER infer or state WHY the match" in SYSTEM_PROMPT and "You cannot know that." in SYSTEM_PROMPT
+    assert 'This applies to "reflection_questions" and "patterns"' in SYSTEM_PROMPT
 
 
 def test_llm_prompt_is_composed_from_the_brain() -> None:
@@ -400,6 +578,42 @@ def test_llm_parse_rejects_drafted_replies() -> None:
         bad = dict(good, overall=dict(good["overall"], improvements=[disguised]))
         with pytest.raises(ValueError, match="drafted a reply"):
             scorer._parse(json.dumps(bad), boundaries, sources)
+
+
+def test_llm_parse_reads_and_guards_reflection_fields() -> None:
+    """``reflection_questions``/``patterns`` are parsed and capped like strengths, default to empty, and are covered by the drafting scan."""
+    from app.config import Settings
+    from app.scoring.llm import LLMScorer
+
+    settings = Settings(
+        backend="llm", llm_provider="openai", llm_api_key="k", llm_model="m", llm_base_url="http://x",
+        llm_timeout=1.0, model_dir="", segment_size=2,
+    )
+    scorer = LLMScorer(settings)
+    boundaries = [(0, 1)]
+    base = {
+        "segments": [{"start_position": 0, "end_position": 1, "engagement_score": 0.7, "comment": "Message 1 drew a detailed reply."}],
+        "overall": {"engagement_score": 0.7, "summary": "Landing well.", "strengths": [], "improvements": []},
+    }
+    legacy = scorer._parse(json.dumps(base), boundaries).overall
+    assert legacy.reflection_questions == [] and legacy.patterns == []
+
+    filled = dict(base, overall=dict(
+        base["overall"],
+        reflection_questions=[f"Did you enjoy round {i}?" for i in range(7)],
+        patterns=["x" * 400],
+    ))
+    parsed = scorer._parse(json.dumps(filled), boundaries).overall
+    assert parsed.reflection_questions == [f"Did you enjoy round {i}?" for i in range(5)]
+    assert parsed.patterns == ["x" * 300]
+
+    for field, draft in (
+        ("reflection_questions", "Could you try asking about her weekend next time?"),
+        ("patterns", "Most of your openers stalled; you could say something about her photos instead."),
+    ):
+        bad = dict(base, overall=dict(base["overall"], **{field: [draft]}))
+        with pytest.raises(ValueError, match="drafted a reply"):
+            scorer._parse(json.dumps(bad), boundaries)
 
 
 def _png_base64(width: int, height: int) -> str:
