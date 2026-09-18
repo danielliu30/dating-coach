@@ -43,7 +43,7 @@ def test_analyze_heuristic() -> None:
 
 
 def test_overall_patterns_default_empty() -> None:
-    """Overall pattern fields default to empty and remain empty for a basic analysis."""
+    """Overall pattern fields default to empty; a basic analysis has no patterns but always one inward reflection question."""
     assert Overall(engagement_score=0.5).patterns == []
     assert Overall(engagement_score=0.5).reflection_questions == []
 
@@ -61,7 +61,9 @@ def test_overall_patterns_default_empty() -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["overall"]["patterns"] == []
-    assert body["overall"]["reflection_questions"] == []
+    assert body["overall"]["reflection_questions"] == [
+        "Setting how they responded aside for a moment: did you actually enjoy this conversation?"
+    ]
 
 
 def test_analyze_images_endpoint_fallback() -> None:
@@ -150,12 +152,80 @@ def test_heuristic_feedback_hints_without_drafting_replies() -> None:
 
     assert response.overall.strengths == ["Message 1 landed: it drew a detailed reply ('My sister said the ridge views are wort…')."]
     assert response.overall.improvements == [
-        "Message 3 ('Nice') only drew a short reply ('ok') — it may not have given them much to engage with.",
-        "Message 5 ('So what are you up to this weekend?') got no reply — worth a look at what made it hard to answer.",
+        "Message 3 ('Nice') only drew a short reply ('ok'). That's the pattern, not the reason — is it worth thinking about?",
+        "Message 5 ('So what are you up to this weekend?') got no reply. That's the pattern, not the reason — is it worth thinking about?",
     ]
     for hint in response.overall.improvements:
         assert "ask" not in hint.lower() and "say" not in hint.lower()
     assert "fellow climber" in response.overall.summary
+
+
+REJECTION_DIAGNOSIS = ("because", "reject", "lost interest", "turned them off", "put them off", "made it hard", "the reason they", "why they")
+
+
+def test_heuristic_never_diagnoses_why_the_match_pulled_back() -> None:
+    """Improvements and the summary describe outcomes and hand them back as questions; they never claim to know the match's reasons."""
+    request = AnalyzeRequest(
+        conversation_id="conv-8",
+        preferences="someone who plans real dates",
+        messages=[
+            Message(position=0, sender="self", body="Hey, how was your weekend? Did you get out at all?"),
+            Message(position=1, sender="match", body="ok"),
+            Message(position=2, sender="self", body="What did you end up doing?"),
+            Message(position=3, sender="self", body="Still up for that coffee?"),
+        ],
+    )
+    response = asyncio.run(HeuristicScorer(segment_size=2).analyze(request))
+
+    assert response.overall.summary.startswith("Your messages are not getting traction")
+    assert len(response.overall.improvements) == 3
+    for text in [response.overall.summary, *response.overall.improvements, *(s.comment for s in response.segments)]:
+        lowered = text.lower()
+        assert not any(phrase in lowered for phrase in REJECTION_DIAGNOSIS), text
+    for hint in response.overall.improvements:
+        assert hint.endswith("is it worth thinking about?")
+
+
+def test_heuristic_populates_reflection_questions_and_patterns() -> None:
+    """analyze() fills ``overall.reflection_questions`` for any self messages and ``overall.patterns`` when the customer over-invests; neither drafts or directs."""
+    over_investing = AnalyzeRequest(
+        conversation_id="conv-9",
+        preferences="someone who plans real dates",
+        messages=[
+            Message(position=0, sender="self", body="How was your weekend? Did you get out at all?"),
+            Message(position=1, sender="match", body="ok"),
+            Message(position=2, sender="self", body="What did you end up doing? I went to that new climbing gym by the river."),
+            Message(position=3, sender="self", body="Still up for that coffee sometime this week?"),
+            Message(position=4, sender="self", body="No worries if you're busy, just let me know."),
+        ],
+    )
+    response = asyncio.run(HeuristicScorer(segment_size=2).analyze(over_investing))
+
+    assert response.overall.patterns == reciprocity_patterns(over_investing.messages)
+    assert len(response.overall.patterns) == 3
+    assert response.overall.reflection_questions == [
+        "Setting how they responded aside for a moment: did you actually enjoy this conversation?",
+        "Were you putting in more effort than they were, and did that feel okay to you?",
+        "You said you are looking for: someone who plans real dates. Did this conversation feel like it was heading there?",
+    ]
+    for text in [*response.overall.patterns, *response.overall.reflection_questions]:
+        lowered = text.lower()
+        assert "ask" not in lowered and "say" not in lowered and "you should" not in lowered, text
+        assert not any(phrase in lowered for phrase in REJECTION_DIAGNOSIS), text
+
+    balanced = AnalyzeRequest(
+        conversation_id="conv-10",
+        messages=[
+            Message(position=0, sender="self", body="How was the hike?"),
+            Message(position=1, sender="match", body="Great, the ridge was clear all the way. Have you done it?"),
+        ],
+    )
+    balanced_response = asyncio.run(HeuristicScorer(segment_size=2).analyze(balanced))
+    assert balanced_response.overall.patterns == []
+    assert balanced_response.overall.reflection_questions == [
+        "Setting how they responded aside for a moment: did you actually enjoy this conversation?"
+    ]
+    assert balanced_response.model_dump()["overall"]["patterns"] == []
 
 
 def test_heuristic_match_only_stretch_is_neutral() -> None:
@@ -403,6 +473,9 @@ def test_llm_prompt_reviews_only_self_messages_and_never_drafts() -> None:
 
     assert 'Evaluate ONLY messages from "self"' in SYSTEM_PROMPT
     assert "NEVER suggest, draft or rewrite what the customer should say" in SYSTEM_PROMPT
+    assert '"reflection_questions": ["..."], "patterns": ["..."]' in SYSTEM_PROMPT
+    assert "NEVER infer or state WHY the match" in SYSTEM_PROMPT and "You cannot know that." in SYSTEM_PROMPT
+    assert 'This applies to "reflection_questions" and "patterns"' in SYSTEM_PROMPT
 
 
 def test_llm_prompt_is_composed_from_the_brain() -> None:
@@ -488,6 +561,42 @@ def test_llm_parse_rejects_drafted_replies() -> None:
         bad = dict(good, overall=dict(good["overall"], improvements=[disguised]))
         with pytest.raises(ValueError, match="drafted a reply"):
             scorer._parse(json.dumps(bad), boundaries, sources)
+
+
+def test_llm_parse_reads_and_guards_reflection_fields() -> None:
+    """``reflection_questions``/``patterns`` are parsed and capped like strengths, default to empty, and are covered by the drafting scan."""
+    from app.config import Settings
+    from app.scoring.llm import LLMScorer
+
+    settings = Settings(
+        backend="llm", llm_provider="openai", llm_api_key="k", llm_model="m", llm_base_url="http://x",
+        llm_timeout=1.0, model_dir="", segment_size=2,
+    )
+    scorer = LLMScorer(settings)
+    boundaries = [(0, 1)]
+    base = {
+        "segments": [{"start_position": 0, "end_position": 1, "engagement_score": 0.7, "comment": "Message 1 drew a detailed reply."}],
+        "overall": {"engagement_score": 0.7, "summary": "Landing well.", "strengths": [], "improvements": []},
+    }
+    legacy = scorer._parse(json.dumps(base), boundaries).overall
+    assert legacy.reflection_questions == [] and legacy.patterns == []
+
+    filled = dict(base, overall=dict(
+        base["overall"],
+        reflection_questions=[f"Did you enjoy round {i}?" for i in range(7)],
+        patterns=["x" * 400],
+    ))
+    parsed = scorer._parse(json.dumps(filled), boundaries).overall
+    assert parsed.reflection_questions == [f"Did you enjoy round {i}?" for i in range(5)]
+    assert parsed.patterns == ["x" * 300]
+
+    for field, draft in (
+        ("reflection_questions", "Could you try asking about her weekend next time?"),
+        ("patterns", "Most of your openers stalled; you could say something about her photos instead."),
+    ):
+        bad = dict(base, overall=dict(base["overall"], **{field: [draft]}))
+        with pytest.raises(ValueError, match="drafted a reply"):
+            scorer._parse(json.dumps(bad), boundaries)
 
 
 def _png_base64(width: int, height: int) -> str:

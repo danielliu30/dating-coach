@@ -240,7 +240,7 @@ def reflection_questions(
 
 
 class HeuristicScorer(Scorer):
-    version = "heuristic-v2"
+    version = "heuristic-v3"
 
     def __init__(self, segment_size: int = 4) -> None:
         self.segment_size = segment_size
@@ -267,6 +267,7 @@ class HeuristicScorer(Scorer):
             )
 
         overall_score = clamp(statistics.fmean(r.score for r in reviews)) if reviews else 0.5
+        patterns = reciprocity_patterns(request.messages)
 
         return AnalyzeResponse(
             model_version=self.version,
@@ -276,6 +277,8 @@ class HeuristicScorer(Scorer):
                 summary=_summary(reviews, request.preferences),
                 strengths=_strengths(reviews),
                 improvements=_improvements(reviews),
+                reflection_questions=reflection_questions(reviews, patterns, request.preferences),
+                patterns=patterns,
             ),
         )
 
@@ -301,15 +304,24 @@ def _strengths(reviews: Sequence[SelfMessageReview]) -> List[str]:
 
 
 def _improvements(reviews: Sequence[SelfMessageReview]) -> List[str]:
-    """Hint at the customer's messages that fell flat, without suggesting what to say."""
+    """Name the customer's messages that fell flat as patterns to reflect on.
+
+    Each hint states only the observable outcome (no reply, a short reply) and
+    hands it back as a question, never a diagnosis: the match's reasons are
+    unknowable, so nothing here claims to know them, and nothing suggests what
+    to say instead. At most five hints, in conversation order.
+    """
     hints: List[str] = []
     for r in reviews:
         if r.outcome == "no_reply":
-            hints.append(f"{_label(r.message)} ({_excerpt(r.message)}) got no reply — worth a look at what made it hard to answer.")
+            hints.append(
+                f"{_label(r.message)} ({_excerpt(r.message)}) got no reply. "
+                "That's the pattern, not the reason — is it worth thinking about?"
+            )
         elif r.outcome == "short_reply":
             hints.append(
-                f"{_label(r.message)} ({_excerpt(r.message)}) only drew a short reply ({_excerpt(r.reply)}) — "  # type: ignore[arg-type]
-                "it may not have given them much to engage with."
+                f"{_label(r.message)} ({_excerpt(r.message)}) only drew a short reply ({_excerpt(r.reply)}). "  # type: ignore[arg-type]
+                "That's the pattern, not the reason — is it worth thinking about?"
             )
     return hints[:5]
 

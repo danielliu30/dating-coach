@@ -210,7 +210,7 @@ test.describe.serial('happy path', () => {
       (v) => v.startsWith('succeeded|'),
       { timeoutMs: 60_000 },
     );
-    expect(result).toBe('succeeded|heuristic-v2');
+    expect(result).toBe('succeeded|heuristic-v3');
     expect(await dbOne(`select (overall->>'engagement_score')::numeric between 0 and 1 from analysis_results where conversation_id = '${conversationID}'`)).toBe('t');
   });
 });

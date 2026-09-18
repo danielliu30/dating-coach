@@ -55,7 +55,8 @@ Return STRICT JSON only, no prose, with this shape:
      "comment": "one sentence about how the customer's messages in this stretch landed"}
   ],
   "overall": {"engagement_score": float 0-1, "summary": "2 sentences",
-              "strengths": ["..."], "improvements": ["..."]}
+              "strengths": ["..."], "improvements": ["..."],
+              "reflection_questions": ["..."], "patterns": ["..."]}
 }
 
 Rules:
@@ -72,14 +73,32 @@ detailed replies; 0.0 = they went unanswered or were met with one-word replies.
 message that got no reply, a message that only got a short reply, a message \
 that closed the topic. Cite the message exactly as Message N ("brief quote"), \
 where N is its 1-based number (position + 1) and the quote is the customer's \
-own words. Explain what may have made it hard to answer. If the \
-customer's final message has no reply recorded, the match may simply not have \
-answered yet: mention it neutrally, do not count it as a flaw.
+own words. Frame each one as a pattern handed back to the customer to think \
+about ("here's what happened; is it worth thinking about?"), not as a verdict. \
+If the customer's final message has no reply recorded, the match may simply not \
+have answered yet: mention it neutrally, do not count it as a flaw.
+- NEVER infer or state WHY the match replied briefly, went quiet or lost \
+interest. You cannot know that. Describe only the observable outcome (no \
+reply, a short reply, an engaged reply); never write "because", "they lost \
+interest", "turned them off" or "rejected".
+- "patterns" are 0-3 short observations naming recurring behaviour across the \
+whole conversation, for the customer to reflect on: e.g. how much of the \
+asking, or how many of the words, were theirs versus the match's; whether \
+the energy shifted part-way through. Descriptive only; no advice, no reasons, \
+no drafted wording. Return [] when nothing recurs.
+- "reflection_questions" are 1-3 open, inward questions the customer can sit \
+with: "did I actually enjoy this?", "was I putting in more than they were, \
+and did that feel okay?", "did this feel like it was heading toward what I \
+said I am looking for?". They turn the analysis toward the customer's own \
+experience ("did I like them?", not only "did they like me?"). They must \
+never tell the customer what to do or what to say next.
 - "strengths" acknowledge the customer's messages that produced a good or \
 successful response, cited the same way.
 - NEVER suggest, draft or rewrite what the customer should say or should have \
 said. No example replies, no "try asking ...", no "you could say ...". The \
-customer always drives the conversation; you only hint at what to look at.
+customer always drives the conversation; you only hint at what to look at. \
+This applies to "reflection_questions" and "patterns" exactly as it does to \
+"improvements" and "summary".
 - When the customer's stated preferences are given, relate the hints to them \
 (e.g. whether their messages surface what they are actually looking for).
 - Judge concrete behaviour, not grammar. Never moralise, never mention that \
@@ -187,6 +206,7 @@ class LLMScorer(Scorer):
         overall = payload.get("overall", {})
         prose = [s.comment for s in segments] + [str(overall.get("summary", ""))]
         prose += [str(x) for x in overall.get("strengths", [])] + [str(x) for x in overall.get("improvements", [])]
+        prose += [str(x) for x in overall.get("reflection_questions", [])] + [str(x) for x in overall.get("patterns", [])]
         _reject_drafting(prose, sources)
         scores = [s.engagement_score for s in segments]
         return AnalyzeResponse(
@@ -199,6 +219,8 @@ class LLMScorer(Scorer):
                 summary=str(overall.get("summary", ""))[:1000],
                 strengths=[str(s)[:300] for s in overall.get("strengths", [])][:5],
                 improvements=[str(s)[:300] for s in overall.get("improvements", [])][:5],
+                reflection_questions=[str(s)[:300] for s in overall.get("reflection_questions", [])][:5],
+                patterns=[str(s)[:300] for s in overall.get("patterns", [])][:5],
             ),
         )
 
