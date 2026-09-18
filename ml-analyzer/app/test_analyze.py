@@ -405,6 +405,32 @@ def test_llm_prompt_reviews_only_self_messages_and_never_drafts() -> None:
     assert "NEVER suggest, draft or rewrite what the customer should say" in SYSTEM_PROMPT
 
 
+def test_llm_prompt_is_composed_from_the_brain() -> None:
+    """The system prompt embeds all three rendered pillars and the scorer's version carries BRAIN_VERSION."""
+    from app.coaching import BRAIN_VERSION, PILLARS, render_pillars
+    from app.config import Settings
+    from app.scoring.llm import SYSTEM_PROMPT, LLMScorer
+
+    assert render_pillars() in SYSTEM_PROMPT
+    for pillar in PILLARS:
+        assert f"{pillar.name}: {pillar.stance}" in SYSTEM_PROMPT
+    # The philosophy comes before the output contract so the contract is read in its light.
+    assert SYSTEM_PROMPT.index("AGENCY:") < SYSTEM_PROMPT.index("Return STRICT JSON")
+    assert 'Message N ("brief quote")' in SYSTEM_PROMPT
+
+    settings = Settings(
+        backend="llm", llm_provider="openai", llm_api_key="k", llm_model="m", llm_base_url="http://x",
+        llm_timeout=1.0, model_dir="", segment_size=2,
+    )
+    scorer = LLMScorer(settings)
+    assert scorer.version == f"llm-openai-m+{BRAIN_VERSION}"
+    good = {
+        "segments": [{"start_position": 0, "end_position": 1, "engagement_score": 0.7, "comment": "Message 1 drew a detailed reply."}],
+        "overall": {"engagement_score": 0.7, "summary": "Landing well.", "strengths": [], "improvements": []},
+    }
+    assert scorer._parse(json.dumps(good), [(0, 1)]).model_version.endswith(BRAIN_VERSION)
+
+
 def test_llm_parse_rejects_drafted_replies() -> None:
     """A completion that drafts what the customer should say is a failed completion (triggers the fallback)."""
     from app.config import Settings
