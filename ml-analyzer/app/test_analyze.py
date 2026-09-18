@@ -644,6 +644,9 @@ def test_enforce_agency_rejects_mind_reading_and_prescription_but_passes_reflect
         "Nothing here can tell you if he wants a relationship.",
         "A slow reply does not prove they feel uncomfortable.",
         "Don't assume she's nervous; look at what your own messages did.",
+        "You shouldn't assume she's nervous; focus on the reply you actually got.",
+        "You can't assume he wants a relationship from one message.",
+        "A short reply doesn't mean they feel uncomfortable.",
     ]
     enforce_agency(fine, match_name="Sam")
 

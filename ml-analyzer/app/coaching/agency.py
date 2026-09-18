@@ -38,12 +38,13 @@ _ISNT = r"(?: isn't| aren't| wasn't| weren't| is not| are not| was not| were not
 # "you cannot know whether she likes you" refuses the inference rather than making it.
 # Only "whether"/"if" and explicitly negated knowledge verbs count; "I know she likes you"
 # and "I assume they feel uncomfortable" are still assertions.
-_HEDGED = (
-    r"(?<!\bwhether )(?<!\bif )"
-    r"(?<!\bcannot know )(?<!\bcan't know )(?<!\bnot know )(?<!\bnever know )"
-    r"(?<!\bcannot tell )(?<!\bcan't tell )(?<!\bnot tell )"
-    r"(?<!\bnot prove )(?<!\bdoesn't prove )(?<!\bcannot prove )(?<!\bcan't prove )"
-    r"(?<!\bnot assume )(?<!\bdon't assume )(?<!\bnot guess )(?<!\bdon't guess )"
+_NEGATORS = (
+    "not", "never", "cannot", "can't", "don't", "doesn't", "didn't", "won't",
+    "shouldn't", "mustn't", "couldn't", "wouldn't", "shouldn't ever", "can't really",
+)
+_KNOWLEDGE_VERBS = ("know", "tell", "prove", "assume", "guess", "mean", "conclude", "infer", "say")
+_HEDGED = r"(?<!\bwhether )(?<!\bif )" + "".join(
+    rf"(?<!\b{neg} {verb} )" for neg in _NEGATORS for verb in _KNOWLEDGE_VERBS
 )
 
 # Phrases that assert the match's motives, intent, interest or feelings, which the
