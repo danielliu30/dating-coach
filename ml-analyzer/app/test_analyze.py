@@ -243,6 +243,28 @@ def test_heuristic_question_in_earlier_bubble_still_counts() -> None:
     assert reviews[0].outcome == "good_reply"
 
 
+def test_brain_renders_all_three_pillars() -> None:
+    """The brain renders AGENCY, FEEDBACK and SUPPORT with every principle, and is versioned."""
+    from app.coaching import AGENCY, BRAIN_VERSION, FEEDBACK, PILLARS, SUPPORT, render_pillars
+
+    assert BRAIN_VERSION.startswith("brain-v")
+    assert PILLARS == (AGENCY, FEEDBACK, SUPPORT)
+
+    text = render_pillars()
+    for pillar in PILLARS:
+        assert f"{pillar.name}: {pillar.stance}" in text
+        for principle in pillar.principles:
+            assert f"- {principle}" in text
+    assert text.index("AGENCY:") < text.index("FEEDBACK:") < text.index("SUPPORT:")
+
+    # The agency pillar spells out all three hard rules the validators enforce.
+    agency = render_pillars([AGENCY])
+    assert "writes their own messages" in agency
+    assert "Never prescribe who the client should date" in agency
+    assert "Never mind-read the other person" in agency
+    assert "FEEDBACK:" not in agency
+
+
 def test_llm_prompt_reviews_only_self_messages_and_never_drafts() -> None:
     """The LLM prompt lists only the customer's messages with their outcomes, carries preferences, and forbids drafting replies."""
     from app.config import Settings
