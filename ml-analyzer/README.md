@@ -15,6 +15,41 @@ Both tracks accept an optional `preferences` string — the customer's own words
 about what they are looking for — and tailor their feedback to it. The Go
 backend fills it from `users.dating_preferences`.
 
+### The coaching brain
+
+The message track's feedback is authored from one canonical, versioned coaching
+philosophy in `app/coaching/brain.py`, built on three pillars (the image and
+review tracks have their own prompts and are not yet wired to the brain):
+
+- **AGENCY** — the client drives. Their words, decisions and dating life stay
+  theirs; self-awareness is what creates agency. Never prescribe who to date,
+  keep or drop; never mind-read the match's motives.
+- **FEEDBACK** — judge only the client's own behaviour by what it produced
+  (no reply / short reply / engaged reply); hint, never draft; name patterns
+  and hand back reflection questions; relate it to their stated preferences.
+- **SUPPORT** — meet the client where they are; encourage without flattering;
+  honest and direct but non-directive; point to a human coach when that is the
+  better help.
+
+The LLM `SYSTEM_PROMPT` is composed from the rendered pillars
+(`render_pillars()`), not written by hand, and `BRAIN_VERSION` is appended to
+`model_version` (e.g. `llm-openai-gpt-4o+brain-v1`) so every stored result is
+traceable to the philosophy revision that produced it.
+
+The model generates its own feedback from this brain. What online forums or
+Reddit would say is never a target to match and is never fed into or copied into
+feedback; the only place crowd-style advice appears in this repo is as
+negative-example fixtures in the tests, proving the gate below rejects that
+style rather than imitating it.
+
+Agency compliance is a hard gate, not a prompt preference: `app/coaching/agency.py`
+(`enforce_agency`) deterministically scans every piece of model output for
+three violations — **drafting** a reply, **mind-reading** the match ("she's not
+into you") and **prescribing** the client's dating life ("drop them", "move
+on") — while still allowing verbatim `Message N ("...")` citations of the
+client's own words. Any hit discards the whole LLM result and falls back to the
+heuristic scorer.
+
 ### Message track
 
 Only the customer's messages (`sender == "self"`) are evaluated. The match's
