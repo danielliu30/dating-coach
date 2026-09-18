@@ -426,6 +426,8 @@ def test_enforce_agency_rejects_mind_reading_and_prescription_but_passes_reflect
         "A closed question can block him from elaborating.",
         "A short answer can leave them, and the conversation, with nowhere to go.",
         "Closed questions may block him, as before, from opening up.",
+        "Your follow-up questions now block her from elaborating.",
+        "Those one-liners honestly leave them, and you, with nothing to build on.",
         "Sam asked two questions and you answered one.",
     ]
     enforce_agency(fine, match_name="Sam")
