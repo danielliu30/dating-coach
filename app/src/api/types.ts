@@ -223,6 +223,10 @@ export interface AnalysisOverall {
   summary: string;
   strengths: string[];
   improvements: string[];
+  /** Open, inward questions for the user ("did I enjoy this?"). Absent/null on results stored before the analyzer emitted them. */
+  reflection_questions?: string[] | null;
+  /** Recurring behaviour named as an observation to think about, never a drafted reply. Absent/null on older results. */
+  patterns?: string[] | null;
 }
 
 export type AnalysisStatus = 'pending' | 'running' | 'succeeded' | 'failed';
