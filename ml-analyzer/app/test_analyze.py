@@ -762,6 +762,30 @@ def test_llm_parse_reads_and_guards_reflection_fields() -> None:
             scorer._parse(json.dumps(bad), boundaries)
 
 
+def test_llm_parse_rejects_overall_lists_of_the_wrong_shape() -> None:
+    """An overall list field returned as a string, object, number or mixed array is a failed completion, not a list of characters/keys."""
+    from app.config import Settings
+    from app.scoring.llm import LLMScorer
+
+    settings = Settings(
+        backend="llm", llm_provider="openai", llm_api_key="k", llm_model="m", llm_base_url="http://x",
+        llm_timeout=1.0, model_dir="", segment_size=2,
+    )
+    scorer = LLMScorer(settings)
+    boundaries = [(0, 1)]
+    base = {
+        "segments": [{"start_position": 0, "end_position": 1, "engagement_score": 0.7, "comment": "Message 1 drew a detailed reply."}],
+        "overall": {"engagement_score": 0.7, "summary": "Landing well."},
+    }
+    assert scorer._parse(json.dumps(base), boundaries).overall.strengths == []
+
+    for field in ("strengths", "improvements", "reflection_questions", "patterns"):
+        for malformed in ("Did you enjoy it?", {"q": "Did you enjoy it?"}, 3, ["fine", None], [["nested"]]):
+            bad = dict(base, overall=dict(base["overall"], **{field: malformed}))
+            with pytest.raises(ValueError, match=f"overall.{field} that is not a list of strings"):
+                scorer._parse(json.dumps(bad), boundaries)
+
+
 def _png_base64(width: int, height: int) -> str:
     """Minimal PNG header (signature + IHDR) that ``image_dimensions`` can read."""
     ihdr = struct.pack(">II", width, height) + b"\x08\x02\x00\x00\x00"
