@@ -383,6 +383,10 @@ def test_enforce_agency_rejects_mind_reading_and_prescription_but_passes_reflect
             enforce_agency([text])
     with pytest.raises(ValueError, match="^llm mind-read the match"):
         enforce_agency(["Sam is clearly not interested in you."], match_name="Sam")
+    with pytest.raises(ValueError, match="^llm mind-read the match"):
+        enforce_agency(["J.J. is clearly not interested in you."], match_name="J.J.")
+    # A curly-quoted citation of a straight-quoted customer message is still exempt.
+    enforce_agency(['Message 2 (\u201cDon\u2019t text her again\u201d) drew no reply.'], ["Don't text her again"])
 
     for text in (
         "Drop them.",
@@ -396,6 +400,8 @@ def test_enforce_agency_rejects_mind_reading_and_prescription_but_passes_reflect
         "Don\u2019t text her again.",
         "Just block him.",
         "You should leave them.",
+        "Leave him.",
+        "Don't block her, but leave him and move on.",
     ):
         with pytest.raises(ValueError, match="^llm prescribed the customer's dating life"):
             enforce_agency([text])

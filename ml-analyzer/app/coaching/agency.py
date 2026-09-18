@@ -59,8 +59,9 @@ _DIRECTIVE = r"(?:just |should |need to |time to |better to |you can |you could 
 PRESCRIPTION = re.compile(
     rf"\b({_DIRECTIVE}?(?:drop|dump|ditch|unmatch|ghost) {_MATCH_OBJ}|"
     rf"{_DIRECTIVE}(?:leave|block) {_MATCH_OBJ}|"
+    rf"(?:leave|block) {_MATCH_OBJ}(?=\s*(?:[.!?,;:]|$|and\b|or\b))|"
     rf"(?:you )?(?:shouldn't|should not|don't|do not|mustn't|must not|can't|cannot) "
-    r"(?:date|see|pursue|keep seeing|keep talking to|go out with|be with|text|message|chase|trust|wait for) "
+    r"(?:date|see|pursue|keep seeing|keep talking to|go out with|be with|text|message|chase|trust|wait for|leave|block) "
     rf"{_MATCH_OBJ}|"
     r"move on\b(?! to\b)|walk away|cut (?:her|him|them|it|this) (?:off|loose)|cut your losses|"
     r"stop (?:texting|messaging|talking to|seeing|pursuing|chasing|wasting time on) (?:her|him|them|this)|"
@@ -86,10 +87,9 @@ _APOSTROPHES = str.maketrans({"\u2019": "'", "\u2018": "'"})
 
 
 def _normalise_subject(text: str, match_name: Optional[str]) -> str:
-    """Fold curly apostrophes to ``'`` and rewrite ``match_name`` (if any) as "the match" so the rules can see it."""
-    text = text.translate(_APOSTROPHES)
+    """Rewrite every whole-word occurrence of ``match_name`` (if any) as "the match" so the rules can see it."""
     if match_name and match_name.strip():
-        text = re.sub(rf"\b{re.escape(match_name.strip())}\b", "the match", text, flags=re.IGNORECASE)
+        text = re.sub(rf"(?<!\w){re.escape(match_name.strip())}(?!\w)", "the match", text, flags=re.IGNORECASE)
     return text
 
 
@@ -112,9 +112,11 @@ RULES: Tuple[AgencyRule, ...] = (
 def enforce_agency(texts: Sequence[str], sources: Sequence[str] = (), match_name: Optional[str] = None) -> None:
     """Raise ``ValueError`` if any feedback text breaks an agency rule in ``RULES``.
 
-    Before scanning, typographic apostrophes are folded to ``'`` so contractions
-    match, and every occurrence of ``match_name`` (when given) is read as "the
-    match", so "Sam isn't into you" is caught the same as "she isn't into you".
+    Typographic apostrophes in ``texts`` and ``sources`` are folded to ``'``
+    before anything else, so contractions match and a curly-quoted citation
+    still matches a straight-quoted source. Every occurrence of ``match_name``
+    (when given) is read as "the match", so "Sam isn't into you" is caught the
+    same as "she isn't into you".
 
     Feedback is required to name and quote the customer's own messages
     briefly, so a quoted span is blanked before scanning only when it is
@@ -130,7 +132,7 @@ def enforce_agency(texts: Sequence[str], sources: Sequence[str] = (), match_name
     The error message starts with the matching rule's ``error`` so callers and
     logs can tell which rule fired.
     """
-    normalised_sources = [squash(s) for s in sources if s.strip()]
+    normalised_sources = [squash(s.translate(_APOSTROPHES)) for s in sources if s.strip()]
 
     def citation_end(text: str, start: int) -> Optional[int]:
         """Index just past the longest closing quote after ``start`` whose contents are a customer quote, else ``None``.
@@ -145,6 +147,7 @@ def enforce_agency(texts: Sequence[str], sources: Sequence[str] = (), match_name
         return None
 
     for text in texts:
+        text = text.translate(_APOSTROPHES)
         scanned, cursor = [], 0
         for match in CITATION_START.finditer(text):
             start = match.start(1)
