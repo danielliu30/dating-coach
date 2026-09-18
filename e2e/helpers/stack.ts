@@ -77,6 +77,26 @@ export async function waitForDb(
   throw new Error(`timed out waiting on ${sql}; last result: ${JSON.stringify(last)}`);
 }
 
+/**
+ * Container state of a compose service plus its last log lines, for error
+ * messages when a service never comes back after a restart. Never throws: a
+ * broken compose invocation is reported inline so the original failure is kept.
+ */
+export async function serviceDiagnostics(name: string, tailLines = 40): Promise<string> {
+  const sections: string[] = [];
+  for (const args of [
+    ['ps', '-a', '--format', 'table {{.Service}}\t{{.State}}\t{{.Status}}'],
+    ['logs', '--no-color', '--no-log-prefix', '--tail', String(tailLines), name],
+  ]) {
+    try {
+      sections.push(`$ docker compose ${args.join(' ')}\n${(await compose(args)).trimEnd()}`);
+    } catch (err) {
+      sections.push(`$ docker compose ${args.join(' ')}\n${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  return sections.join('\n\n');
+}
+
 /** Stops a compose service (`docker compose stop <name>`); its container stays around to be started again. */
 export async function stopService(name: string): Promise<void> {
   await compose(['stop', name]);
@@ -107,7 +127,7 @@ export function sleep(ms: number): Promise<void> {
  * a test never races the container coming up.
  */
 export async function waitForApi(timeoutMs = 90_000): Promise<void> {
-  await waitForJson(`${BASE_URL}/healthz`, (body) => body.status === 'ok', timeoutMs);
+  await waitForJson(`${BASE_URL}/healthz`, (body) => body.status === 'ok', timeoutMs, 'api');
 }
 
 /**
@@ -115,17 +135,20 @@ export async function waitForApi(timeoutMs = 90_000): Promise<void> {
  * `model_version`, resolving with the health payload.
  */
 export async function waitForMl(timeoutMs = 90_000): Promise<Record<string, unknown>> {
-  return waitForJson(`${BASE_URL}/ml/healthz`, (body) => typeof body.model_version === 'string', timeoutMs);
+  return waitForJson(`${BASE_URL}/ml/healthz`, (body) => typeof body.model_version === 'string', timeoutMs, 'ml-analyzer');
 }
 
 /**
  * Fetches `url` until the JSON body satisfies `ok` or `timeoutMs` passes.
  * Connection errors and non-JSON bodies (nginx 502 pages) count as "not yet".
+ * On timeout the error carries `serviceDiagnostics(service)` so a container
+ * that never came back can be told apart from one nginx could not reach.
  */
 async function waitForJson(
   url: string,
   ok: (body: Record<string, unknown>) => boolean,
   timeoutMs: number,
+  service: string,
 ): Promise<Record<string, unknown>> {
   const deadline = Date.now() + timeoutMs;
   let lastError = 'no response yet';
@@ -141,5 +164,5 @@ async function waitForJson(
     }
     await sleep(1_000);
   }
-  throw new Error(`${url} not ready after ${timeoutMs}ms: ${lastError}`);
+  throw new Error(`${url} not ready after ${timeoutMs}ms: ${lastError}\n\n${await serviceDiagnostics(service)}`);
 }
