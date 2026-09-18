@@ -39,19 +39,15 @@ _ISNT = r"(?: isn't| aren't| wasn't| weren't| is not| are not| was not| were not
 # Only "whether"/"if" and explicitly negated knowledge verbs count; "I know she likes you"
 # and "I assume they feel uncomfortable" are still assertions.
 # Factive past/present forms ("didn't know she likes you") still present the claim as true,
-# so only modal/imperative negation hedges knowledge verbs; entailment verbs take any negation.
+# so only modal/imperative negation hedges factive verbs; non-factive inference/reporting and
+# entailment verbs ("didn't assume", "doesn't prove") deny the claim under any negation.
+_MODAL_NEG = ("cannot", "can't", "couldn't", "never", "shouldn't", "mustn't", "wouldn't", "don't")
+_ANY_NEG = _MODAL_NEG + ("not", "doesn't", "didn't", "won't", "haven't", "hasn't")
+_FACTIVE = ("know", "tell", "realise", "realize")
+_NON_FACTIVE = ("assume", "guess", "conclude", "infer", "say", "claim", "suggest", "prove", "mean", "imply")
 _HEDGES = tuple(
-    f"{neg} {verb}"
-    for neg, verb in [
-        (n, v)
-        for n in ("cannot", "can't", "couldn't", "never", "shouldn't", "mustn't", "wouldn't", "don't")
-        for v in ("know", "tell", "assume", "guess", "conclude", "infer", "say")
-    ]
-    + [
-        (n, v)
-        for n in ("not", "doesn't", "didn't", "cannot", "can't", "couldn't", "won't", "wouldn't")
-        for v in ("prove", "mean")
-    ]
+    [f"{n} {v}" for n in _MODAL_NEG for v in _FACTIVE]
+    + [f"{n} {v}" for n in _ANY_NEG for v in _NON_FACTIVE]
 )
 _HEDGED = r"(?<!\bwhether )(?<!\bif )" + "".join(rf"(?<!\b{h} )" for h in _HEDGES)
 

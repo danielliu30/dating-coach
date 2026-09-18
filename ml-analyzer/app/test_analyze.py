@@ -649,6 +649,8 @@ def test_enforce_agency_rejects_mind_reading_and_prescription_but_passes_reflect
         "You shouldn't assume she's nervous; focus on the reply you actually got.",
         "You can't assume he wants a relationship from one message.",
         "A short reply doesn't mean they feel uncomfortable.",
+        "I didn't assume she likes you; I focused on her detailed reply.",
+        "Message 4 doesn't suggest he wants a relationship, and nothing here can tell you if they feel rejected.",
     ]
     enforce_agency(fine, match_name="Sam")
 
