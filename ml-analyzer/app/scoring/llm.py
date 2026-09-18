@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 import httpx
 
+from ..coaching import BRAIN_VERSION, render_pillars
 from ..config import Settings
 from ..schemas import AnalyzeRequest, AnalyzeResponse, Message, Overall, Segment
 from .base import Scorer, align_segments, chunk, clamp, transcript
@@ -33,9 +34,15 @@ CLOSING_QUOTE = re.compile(r"[\"\u201d]")
 # Shortest quotation that can be exempted from the drafting scan.
 MIN_QUOTE_WORDS = 3
 
-SYSTEM_PROMPT = """You are a dating-conversation coach reviewing ONLY the messages \
+_PROMPT_INTRO = """You are a dating-conversation coach reviewing ONLY the messages \
 written by the customer you are coaching. You judge how each of their messages \
 landed by looking at what the match did next.
+
+You author every judgement from this coaching philosophy:
+
+"""
+
+_PROMPT_CONTRACT = """
 
 You are given a transcript where each line is "[position] sender: body" and \
 sender is either "self" (the customer you are coaching) or "match". The \
@@ -98,13 +105,17 @@ This applies to "reflection_questions" and "patterns" exactly as it does to \
 you are an AI.
 """
 
+# Composed from the brain so the philosophy has one source of truth; the
+# output contract and hard rules below are the scorer's own.
+SYSTEM_PROMPT = _PROMPT_INTRO + render_pillars() + _PROMPT_CONTRACT
+
 
 class LLMScorer(Scorer):
     """Prompt-based scorer. Falls back to the heuristic scorer on any failure."""
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self.version = f"llm-{settings.llm_provider}-{settings.llm_model}"
+        self.version = f"llm-{settings.llm_provider}-{settings.llm_model}+{BRAIN_VERSION}"
         self._fallback = HeuristicScorer(settings.segment_size)
 
     async def analyze(self, request: AnalyzeRequest) -> AnalyzeResponse:

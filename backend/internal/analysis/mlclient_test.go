@@ -38,6 +38,34 @@ func TestMLClientAnalyzePostsJSONAndDecodes(t *testing.T) {
 	}
 }
 
+// TestMLOverallRoundTripsReflectionFields pins that the analyzer's
+// reflection_questions and patterns survive decode -> re-encode, which is the
+// path the worker uses to persist analysis_results.overall.
+func TestMLOverallRoundTripsReflectionFields(t *testing.T) {
+	wire := `{"engagement_score":0.4,"summary":"s","strengths":[],"improvements":["Message 2 got no reply."],` +
+		`"reflection_questions":["Did you actually enjoy this conversation?"],` +
+		`"patterns":["You sent about twice as many messages as they did in this conversation (4 to 2)."]}`
+	var overall MLOverall
+	if err := json.Unmarshal([]byte(wire), &overall); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(overall.ReflectionQuestions) != 1 || len(overall.Patterns) != 1 {
+		t.Fatalf("decoded %+v, want one reflection question and one pattern", overall)
+	}
+	stored, err := json.Marshal(overall)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	for _, want := range []string{
+		`"reflection_questions":["Did you actually enjoy this conversation?"]`,
+		`"patterns":["You sent about twice as many messages as they did in this conversation (4 to 2)."]`,
+	} {
+		if !strings.Contains(string(stored), want) {
+			t.Fatalf("persisted overall %s is missing %s", stored, want)
+		}
+	}
+}
+
 func TestMLClientAnalyzeSurfacesNon200(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"detail":"bad"}`, http.StatusUnprocessableEntity)

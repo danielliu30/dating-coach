@@ -51,11 +51,17 @@ type MLSegment struct {
 }
 
 // MLOverall is the conversation-level verdict shown at the top of the report.
+// ReflectionQuestions and Patterns are the analyzer's inward-facing feedback
+// (open questions for the customer and recurring behaviour named as an
+// observation). Results stored before the analyzer emitted them, or from an
+// analyzer that omits them, carry null for these keys, like any absent slice.
 type MLOverall struct {
-	EngagementScore float64  `json:"engagement_score"`
-	Summary         string   `json:"summary"`
-	Strengths       []string `json:"strengths"`
-	Improvements    []string `json:"improvements"`
+	EngagementScore     float64  `json:"engagement_score"`
+	Summary             string   `json:"summary"`
+	Strengths           []string `json:"strengths"`
+	Improvements        []string `json:"improvements"`
+	ReflectionQuestions []string `json:"reflection_questions"`
+	Patterns            []string `json:"patterns"`
 }
 
 // SummarizeReviews asks ml-analyzer's /summarize/reviews to condense a coach's
