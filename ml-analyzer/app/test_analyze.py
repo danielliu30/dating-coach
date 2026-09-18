@@ -344,6 +344,9 @@ def test_llm_prompt_reviews_only_self_messages_and_never_drafts() -> None:
 
     assert 'Evaluate ONLY messages from "self"' in SYSTEM_PROMPT
     assert "NEVER suggest, draft or rewrite what the customer should say" in SYSTEM_PROMPT
+    assert '"patterns"' in SYSTEM_PROMPT
+    assert '"reflection_questions"' in SYSTEM_PROMPT
+    assert "including patterns and reflection_questions" in SYSTEM_PROMPT
 
 
 def test_llm_parse_rejects_drafted_replies() -> None:
@@ -403,6 +406,61 @@ def test_llm_parse_rejects_drafted_replies() -> None:
         bad = dict(good, overall=dict(good["overall"], improvements=[disguised]))
         with pytest.raises(ValueError, match="drafted a reply"):
             scorer._parse(json.dumps(bad), boundaries, sources)
+
+
+def test_llm_parse_reads_and_guards_patterns() -> None:
+    """The LLM parser preserves, caps, and rejects drafted pattern feedback."""
+    from app.config import Settings
+    from app.scoring.llm import LLMScorer
+
+    settings = Settings(
+        backend="llm", llm_provider="openai", llm_api_key="k", llm_model="m", llm_base_url="http://x",
+        llm_timeout=1.0, model_dir="", segment_size=2,
+    )
+    scorer = LLMScorer(settings)
+    boundaries = [(0, 1)]
+    good = {
+        "segments": [{"start_position": 0, "end_position": 1, "engagement_score": 0.7, "comment": "Message 1 drew a detailed reply."}],
+        "overall": {
+            "engagement_score": 0.7,
+            "summary": "Landing well.",
+            "strengths": ["Message 1 landed."],
+            "improvements": [],
+            "patterns": ["2 of your 3 stalled messages closed the topic."],
+            "reflection_questions": ["What did your landed messages have in common?"],
+        },
+    }
+    parsed = scorer._parse(json.dumps(good), boundaries)
+    assert parsed.overall.patterns == ["2 of your 3 stalled messages closed the topic."]
+    assert parsed.overall.reflection_questions == ["What did your landed messages have in common?"]
+
+    capped = dict(
+        good,
+        overall=dict(
+            good["overall"],
+            patterns=[f"Pattern {index}" for index in range(7)],
+        ),
+    )
+    assert len(scorer._parse(json.dumps(capped), boundaries).overall.patterns) == 5
+
+    pattern_draft = dict(
+        good,
+        overall=dict(good["overall"], patterns=["You tend to close topics; you could say more about yourself."]),
+    )
+    with pytest.raises(ValueError, match="drafted a reply"):
+        scorer._parse(json.dumps(pattern_draft), boundaries)
+
+    reflection_draft = dict(
+        good,
+        overall=dict(good["overall"], reflection_questions=["Next time, ask what she does on weekends?"]),
+    )
+    with pytest.raises(ValueError, match="drafted a reply"):
+        scorer._parse(json.dumps(reflection_draft), boundaries)
+
+    without_new_fields = dict(good, overall={key: value for key, value in good["overall"].items() if key not in {"patterns", "reflection_questions"}})
+    parsed_without_new_fields = scorer._parse(json.dumps(without_new_fields), boundaries)
+    assert parsed_without_new_fields.overall.patterns == []
+    assert parsed_without_new_fields.overall.reflection_questions == []
 
 
 def _png_base64(width: int, height: int) -> str:
