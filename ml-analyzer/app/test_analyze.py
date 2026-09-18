@@ -778,6 +778,10 @@ def test_strip_citations_blanks_only_provable_customer_quotes() -> None:
         strip_citations('Message 4 ("She said "you could ask him about work"") stalled.', sources)
         == "Message 4 ( ) stalled."
     )
+    assert (
+        strip_citations("Message 3 (\u201cYou could say I\u2019m obsessed\u201d) got no reply.", sources)
+        == "Message 3 ( ) got no reply."
+    )
     for untouched in (
         'Message 3 says, "You could say I\'m obsessed", which drew no reply.',
         'Message 3 ("You could say I\'m obsessed) got no reply.',

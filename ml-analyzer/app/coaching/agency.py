@@ -199,7 +199,7 @@ def _strip_normalised_citations(text: str, normalised_sources: Sequence[str]) ->
 
     def citation_end(start: int) -> Optional[int]:
         for closing in reversed(list(CLOSING_QUOTE.finditer(text, start + 1))):
-            inner = squash(text[start + 1 : closing.start()])
+            inner = squash(text[start + 1 : closing.start()].translate(_APOSTROPHES))
             if len(inner.split()) >= MIN_QUOTE_WORDS and any(inner in s for s in normalised_sources):
                 return closing.end()
         return None
