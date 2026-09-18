@@ -637,6 +637,9 @@ def test_enforce_agency_rejects_mind_reading_and_prescription_but_passes_reflect
         "Message 6 asked whether she likes hiking and drew a long reply.",
         "You asked him out in Message 3 and he said yes.",
         "Whether you keep seeing him is your call; what did you notice about your own pacing?",
+        "You cannot know whether she likes you from this exchange.",
+        "Nothing here can tell you if he wants a relationship.",
+        "A slow reply does not prove they feel uncomfortable.",
     ]
     enforce_agency(fine, match_name="Sam")
 

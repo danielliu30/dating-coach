@@ -34,6 +34,9 @@ _MATCH = r"(she|he|they|this (person|match|guy|girl)|the match|your match)"
 _MATCH_OBJ = r"(her|him|them|this (person|match|guy|girl)|the match|your match)"
 _IS = r"(?:'s|'re| is| are| was| were| seems?| sounds?| looks?)"
 _ISNT = r"(?: isn't| aren't| wasn't| weren't| is not| are not| was not| were not)"
+# Positive claims ("she likes you") are only assertions when not framed as unknowable:
+# "you cannot know whether she likes you" refuses the inference rather than making it.
+_HEDGED = r"(?<!\bwhether )(?<!\bif )(?<!\bknow )(?<!\btell )(?<!\bprove )(?<!\bassume )(?<!\bassuming )(?<!\bguess )"
 
 # Phrases that assert the match's motives, intent, interest or feelings, which the
 # coach cannot know: only the customer's own behaviour and its visible outcome is fair game.
@@ -50,13 +53,13 @@ MIND_READING = re.compile(
     r"(?:like|want|care about|respect|fancy|value) you|"
     rf"{_MATCH} (?:only|just) (?:wants?|wanted) (?:sex|attention|validation|a hookup|an ego boost)|"
     rf"{_MATCH}(?: (?:was|were|is|are) (?:never|not)|{_ISNT}) (?:going to|gonna) (?:reply|answer|text back|commit)|"
-    rf"{_MATCH}(?: (?:really|clearly|obviously|probably|definitely|secretly|still))? "
+    rf"{_HEDGED}{_MATCH}(?: (?:really|clearly|obviously|probably|definitely|secretly|still))? "
     r"(?:likes|loves|fancies|wants|needs|misses|trusts|fears|resents|adores) you|"
-    rf"{_MATCH}(?: (?:really|clearly|obviously|probably|definitely))? wants? "
+    rf"{_HEDGED}{_MATCH}(?: (?:really|clearly|obviously|probably|definitely))? wants? "
     r"(?:a relationship|commitment|something (?:serious|casual)|to (?:see|date|meet|be with) you|space|out|more from you)|"
-    rf"{_MATCH}(?: (?:really|clearly|obviously|probably|definitely))? feels? "
+    rf"{_HEDGED}{_MATCH}(?: (?:really|clearly|obviously|probably|definitely))? feels? "
     r"(?:uncomfortable|pressured|smothered|rushed|ignored|bored|unsafe|overwhelmed|rejected|neglected|the same(?: way)?)|"
-    rf"{_MATCH}{_IS}(?: (?:just|clearly|obviously|probably|definitely|too))? "
+    rf"{_HEDGED}{_MATCH}{_IS}(?: (?:just|clearly|obviously|probably|definitely|too))? "
     r"(?:afraid|scared|nervous|worried|hesitant|intimidated|unsure|shy|insecure|in love|attached|smitten|falling for you))\b",
     re.IGNORECASE,
 )
