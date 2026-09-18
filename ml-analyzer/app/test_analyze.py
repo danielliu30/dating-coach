@@ -768,6 +768,28 @@ def test_llm_parse_rejects_drafted_replies() -> None:
             scorer._parse(json.dumps(bad), boundaries, sources)
 
 
+def test_strip_citations_blanks_only_provable_customer_quotes() -> None:
+    """``strip_citations`` blanks ``Message N ("...")`` spans that match a source and leaves everything else."""
+    from app.coaching import strip_citations
+
+    sources = ["You could say I'm obsessed with climbing", 'She said "you could ask him about work"']
+    assert strip_citations('Message 3 ("You could say I\'m obsessed") got no reply.', sources) == "Message 3 ( ) got no reply."
+    assert (
+        strip_citations('Message 4 ("She said "you could ask him about work"") stalled.', sources)
+        == "Message 4 ( ) stalled."
+    )
+    for untouched in (
+        'Message 3 says, "You could say I\'m obsessed", which drew no reply.',
+        'Message 3 ("You could say I\'m obsessed) got no reply.',
+        'Message 5 ("say") was one word.',
+        "Plain feedback with no quote.",
+    ):
+        assert strip_citations(untouched, sources) == untouched
+    assert strip_citations('Message 3 ("You could say I\'m obsessed") got no reply.') == (
+        'Message 3 ("You could say I\'m obsessed") got no reply.'
+    )
+
+
 def test_llm_parse_reads_and_guards_reflection_fields() -> None:
     """``reflection_questions``/``patterns`` are parsed and capped like strengths, default to empty, and are covered by the drafting scan."""
     from app.config import Settings
