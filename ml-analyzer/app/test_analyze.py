@@ -641,6 +641,9 @@ def test_llm_parse_rejects_diagnosing_why_the_match_replied() -> None:
         "Did you enjoy this conversation, setting their replies aside?",
         "Do you ask questions because the silence feels uncomfortable?",
         "Message 5 was the longest, and it got the shortest reply.",
+        "Were you bored by this exchange, or did you want to continue?",
+        "Did you lose interest before they did?",
+        "You decided not to follow up after Message 6.",
     ):
         ok = dict(good, overall=dict(good["overall"], patterns=[outcome_only]))
         assert scorer._parse(json.dumps(ok), boundaries).overall.patterns == [outcome_only]

@@ -25,16 +25,18 @@ DRAFTING = re.compile(
 # Phrases that claim to know why the match replied the way they did. The prompt forbids
 # them outright ("you cannot know that"), so any hit means the model diagnosed the match.
 # ``because`` counts only when it introduces a cause (a pronoun or ``of``), so a bare
-# "because" inside a reflection question does not cost a fallback. ``['’]`` matches ASCII
-# and curly apostrophes so "weren’t" is caught like "weren't".
+# "because" inside a reflection question does not cost a fallback, and feelings/decisions
+# are only diagnoses when attributed to the match (they/she/he), never to the customer
+# ("Were you bored?" is a reflection question). ``['’]`` matches ASCII and curly
+# apostrophes so "weren’t" is caught like "weren't".
 DIAGNOSIS = re.compile(
     r"\b(because (they|she|he|it|you|your|of)|due to|(that|this|which) is why|(the|one) reason (they|she|he|for)|why (they|she|he)|"
-    r"made it (hard|harder|difficult|tough|easy|easier)|lost interest|(not|wasn['’]?t|isn['’]?t|weren['’]?t) interested|"
+    r"made it (hard|harder|difficult|tough|easy|easier)|(they|she|he) lost interest|(not|wasn['’]?t|isn['’]?t|weren['’]?t) interested|"
     r"(turned?|turning|put|putting|scared|scaring|pushed|pushing|drove|driving) (her|him|them) (off|away)|turn-?off|"
     r"reject(ed|ion|ing|s)?|(didn['’]?t|did not|doesn['’]?t|does not) (like|fancy|care for|want) you|"
     r"(bored|annoyed|overwhelmed|intimidated) (her|him|them)|too (needy|eager|keen|intense|much|forward|strong) for (her|him|them)|"
-    r"(felt|feels|seemed|seems|got|was|were) (bored|annoyed|overwhelmed|intimidated|uninterested|put off)|"
-    r"(lose|losing) interest|decided (not to|against|to stop))\b",
+    r"(they|she|he) (felt|feel|feels|seemed|seem|seems|got|was|were) (bored|annoyed|overwhelmed|intimidated|uninterested|put off)|"
+    r"(made|making|makes) (her|him|them) lose interest|(they|she|he) decided (not to|against|to stop))\b",
     re.IGNORECASE,
 )
 
