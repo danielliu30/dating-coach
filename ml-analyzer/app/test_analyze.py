@@ -403,6 +403,8 @@ def test_enforce_agency_rejects_mind_reading_and_prescription_but_passes_reflect
         "Leave him.",
         "Please leave him.",
         "Now block her.",
+        "You should honestly block him.",
+        "Just please leave them.",
         "Don't block her, but leave him and move on.",
     ):
         with pytest.raises(ValueError, match="^llm prescribed the customer's dating life"):
