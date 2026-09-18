@@ -213,6 +213,35 @@ export default function AnalysisResultScreen({
             ))}
           </View>
         ) : null}
+        {overall?.patterns?.length ? (
+          <View style={[styles.list, { backgroundColor: colors.skyTint }]}>
+            <View style={shared.row}>
+              <Ionicons name="repeat-outline" size={16} color={colors.sageDeep} />
+              <Text style={[type.eyebrow, { color: colors.sageDeep }]}>A pattern we noticed</Text>
+            </View>
+            {overall.patterns.map((item) => (
+              <View key={item} style={styles.bullet}>
+                <Ionicons name="ellipse-outline" size={16} color={colors.sageDeep} />
+                <Text style={[type.body, { flex: 1 }]}>{item}</Text>
+              </View>
+            ))}
+            <Text style={type.caption}>Just an observation, not a verdict. Is it worth thinking about?</Text>
+          </View>
+        ) : null}
+        {overall?.reflection_questions?.length ? (
+          <View style={[styles.list, { backgroundColor: colors.primaryTint }]}>
+            <View style={shared.row}>
+              <Ionicons name="help-circle-outline" size={16} color={colors.primary} />
+              <Text style={[type.eyebrow, { color: colors.primary }]}>Worth asking yourself</Text>
+            </View>
+            {overall.reflection_questions.map((item) => (
+              <View key={item} style={styles.bullet}>
+                <Ionicons name="chatbubble-ellipses-outline" size={16} color={colors.primary} />
+                <Text style={[type.body, { flex: 1 }]}>{item}</Text>
+              </View>
+            ))}
+          </View>
+        ) : null}
         <Divider />
         <View style={shared.row}>
           <Ionicons name="hardware-chip-outline" size={14} color={colors.muted} />
