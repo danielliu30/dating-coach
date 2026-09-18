@@ -504,6 +504,23 @@ def test_llm_prompt_is_composed_from_the_brain() -> None:
     assert scorer._parse(json.dumps(good), [(0, 1)]).model_version.endswith(BRAIN_VERSION)
 
 
+def test_enforce_agency_is_the_shared_drafting_gate() -> None:
+    """``enforce_agency`` rejects drafting, exempts provable citations, and is the check ``LLMScorer`` uses."""
+    from app.coaching import RULES, enforce_agency
+    from app.scoring import llm
+
+    assert [rule.name for rule in RULES] == ["drafting", "diagnosis"]
+    assert llm.enforce_agency is enforce_agency
+
+    sources = ["You could say I'm obsessed with climbing, but lately I mostly stay home"]
+    enforce_agency(['Message 3 ("You could say I\'m obsessed with climbing") got no reply.'], sources)
+    enforce_agency(["Message 3 did not invite the match to respond with much detail."])
+    with pytest.raises(ValueError, match="^llm drafted a reply for the customer"):
+        enforce_agency(["Fine so far.", "Try asking: What are you passionate about?"])
+    with pytest.raises(ValueError, match="drafted a reply"):
+        enforce_agency(['"You could say I\'m obsessed with climbing" would land better.'], sources)
+
+
 def test_llm_parse_rejects_drafted_replies() -> None:
     """A completion that drafts what the customer should say is a failed completion (triggers the fallback)."""
     from app.config import Settings
@@ -622,14 +639,14 @@ def test_llm_parse_rejects_diagnosing_why_the_match_replied() -> None:
         assert scorer._parse(json.dumps(ok), boundaries).overall.patterns == [outcome_only]
 
 
-def test_llm_strip_citations_blanks_only_provable_customer_quotes() -> None:
-    """``_strip_citations`` blanks ``Message N ("...")`` spans that match a source and leaves everything else."""
-    from app.scoring.llm import _strip_citations
+def test_strip_citations_blanks_only_provable_customer_quotes() -> None:
+    """``strip_citations`` blanks ``Message N ("...")`` spans that match a source and leaves everything else."""
+    from app.coaching import strip_citations
 
     sources = ["You could say I'm obsessed with climbing", 'She said "you could ask him about work"']
-    assert _strip_citations('Message 3 ("You could say I\'m obsessed") got no reply.', sources) == "Message 3 ( ) got no reply."
+    assert strip_citations('Message 3 ("You could say I\'m obsessed") got no reply.', sources) == "Message 3 ( ) got no reply."
     assert (
-        _strip_citations('Message 4 ("She said "you could ask him about work"") stalled.', sources)
+        strip_citations('Message 4 ("She said "you could ask him about work"") stalled.', sources)
         == "Message 4 ( ) stalled."
     )
     for untouched in (
@@ -638,8 +655,8 @@ def test_llm_strip_citations_blanks_only_provable_customer_quotes() -> None:
         'Message 5 ("say") was one word.',
         "Plain feedback with no quote.",
     ):
-        assert _strip_citations(untouched, sources) == untouched
-    assert _strip_citations('Message 3 ("You could say I\'m obsessed") got no reply.') == (
+        assert strip_citations(untouched, sources) == untouched
+    assert strip_citations('Message 3 ("You could say I\'m obsessed") got no reply.') == (
         'Message 3 ("You could say I\'m obsessed") got no reply.'
     )
 
@@ -678,6 +695,30 @@ def test_llm_parse_reads_and_guards_reflection_fields() -> None:
         bad = dict(base, overall=dict(base["overall"], **{field: [draft]}))
         with pytest.raises(ValueError, match="drafted a reply"):
             scorer._parse(json.dumps(bad), boundaries)
+
+
+def test_llm_parse_rejects_overall_lists_of_the_wrong_shape() -> None:
+    """An overall list field returned as a string, object, number or mixed array is a failed completion, not a list of characters/keys."""
+    from app.config import Settings
+    from app.scoring.llm import LLMScorer
+
+    settings = Settings(
+        backend="llm", llm_provider="openai", llm_api_key="k", llm_model="m", llm_base_url="http://x",
+        llm_timeout=1.0, model_dir="", segment_size=2,
+    )
+    scorer = LLMScorer(settings)
+    boundaries = [(0, 1)]
+    base = {
+        "segments": [{"start_position": 0, "end_position": 1, "engagement_score": 0.7, "comment": "Message 1 drew a detailed reply."}],
+        "overall": {"engagement_score": 0.7, "summary": "Landing well."},
+    }
+    assert scorer._parse(json.dumps(base), boundaries).overall.strengths == []
+
+    for field in ("strengths", "improvements", "reflection_questions", "patterns"):
+        for malformed in ("Did you enjoy it?", {"q": "Did you enjoy it?"}, 3, ["fine", None], [["nested"]]):
+            bad = dict(base, overall=dict(base["overall"], **{field: malformed}))
+            with pytest.raises(ValueError, match=f"overall.{field} that is not a list of strings"):
+                scorer._parse(json.dumps(bad), boundaries)
 
 
 def _png_base64(width: int, height: int) -> str:
