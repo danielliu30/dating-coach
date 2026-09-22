@@ -32,7 +32,8 @@ Repository descriptions can be set with `updateRepositoryInfo`.
 2. `build-push`: `docker compose --profile gateway build api ml-analyzer web` with `IMAGE_TAG=${{ github.sha }}`, `DOCKERHUB_NAMESPACE=$DOCKERHUB_USERNAME`, `WEB_API_URL=""` (same-origin bundle) and `GOOGLE_CLIENT_ID` from the repo variable; then `docker tag ... :latest` and pushes **both** the SHA and `latest` tags.
 3. `deploy`: `appleboy/ssh-action` into the VM, then in `DEPLOY_DIR` (default `~/dating-coach`):
    ```bash
-   IMAGE_TAG=$SHA docker compose --profile gateway pull api worker ml-analyzer web   # first: a bad tag changes nothing on the VM
+   git fetch origin && git show "$SHA:docker-compose.yml" > /tmp/c.yml
+   IMAGE_TAG=$SHA docker compose -f /tmp/c.yml --project-directory . --profile gateway pull api worker ml-analyzer web   # first: a bad tag changes nothing on the VM
    git fetch origin && git checkout --detach "$SHA"      # compose file, nginx conf, backend/migrations must match the images
    sed -i '/^IMAGE_TAG=/d;/^DOCKERHUB_NAMESPACE=/d' .env && printf 'IMAGE_TAG=%s\nDOCKERHUB_NAMESPACE=%s\n' "$SHA" "$NS" >> .env
    IMAGE_TAG=$SHA docker compose --profile gateway up -d --no-build
