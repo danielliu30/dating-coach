@@ -92,13 +92,12 @@ jobs:
             set -euo pipefail
             cd "${DEPLOY_DIR:-$HOME/dating-coach}"
             test -f .env || { echo "production .env missing in $(pwd)"; exit 1; }
-            # migrations and nginx config are bind-mounted from the checkout, so it must match the image
-            if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-              git fetch -q origin && git checkout -q --detach "$DEPLOY_TAG"
-            fi
+            git rev-parse --is-inside-work-tree >/dev/null 2>&1 || { echo "$(pwd) must be a git checkout of the repo"; exit 1; }
             export IMAGE_TAG="$DEPLOY_TAG" DOCKERHUB_NAMESPACE
-            # pull before touching .env so a bad tag never gets pinned
+            # pull before touching the checkout or .env so a bad tag changes nothing on the VM
             docker compose --profile gateway pull api worker ml-analyzer web
+            # migrations and nginx config are bind-mounted from the checkout, so it must match the image
+            git fetch -q origin && git checkout -q --detach "$DEPLOY_TAG"
             sed -i '/^IMAGE_TAG=/d;/^DOCKERHUB_NAMESPACE=/d' .env
             printf 'IMAGE_TAG=%s\nDOCKERHUB_NAMESPACE=%s\n' "$DEPLOY_TAG" "$DOCKERHUB_NAMESPACE" >> .env
             docker compose --profile gateway up -d --no-build
