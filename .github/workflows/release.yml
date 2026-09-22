@@ -12,8 +12,9 @@ on:
         required: false
         default: ""
 
+# one production VM: every run (any ref, manual or not) serialises on the same group
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-production
   cancel-in-progress: false
 
 env:
