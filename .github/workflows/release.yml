@@ -115,6 +115,7 @@ jobs:
             git show "$DEPLOY_TAG:docker-compose.yml" > "$target_compose"
             docker compose -f "$target_compose" --project-directory . --profile gateway pull api worker ml-analyzer web
             prev_tag="$(sed -n 's/^IMAGE_TAG=//p' .env | tail -n1)"
+            prev_ns="$(sed -n 's/^DOCKERHUB_NAMESPACE=//p' .env | tail -n1)"
             prev_rev="$(git rev-parse HEAD)"
             healthy() {
               base="${HEALTHCHECK_URL:-http://localhost/healthz}"; base="${base%/healthz}"
@@ -133,13 +134,13 @@ jobs:
             }
             pin() {
               # migrations and nginx config are bind-mounted from the checkout, so it must match the image
-              git checkout -q --detach "$1"
-              sed -i '/^IMAGE_TAG=/d;/^DOCKERHUB_NAMESPACE=/d' .env
-              printf 'IMAGE_TAG=%s\nDOCKERHUB_NAMESPACE=%s\n' "$2" "$DOCKERHUB_NAMESPACE" >> .env
-              IMAGE_TAG="$2" docker compose --profile gateway up -d --no-build
+              git checkout -q --detach "$1" || return 1
+              sed -i '/^IMAGE_TAG=/d;/^DOCKERHUB_NAMESPACE=/d' .env || return 1
+              printf 'IMAGE_TAG=%s\nDOCKERHUB_NAMESPACE=%s\n' "$2" "$3" >> .env || return 1
+              IMAGE_TAG="$2" DOCKERHUB_NAMESPACE="$3" docker compose --profile gateway up -d --no-build
             }
-            pin "$DEPLOY_TAG" "$DEPLOY_TAG"
-            if healthy "deployed $DEPLOY_TAG"; then
+            # a failed `up` (e.g. migration error) is treated like a failed health check
+            if pin "$DEPLOY_TAG" "$DEPLOY_TAG" "$DOCKERHUB_NAMESPACE" && healthy "deployed $DEPLOY_TAG"; then
               docker image prune -af --filter "until=168h" >/dev/null
               exit 0
             fi
@@ -148,7 +149,7 @@ jobs:
               echo "no previous IMAGE_TAG in .env, leaving $DEPLOY_TAG in place for inspection"; exit 1
             fi
             echo "reverting to $prev_tag ($prev_rev)"
-            pin "$prev_rev" "$prev_tag"
+            pin "$prev_rev" "$prev_tag" "${prev_ns:-$DOCKERHUB_NAMESPACE}" || echo "rollback to $prev_tag failed to start"
             healthy "reverted to $prev_tag" || echo "rollback to $prev_tag is also unhealthy"
             exit 1
         env:
