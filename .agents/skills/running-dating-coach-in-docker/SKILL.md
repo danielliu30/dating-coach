@@ -49,7 +49,7 @@ Repository descriptions can be set with `updateRepositoryInfo`.
 | `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_KEY` | secret | SSH target for the deploy job (user must be in the `docker` group) |
 | `GOOGLE_CLIENT_ID` | variable | baked into the web bundle (public, so not a secret) |
 | `DEPLOY_DIR` | variable | compose directory on the VM (default `~/dating-coach`) |
-| `DEPLOY_HEALTHCHECK_URL` | variable | default `http://localhost/healthz`; `https://<domain>/healthz` once TLS exists |
+| `DEPLOY_HEALTHCHECK_URL` | variable | default `http://localhost/healthz`; set to `https://<domain>/healthz` with the host nginx + certbot setup below |
 
 ### Roll back
 Actions -> *Release (build, push, deploy)* -> *Run workflow*, `image_tag` = an earlier commit SHA (list with `listRepositoryTags` on the Docker Hub MCP server). Tests and build are skipped; only `deploy` runs with that tag. If a deploy's health checks fail, the job itself reverts the VM to the previously pinned `IMAGE_TAG` (read from `.env`) and its checkout, then exits non-zero. Manual equivalent on the VM: edit `IMAGE_TAG=` in `.env`, then `docker compose --profile gateway pull && docker compose --profile gateway up -d --no-build`.
@@ -58,9 +58,9 @@ Actions -> *Release (build, push, deploy)* -> *Run workflow*, `image_tag` = an e
 - Docker Engine + Compose plugin; deploy user runs `docker` without sudo.
 - Git checkout of the repo at `DEPLOY_DIR` — required; the deploy job checks out the deployed SHA there.
 - Rollback caveat: `migrate` only runs `up`, so redeploying an older SHA does not revert schema changes; keep migrations backward-compatible or restore the DB first.
-- Production `.env` in that directory (from `.env.example`: `APP_ENV`, `JWT_SECRET`, `POSTGRES_PASSWORD`, `PUBLIC_APP_URL`, `CORS_ORIGINS`, SMTP, Stripe, `GOOGLE_CLIENT_ID`). The deploy job only rewrites `IMAGE_TAG`/`DOCKERHUB_NAMESPACE`.
+- Production `.env` in that directory (from `.env.example`: `APP_ENV`, `JWT_SECRET`, `POSTGRES_PASSWORD`, `PUBLIC_APP_URL=https://<domain>`, `CORS_ORIGINS=https://<domain>`, SMTP, Stripe, `GOOGLE_CLIENT_ID`, `NGINX_PORT=127.0.0.1:8088`, `WEB_PORT=127.0.0.1:3000`). The deploy job only rewrites `IMAGE_TAG`/`DOCKERHUB_NAMESPACE`.
 - SSH key pair: `ssh-keygen -t ed25519 -f deploy_key -N ''`; public half in `~/.ssh/authorized_keys`, private half in `DEPLOY_SSH_KEY`.
-- Port 80 reachable (or host nginx fronting it with `NGINX_PORT` moved, see below). Smoke-test once by hand with `docker compose --profile gateway up -d` before enabling the secrets.
+- Ports 80/443 reachable, host nginx + certbot installed (variant B below) with `NGINX_PORT`/`WEB_PORT` moved off 80. Smoke-test once by hand with `docker compose --profile gateway up -d` before enabling the secrets.
 
 ## Run from the published images
 ```bash
@@ -89,15 +89,22 @@ curl localhost/healthz && curl localhost/ml/healthz && curl -sI localhost/ | hea
 Config: `nginx/default.conf`, mounted read-only; upstreams are the compose service names `api:8080` / `ml-analyzer:8000` / `web:80`.
 If :80 is taken (e.g. by a host nginx) set `NGINX_PORT=8088` **and** `PUBLIC_APP_URL=http://localhost:8088` (add it to `CORS_ORIGINS` too) in `.env`; verification/payment links are built from `PUBLIC_APP_URL`.
 
-### B. Host-installed nginx
+### B. Host-installed nginx with TLS (production)
+`nginx/host-site.conf` = port-80 server (ACME challenge + 301 to https) and a `443 ssl` server with the same routes, cert paths `/etc/letsencrypt/live/<domain>/{fullchain,privkey}.pem`. The file uses `example.com` as the placeholder domain.
 ```bash
-sudo cp nginx/host-site.conf /etc/nginx/sites-available/dating-coach
+sudo apt-get install -y nginx certbot python3-certbot-nginx
+sudo certbot certonly --nginx -d <domain>        # before enabling the site: the 443 block fails nginx -t without the cert files
+sed 's/example.com/<domain>/g' nginx/host-site.conf | sudo tee /etc/nginx/sites-available/dating-coach >/dev/null
 sudo ln -sf /etc/nginx/sites-available/dating-coach /etc/nginx/sites-enabled/dating-coach
 sudo rm -f /etc/nginx/sites-enabled/default
 sudo nginx -t && sudo systemctl reload nginx
-curl localhost/healthz && curl localhost/ml/healthz
+systemctl status certbot.timer && sudo certbot renew --dry-run   # auto-renewal (systemd timer, twice daily)
+printf '#!/bin/sh\nsystemctl reload nginx\n' | sudo tee /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh >/dev/null && sudo chmod +x /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
+curl -fsS https://<domain>/healthz && curl -fsS https://<domain>/ml/healthz && curl -sI http://<domain>/ | head -1   # last one: 301
 ```
-Upstreams are `127.0.0.1:8080` / `127.0.0.1:8000` / `127.0.0.1:3000` (`web`, published on `WEB_PORT`), i.e. the ports compose publishes. The `web` container still needs `--profile gateway`, so run it with `NGINX_PORT` moved off :80; if you change `WEB_PORT`, edit the `location /` upstream in host-site.conf to match.
+Upstreams are `127.0.0.1:8080` / `127.0.0.1:8000` / `127.0.0.1:3000` (`web`, published on `WEB_PORT`), i.e. the ports compose publishes. The `web` container still needs `--profile gateway`, so in `.env` set `NGINX_PORT=127.0.0.1:8088` and `WEB_PORT=127.0.0.1:3000` (off :80, localhost-only so the containerised web is reached solely via the host nginx); if you change `WEB_PORT`, edit the `location /` upstream in host-site.conf to match. Also set `PUBLIC_APP_URL=https://<domain>`, `CORS_ORIGINS=https://<domain>` and the GitHub variable `DEPLOY_HEALTHCHECK_URL=https://<domain>/healthz`.
+
+WebSocket over HTTPS: the API's same-origin check (`coder/websocket` `authenticateOrigin`) compares the `Origin` host to `r.Host`, both `<domain>` because nginx forwards `Host: $http_host`, so `wss://<domain>/api/v1/chat/ws` is accepted; `https://<domain>` in `CORS_ORIGINS` also matches as a scheme-qualified pattern.
 
 ### Smoke-test the proxy
 ```bash
@@ -117,5 +124,6 @@ For the end-to-end flow (sign-up, verification token, chat) follow `.agents/skil
 - `api` and `worker` restart until `migrate` exits 0 and redis/rabbitmq are healthy; give the stack ~20 s.
 - nginx writes the access-log line for a WebSocket (`… /ws … 101`) only when the socket closes; reload the chat page to see it in `docker compose logs nginx`.
 - There is no `/api/v1/healthz`; the API health check is `/healthz` at the root.
+- `nginx -t` on the host fails with "cannot load certificate" if the site is enabled before certbot ran; issue the cert first (or comment out the 443 server temporarily).
 - `docker compose push` needs `docker login` first; the PAT is not available during snapshot builds.
 - The Hub repos are public on the personal account; images contain no secrets (all config via env at runtime).
