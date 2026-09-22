@@ -23,7 +23,7 @@ on:
       - ".github/workflows/e2e.yml"
 
 concurrency:
-  group: e2e-${{ github.ref }}
+  group: e2e-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
