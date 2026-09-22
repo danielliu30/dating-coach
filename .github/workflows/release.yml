@@ -86,7 +86,7 @@ jobs:
 
   # Push-based deploy: SSH into the production VM, pin IMAGE_TAG in its .env so
   # later manual `docker compose up` calls keep the same images, pull, up, and
-  # fail loudly if /healthz does not come back.
+  # if the health checks do not come back, revert to the previously pinned tag and fail the job.
   deploy:
     needs: [build-push]
     if: ${{ !cancelled() && (inputs.image_tag || needs.build-push.result == 'success') }}
@@ -114,25 +114,43 @@ jobs:
             target_compose="$(mktemp)"; trap 'rm -f "$target_compose"' EXIT
             git show "$DEPLOY_TAG:docker-compose.yml" > "$target_compose"
             docker compose -f "$target_compose" --project-directory . --profile gateway pull api worker ml-analyzer web
-            # migrations and nginx config are bind-mounted from the checkout, so it must match the image
-            git checkout -q --detach "$DEPLOY_TAG"
-            sed -i '/^IMAGE_TAG=/d;/^DOCKERHUB_NAMESPACE=/d' .env
-            printf 'IMAGE_TAG=%s\nDOCKERHUB_NAMESPACE=%s\n' "$DEPLOY_TAG" "$DOCKERHUB_NAMESPACE" >> .env
-            docker compose --profile gateway up -d --no-build
-            base="${HEALTHCHECK_URL:-http://localhost/healthz}"; base="${base%/healthz}"
-            for i in $(seq 1 45); do
-              if curl -fsS "$base/healthz" >/dev/null 2>&1 \
-                && curl -fsS "$base/ml/healthz" >/dev/null 2>&1 \
-                && curl -fsS -o /dev/null "$base/"; then
-                echo "deployed $IMAGE_TAG, health checks OK after ${i} attempts"
-                docker image prune -af --filter "until=168h" >/dev/null
-                exit 0
-              fi
-              sleep 2
-            done
-            echo "health checks failed for $IMAGE_TAG"
-            docker compose --profile gateway ps
-            docker compose --profile gateway logs --no-color --tail 50 api ml-analyzer web migrate nginx
+            prev_tag="$(sed -n 's/^IMAGE_TAG=//p' .env | tail -n1)"
+            prev_ns="$(sed -n 's/^DOCKERHUB_NAMESPACE=//p' .env | tail -n1)"
+            prev_rev="$(git rev-parse HEAD)"
+            healthy() {
+              base="${HEALTHCHECK_URL:-http://localhost/healthz}"; base="${base%/healthz}"
+              for i in $(seq 1 45); do
+                if curl -fsS "$base/healthz" >/dev/null 2>&1 \
+                  && curl -fsS "$base/ml/healthz" >/dev/null 2>&1 \
+                  && curl -fsS -o /dev/null "$base/"; then
+                  echo "$1: health checks OK after ${i} attempts"; return 0
+                fi
+                sleep 2
+              done
+              echo "$1: health checks failed"
+              docker compose --profile gateway ps
+              docker compose --profile gateway logs --no-color --tail 50 api ml-analyzer web migrate nginx
+              return 1
+            }
+            pin() {
+              # migrations and nginx config are bind-mounted from the checkout, so it must match the image
+              git checkout -q --detach "$1" || return 1
+              sed -i '/^IMAGE_TAG=/d;/^DOCKERHUB_NAMESPACE=/d' .env || return 1
+              printf 'IMAGE_TAG=%s\nDOCKERHUB_NAMESPACE=%s\n' "$2" "$3" >> .env || return 1
+              IMAGE_TAG="$2" DOCKERHUB_NAMESPACE="$3" docker compose --profile gateway up -d --no-build
+            }
+            # a failed `up` (e.g. migration error) is treated like a failed health check
+            if pin "$DEPLOY_TAG" "$DEPLOY_TAG" "$DOCKERHUB_NAMESPACE" && healthy "deployed $DEPLOY_TAG"; then
+              docker image prune -af --filter "until=168h" >/dev/null
+              exit 0
+            fi
+            # roll back to what was running before; the job still fails so the bad release is visible
+            if [ -z "$prev_tag" ]; then
+              echo "no previous IMAGE_TAG in .env, leaving $DEPLOY_TAG in place for inspection"; exit 1
+            fi
+            echo "reverting to $prev_tag ($prev_rev)"
+            pin "$prev_rev" "$prev_tag" "${prev_ns:-$DOCKERHUB_NAMESPACE}" || echo "rollback to $prev_tag failed to start"
+            healthy "reverted to $prev_tag" || echo "rollback to $prev_tag is also unhealthy"
             exit 1
         env:
           DEPLOY_DIR: ${{ vars.DEPLOY_DIR }}

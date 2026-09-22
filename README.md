@@ -125,7 +125,7 @@ Optional repository **variables**: `GOOGLE_CLIENT_ID` (baked into the web bundle
 4. Ports 80 (and 443 if you terminate TLS on the host) open; if a host nginx fronts the stack, move `NGINX_PORT` off 80 as described above.
 5. A deploy key: `ssh-keygen -t ed25519 -f deploy_key -N ''`, append `deploy_key.pub` to `~/.ssh/authorized_keys`, store the private half as `DEPLOY_SSH_KEY`.
 
-A first `docker compose --profile gateway up -d` by hand is a good smoke test before wiring the secrets; after that every merge to `main` deploys itself, and the run goes red in Actions if `/healthz`, `/ml/healthz` or `/` does not answer through nginx within 90 s (the new containers are left running for inspection; roll back with the `image_tag` input). Note that `migrate` only runs `up`, so a rollback does not undo schema changes — keep migrations backward-compatible with the previous release (expand/contract), or restore the DB separately before rolling back across a breaking migration.
+A first `docker compose --profile gateway up -d` by hand is a good smoke test before wiring the secrets; after that every merge to `main` deploys itself, and the run goes red in Actions if `/healthz`, `/ml/healthz` or `/` does not answer through nginx within 90 s (the VM is then reverted to the previously pinned `IMAGE_TAG`/checkout automatically and the failing tag's logs are printed; the run still fails). Note that `migrate` only runs `up`, so a rollback does not undo schema changes — keep migrations backward-compatible with the previous release (expand/contract), or restore the DB separately before rolling back across a breaking migration.
 
 ## Running components without Compose
 

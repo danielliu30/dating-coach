@@ -52,7 +52,7 @@ Repository descriptions can be set with `updateRepositoryInfo`.
 | `DEPLOY_HEALTHCHECK_URL` | variable | default `http://localhost/healthz`; `https://<domain>/healthz` once TLS exists |
 
 ### Roll back
-Actions -> *Release (build, push, deploy)* -> *Run workflow*, `image_tag` = an earlier commit SHA (list with `listRepositoryTags` on the Docker Hub MCP server). Tests and build are skipped; only `deploy` runs with that tag. Manual equivalent on the VM: edit `IMAGE_TAG=` in `.env`, then `docker compose --profile gateway pull && docker compose --profile gateway up -d --no-build`.
+Actions -> *Release (build, push, deploy)* -> *Run workflow*, `image_tag` = an earlier commit SHA (list with `listRepositoryTags` on the Docker Hub MCP server). Tests and build are skipped; only `deploy` runs with that tag. If a deploy's health checks fail, the job itself reverts the VM to the previously pinned `IMAGE_TAG` (read from `.env`) and its checkout, then exits non-zero. Manual equivalent on the VM: edit `IMAGE_TAG=` in `.env`, then `docker compose --profile gateway pull && docker compose --profile gateway up -d --no-build`.
 
 ### One-time VM prerequisites
 - Docker Engine + Compose plugin; deploy user runs `docker` without sudo.
