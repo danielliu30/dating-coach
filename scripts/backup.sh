@@ -5,7 +5,7 @@
 # Usage:   scripts/backup.sh            (run from anywhere; cron-friendly)
 # Reads:   <repo>/.env   POSTGRES_USER / POSTGRES_DB (default datingcoach)
 #                        BACKUP_DIR (default <repo>/backups)
-#                        BACKUP_RETENTION_DAYS (default 14; local dumps older than that are deleted)
+#                        BACKUP_RETENTION_DAYS (default 14, must be >= 1; local dumps older than that are deleted)
 #                        BACKUP_S3_URI (e.g. s3://my-bucket/dating-coach; empty = local only)
 #                        BACKUP_S3_ENDPOINT (optional; Backblaze/R2/MinIO endpoint URL)
 #                        AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_DEFAULT_REGION
@@ -45,6 +45,8 @@ BACKUP_DIR="${BACKUP_DIR:-$REPO_DIR/backups}"
 BACKUP_RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-14}"
 BACKUP_S3_URI="${BACKUP_S3_URI:-}"
 BACKUP_S3_ENDPOINT="${BACKUP_S3_ENDPOINT:-}"
+[[ "$BACKUP_RETENTION_DAYS" =~ ^[1-9][0-9]*$ ]] \
+    || { echo "backup: BACKUP_RETENTION_DAYS must be a positive integer (got '$BACKUP_RETENTION_DAYS')" >&2; exit 2; }
 
 # compose runs docker compose against the repo's compose project regardless of
 # the caller's working directory.
