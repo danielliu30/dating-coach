@@ -58,17 +58,31 @@ jobs:
       - name: Build images (tagged with the git SHA)
         run: docker compose --profile gateway build api ml-analyzer web
 
-      - name: Tag images as latest
+      - name: Push SHA tags
+        run: docker compose --profile gateway push api ml-analyzer web
+
+      # `latest` only ever points at the current tip of main: skip promotion for
+      # manual runs on other refs, and when a newer main commit has already landed
+      # (concurrency groups do not guarantee FIFO between queued runs).
+      - name: Decide whether to promote latest
+        id: promote
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "not main ($GITHUB_REF): SHA tags pushed, latest left untouched"; exit 0
+          fi
+          git fetch -q origin main
+          if [ "$(git rev-parse origin/main)" != "$GITHUB_SHA" ]; then
+            echo "main has moved past $GITHUB_SHA: latest left untouched"; exit 0
+          fi
+          echo "latest=true" >> "$GITHUB_OUTPUT"
+
+      - name: Push latest tags
+        if: steps.promote.outputs.latest == 'true'
         run: |
           for img in dating-coach-backend dating-coach-ml-analyzer dating-coach-web; do
             docker tag "$DOCKERHUB_NAMESPACE/$img:$IMAGE_TAG" "$DOCKERHUB_NAMESPACE/$img:latest"
           done
-
-      - name: Push SHA tags
-        run: docker compose --profile gateway push api ml-analyzer web
-
-      - name: Push latest tags
-        run: IMAGE_TAG=latest docker compose --profile gateway push api ml-analyzer web
+          IMAGE_TAG=latest docker compose --profile gateway push api ml-analyzer web
 
   # Push-based deploy: SSH into the production VM, pin IMAGE_TAG in its .env so
   # later manual `docker compose up` calls keep the same images, pull, up, and
