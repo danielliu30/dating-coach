@@ -79,8 +79,10 @@ concrete. It is built around agency:
 - *Never diagnose rejection.* Feedback describes what happened (no reply, a
   short reply, an engaged reply) and does not claim to know *why* the match
   pulled back. We can't know that. The heuristic scorer's wording is fixed and
-  tested for this. For the LLM backend it is a prompt rule only: the parser
-  rejects drafted replies but has no scan for rejection-diagnosis language.
+  tested for this; the LLM parser rejects any completion whose feedback
+  contains diagnosis language ("because they", "lost interest", "felt bored", "turned them off",
+  "rejected", ...) and falls back to the heuristic scorer, just as it does for
+  drafted replies.
 
 ### Image track
 
@@ -155,8 +157,8 @@ default to `[]`, so clients that predate them are unaffected.
 flat), so it is consistent across backends. `comment`, `summary` and
 `improvements` describe reply outcomes (no reply / short reply / engaged
 reply) and hand them back as something to think about; they never contain a
-drafted message (enforced by the LLM parser) and are not meant to state why
-the match replied the way they did (a prompt rule for the LLM backend).
+drafted message and never state why the match replied the way they did (both
+enforced by the LLM parser, with fallback to the heuristic scorer).
 
 ### `POST /analyze/images` (photos)
 

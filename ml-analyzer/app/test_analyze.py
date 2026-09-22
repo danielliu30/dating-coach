@@ -509,7 +509,7 @@ def test_enforce_agency_is_the_shared_drafting_gate() -> None:
     from app.coaching import RULES, enforce_agency
     from app.scoring import llm
 
-    assert [rule.name for rule in RULES] == ["drafting", "mind_reading", "prescription"]
+    assert [rule.name for rule in RULES] == ["drafting", "mind_reading", "prescription", "diagnosis"]
     assert llm.enforce_agency is enforce_agency
 
     sources = ["You could say I'm obsessed with climbing, but lately I mostly stay home"]
@@ -766,6 +766,80 @@ def test_llm_parse_rejects_drafted_replies() -> None:
         bad = dict(good, overall=dict(good["overall"], improvements=[disguised]))
         with pytest.raises(ValueError, match="drafted a reply"):
             scorer._parse(json.dumps(bad), boundaries, sources)
+
+
+def test_llm_parse_rejects_diagnosing_why_the_match_replied() -> None:
+    """A completion that explains the match's motives is a failed completion (triggers the fallback); citations are exempt."""
+    from app.config import Settings
+    from app.scoring.llm import LLMScorer
+
+    settings = Settings(
+        backend="llm", llm_provider="openai", llm_api_key="k", llm_model="m", llm_base_url="http://x",
+        llm_timeout=1.0, model_dir="", segment_size=2,
+    )
+    scorer = LLMScorer(settings)
+    boundaries = [(0, 1)]
+    good = {
+        "segments": [{"start_position": 0, "end_position": 1, "engagement_score": 0.4, "comment": "Message 1 drew a one-word reply."}],
+        "overall": {"engagement_score": 0.4, "summary": "Two of three messages got short replies.", "strengths": [], "improvements": []},
+    }
+    assert scorer._parse(json.dumps(good), boundaries).overall.summary == good["overall"]["summary"]
+
+    diagnoses = (
+        "They replied briefly because they lost interest.",
+        "Message 3 got no reply because it turned them off.",
+        "The long opener probably scared her off.",
+        "It reads like they weren't interested after Message 2.",
+        "This is where you were rejected.",
+        "You may have been too intense for them.",
+        "Your long opener made it hard for them to respond.",
+        "Two questions in a row; that is why they stopped.",
+        "The reason they went quiet was the pace.",
+        "It's unclear why they dropped off, but the tone shifted.",
+        "The silence was due to the topic change.",
+        "It reads like they weren\u2019t interested after Message 2.",
+        "They felt bored, so they stopped replying.",
+        "She seemed overwhelmed by the three questions.",
+        "The pacing made them lose interest.",
+        "They decided not to continue after the weekend.",
+        "The thread stalled because of the topic change.",
+        "The match lost interest after Message 4.",
+        "Your match probably felt bored by the logistics.",
+        "They had decided not to continue.",
+        "They are losing interest as the thread goes on.",
+        "She has been feeling bored since Message 3.",
+    )
+    for field in ("summary", "improvements", "reflection_questions", "patterns", "strengths"):
+        for diagnosis in diagnoses:
+            value = diagnosis if field == "summary" else [diagnosis]
+            bad = dict(good, overall=dict(good["overall"], **{field: value}))
+            with pytest.raises(ValueError, match="^llm (diagnosed why the match replied|mind-read the match)"):
+                scorer._parse(json.dumps(bad), boundaries)
+    bad_comment = dict(good, segments=[dict(good["segments"][0], comment=diagnoses[0])])
+    with pytest.raises(ValueError, match="^llm (diagnosed why the match replied|mind-read the match)"):
+        scorer._parse(json.dumps(bad_comment), boundaries)
+
+    sources = ["I only ask because you seem busy every weekend"]
+    cited = 'Message 2 ("I only ask because you seem busy") drew a one-word reply.'
+    fine = dict(good, overall=dict(good["overall"], improvements=[cited]))
+    assert scorer._parse(json.dumps(fine), boundaries, sources).overall.improvements == [cited]
+    uncited = dict(good, overall=dict(good["overall"], improvements=["I only ask because you seem busy drew nothing."]))
+    with pytest.raises(ValueError, match="^llm (diagnosed why the match replied|mind-read the match)"):
+        scorer._parse(json.dumps(uncited), boundaries, sources)
+
+    for outcome_only in (
+        "Message 3 got no reply.",
+        "Their replies got shorter after Message 4.",
+        "Most of the questions in this stretch were yours.",
+        "Did you enjoy this conversation, setting their replies aside?",
+        "Do you ask questions because the silence feels uncomfortable?",
+        "Message 5 was the longest, and it got the shortest reply.",
+        "Were you bored by this exchange, or did you want to continue?",
+        "Did you lose interest before they did?",
+        "You decided not to follow up after Message 6.",
+    ):
+        ok = dict(good, overall=dict(good["overall"], patterns=[outcome_only]))
+        assert scorer._parse(json.dumps(ok), boundaries).overall.patterns == [outcome_only]
 
 
 def test_strip_citations_blanks_only_provable_customer_quotes() -> None:

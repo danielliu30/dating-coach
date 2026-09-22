@@ -109,6 +109,28 @@ PRESCRIPTION = re.compile(
     re.IGNORECASE,
 )
 
+# Phrases that claim to know why the match replied the way they did (causal explanations,
+# where ``MIND_READING`` covers asserted states). The prompt forbids them outright ("you
+# cannot know that"), so any hit means the model diagnosed the match. ``because`` counts
+# only when it introduces a cause (a pronoun or ``of``), so a bare "because" inside a
+# reflection question does not cost a fallback, and feelings/decisions are only diagnoses
+# when attributed to the match (``_MATCH_AUX``: ``_MATCH`` plus optional auxiliaries such as
+# "had" or "probably"), never to the customer ("Were you bored?" is a reflection question).
+_MATCH_AUX = (
+    _MATCH + r"( (had|have|has|are|were|is|was|might|may|must|probably|likely|clearly|just|simply|also|then|been|being|feeling))*"
+)
+DIAGNOSIS = re.compile(
+    r"\b(because (they|she|he|it|you|your|of)|due to|(that|this|which) is why|(the|one) reason (they|she|he|for)|why (they|she|he)|"
+    r"made it (hard|harder|difficult|tough|easy|easier) for (her|him|them)|" + _MATCH_AUX + r" (lost|lose|losing|been losing) interest|"
+    r"(not|wasn't|isn't|weren't) interested|"
+    r"(turned?|turning|put|putting|scared|scaring|pushed|pushing|drove|driving) (her|him|them) (off|away)|turn-?off|"
+    r"(you were|you got|you have been|you've been) rejected|reject(ed|ing|s)? you|rejection|(didn't|did not|doesn't|does not) (like|fancy|care for|want) you|"
+    r"(bored|annoyed|overwhelmed|intimidated) (her|him|them)|too (needy|eager|keen|intense|much|forward|strong) for (her|him|them)|"
+    + _MATCH_AUX + r" (felt|feel|feels|feeling|seemed|seem|seems|got|gotten|was|were|been|being)? ?(bored|annoyed|overwhelmed|intimidated|uninterested|put off)|"
+    r"(made|making|makes) (her|him|them) lose interest|" + _MATCH_AUX + r" (decided|deciding|decide) (not to|against|to stop))\b",
+    re.IGNORECASE,
+)
+
 # The one citation syntax the prompt mandates, ``Message N ("...")``, up to and including the
 # opening quote (group 1). Citations written any other way are simply not exempted.
 CITATION_START = re.compile(r"message\s+\d+\s*\(\s*([\"\u201c])", re.IGNORECASE)
@@ -140,6 +162,8 @@ RULES: Tuple[AgencyRule, ...] = (
     AgencyRule("drafting", DRAFTING, "llm drafted a reply for the customer"),
     AgencyRule("mind_reading", MIND_READING, "llm mind-read the match"),
     AgencyRule("prescription", PRESCRIPTION, "llm prescribed the customer's dating life"),
+    # Deliberately broad: a needless fallback is safe, an invented explanation reaching the customer is not.
+    AgencyRule("diagnosis", DIAGNOSIS, "llm diagnosed why the match replied"),
 )
 
 
