@@ -4,6 +4,13 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      image_tag:
+        description: >-
+          Deploy an already-published image tag (e.g. an older git SHA) instead of
+          building this commit. Leave empty for a normal test -> build -> deploy run.
+        required: false
+        default: ""
 
 concurrency:
   group: release-${{ github.ref }}
@@ -12,19 +19,25 @@ concurrency:
 env:
   DOCKERHUB_NAMESPACE: ${{ secrets.DOCKERHUB_USERNAME }}
   IMAGE_TAG: ${{ github.sha }}
+  DEPLOY_TAG: ${{ inputs.image_tag || github.sha }}
 
 jobs:
   # Never publish an image from a commit that fails any of the test workflows.
   backend:
+    if: ${{ !inputs.image_tag }}
     uses: ./.github/workflows/backend.yml
   app:
+    if: ${{ !inputs.image_tag }}
     uses: ./.github/workflows/app.yml
   ml-analyzer:
+    if: ${{ !inputs.image_tag }}
     uses: ./.github/workflows/ml-analyzer.yml
   e2e:
+    if: ${{ !inputs.image_tag }}
     uses: ./.github/workflows/e2e.yml
 
   build-push:
+    if: ${{ !inputs.image_tag }}
     needs: [backend, app, ml-analyzer, e2e]
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -56,3 +69,46 @@ jobs:
 
       - name: Push latest tags
         run: IMAGE_TAG=latest docker compose --profile gateway push api ml-analyzer web
+
+  # Push-based deploy: SSH into the production VM, pin IMAGE_TAG in its .env so
+  # later manual `docker compose up` calls keep the same images, pull, up, and
+  # fail loudly if /healthz does not come back.
+  deploy:
+    needs: [build-push]
+    if: ${{ !cancelled() && (inputs.image_tag || needs.build-push.result == 'success') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: production
+      url: ${{ vars.DEPLOY_HEALTHCHECK_URL || 'http://localhost/healthz' }}
+    steps:
+      - uses: appleboy/ssh-action@v1.2.4
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          envs: DEPLOY_TAG,DEPLOY_DIR,DOCKERHUB_NAMESPACE,HEALTHCHECK_URL
+          script: |
+            set -euo pipefail
+            cd "${DEPLOY_DIR:-$HOME/dating-coach}"
+            test -f .env || { echo "production .env missing in $(pwd)"; exit 1; }
+            sed -i '/^IMAGE_TAG=/d;/^DOCKERHUB_NAMESPACE=/d' .env
+            printf 'IMAGE_TAG=%s\nDOCKERHUB_NAMESPACE=%s\n' "$DEPLOY_TAG" "$DOCKERHUB_NAMESPACE" >> .env
+            export IMAGE_TAG="$DEPLOY_TAG"
+            docker compose --profile gateway pull api worker ml-analyzer web
+            docker compose --profile gateway up -d --no-build
+            for i in $(seq 1 45); do
+              if curl -fsS "${HEALTHCHECK_URL:-http://localhost/healthz}" >/dev/null 2>&1; then
+                echo "deployed $IMAGE_TAG, health check OK after ${i} attempts"
+                docker image prune -f >/dev/null
+                exit 0
+              fi
+              sleep 2
+            done
+            echo "health check failed for $IMAGE_TAG"
+            docker compose --profile gateway ps
+            docker compose --profile gateway logs --no-color --tail 50 api migrate nginx
+            exit 1
+        env:
+          DEPLOY_DIR: ${{ vars.DEPLOY_DIR }}
+          HEALTHCHECK_URL: ${{ vars.DEPLOY_HEALTHCHECK_URL }}
