@@ -96,10 +96,11 @@ jobs:
             if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
               git fetch -q origin && git checkout -q --detach "$DEPLOY_TAG"
             fi
+            export IMAGE_TAG="$DEPLOY_TAG" DOCKERHUB_NAMESPACE
+            # pull before touching .env so a bad tag never gets pinned
+            docker compose --profile gateway pull api worker ml-analyzer web
             sed -i '/^IMAGE_TAG=/d;/^DOCKERHUB_NAMESPACE=/d' .env
             printf 'IMAGE_TAG=%s\nDOCKERHUB_NAMESPACE=%s\n' "$DEPLOY_TAG" "$DOCKERHUB_NAMESPACE" >> .env
-            export IMAGE_TAG="$DEPLOY_TAG"
-            docker compose --profile gateway pull api worker ml-analyzer web
             docker compose --profile gateway up -d --no-build
             base="${HEALTHCHECK_URL:-http://localhost/healthz}"; base="${base%/healthz}"
             for i in $(seq 1 45); do
