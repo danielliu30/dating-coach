@@ -117,11 +117,13 @@ For the end-to-end flow (sign-up, verification token, chat) follow `.agents/skil
 `scripts/backup.sh` / `scripts/restore.sh` run against the compose stack from any cwd; they read `POSTGRES_USER`/`POSTGRES_DB` and `BACKUP_*`/`AWS_*` from the repo `.env` (env vars already set win).
 ```bash
 scripts/backup.sh                     # -> $BACKUP_DIR/<db>-<UTC stamp>.sql.gz (pg_dump --clean --if-exists | gzip), prunes > BACKUP_RETENTION_DAYS (14), uploads if BACKUP_S3_URI is set
-scripts/restore.sh <file|s3://...>    # confirm (or --yes) -> stop api+worker -> DROP/CREATE SCHEMA public + replay in one transaction -> start api+worker
+scripts/restore.sh <file|s3://...>    # confirm (or --yes) -> stop api+worker -> DROP/CREATE SCHEMA public + replay in one transaction -> run migrate -> start api+worker
+scripts/restore.sh <dump> --no-start  # same, but skip migrate and leave api+worker stopped (use before deploying an OLDER image tag)
 ```
 - Cron on the VM (deploy user): `15 3 * * * $HOME/dating-coach/scripts/backup.sh >> $HOME/dating-coach-backup.log 2>&1`.
 - Off-box: `BACKUP_S3_URI=s3://bucket/prefix`, `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`, `BACKUP_S3_ENDPOINT` for non-AWS providers; needs the `aws` CLI. Remote retention is a bucket lifecycle rule, not the script.
-- Rollback across a breaking migration: `restore.sh` a pre-migration dump first, then dispatch the release workflow with the older `image_tag` (`migrate` only runs `up`).
+- Rollback across a breaking migration: `restore.sh <pre-migration dump> --no-start` first, then dispatch the release workflow with the older `image_tag` (`migrate` only runs `up`; without `--no-start` the current release's migrate would re-apply the new schema).
+- A dump is a snapshot as of when `pg_dump` started (that is the recovery point); retention keeps the last `BACKUP_RETENTION_DAYS` daily dumps locally.
 - Second layer: provider snapshots of the VM disk / `dating-coach_postgres-data` volume.
 
 ## Gotchas

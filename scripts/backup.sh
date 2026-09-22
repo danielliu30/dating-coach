@@ -5,11 +5,13 @@
 # Usage:   scripts/backup.sh            (run from anywhere; cron-friendly)
 # Reads:   <repo>/.env   POSTGRES_USER / POSTGRES_DB (default datingcoach)
 #                        BACKUP_DIR (default <repo>/backups)
-#                        BACKUP_RETENTION_DAYS (default 14)
+#                        BACKUP_RETENTION_DAYS (default 14; local dumps older than that are deleted)
 #                        BACKUP_S3_URI (e.g. s3://my-bucket/dating-coach; empty = local only)
 #                        BACKUP_S3_ENDPOINT (optional; Backblaze/R2/MinIO endpoint URL)
 #                        AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_DEFAULT_REGION
-# Output:  $BACKUP_DIR/<db>-YYYYmmddTHHMMSSZ.sql.gz  (path printed on stdout)
+# Output:  $BACKUP_DIR/<db>-YYYYmmddTHHMMSSZ.sql.gz  (path printed on stdout);
+#          a consistent snapshot as of the moment pg_dump starts, so the
+#          recovery point is that timestamp (commits after it are not included).
 # Exit:    non-zero if pg_dump, gzip or the upload fails; a failed upload
 #          leaves the local file in place.
 set -euo pipefail
@@ -58,6 +60,7 @@ mkdir -p "$BACKUP_DIR"
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 out="$BACKUP_DIR/${POSTGRES_DB}-${stamp}.sql.gz"
 tmp="$out.part"
+trap 'rm -f "$tmp"' EXIT
 
 # --clean --if-exists makes the dump re-runnable into a non-empty database
 # (restore.sh relies on it). No password: the official image trusts local
@@ -66,7 +69,9 @@ compose exec -T postgres pg_dump --clean --if-exists -U "$POSTGRES_USER" "$POSTG
 mv "$tmp" "$out"
 echo "$out"
 
-find "$BACKUP_DIR" -maxdepth 1 -name "${POSTGRES_DB}-*.sql.gz" -type f -mtime +"$BACKUP_RETENTION_DAYS" -print -delete
+# -mtime +N matches files older than N+1 whole days, so N-1 keeps exactly the
+# last BACKUP_RETENTION_DAYS daily dumps.
+find "$BACKUP_DIR" -maxdepth 1 -name "${POSTGRES_DB}-*.sql.gz" -type f -mtime +"$((BACKUP_RETENTION_DAYS - 1))" -print -delete
 
 if [ -n "$BACKUP_S3_URI" ]; then
     endpoint_args=()
