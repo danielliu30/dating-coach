@@ -202,5 +202,35 @@ Top tab labels may be truncated ("Coac…", "Analy…") at ~1024px — cosmetic,
   defaults (rate 120 / 3 years / 17:00–21:00) instead of the saved profile; booking not validated
   against availability/overlap; reschedule having no UI control.
 
+## Conversation analysis and controlled LLM fallback checks
+- Browser path: **Analyse** → fill Title, Their name, and `me:` / `them:` transcript →
+  **Get feedback**. Use at least 3 self messages and a >=2:1 imbalance to exercise
+  reciprocity. The API's `overall.patterns` renders as **A pattern we noticed**;
+  `overall.reflection_questions` renders as **Worth asking yourself**. Scroll below
+  the overall card for the per-stretch score/comment.
+- History is under **Analyse** → scroll down → **Past analyses / Open**; click a
+  saved title to fetch its latest result. Capture both the history list and reopened result.
+- Check `/healthz` for the actual active backend/version instead of assuming a
+  version suffix; heuristic versions evolve. An LLM fallback's model_version
+  starts with `llm-` and ends in `+fallback:heuristic-...`, not `heuristic-...`.
+- Test parser/fallback behavior without paid LLM credentials by starting a separate
+  container from the freshly built analyzer image on an unused port. Set
+  `ML_BACKEND=llm`, `LLM_PROVIDER=openai`, `LLM_API_KEY=test-placeholder`,
+  `LLM_MODEL=agency-test`, `LLM_BASE_URL=http://127.0.0.1:<stub-port>/v1`.
+  On Linux, `--network host` lets it reach a host-local stub; override uvicorn's
+  port to avoid the main analyzer's :8000. Keep the browser's main stack unchanged.
+- The stub must accept `/v1/chat/completions` and return
+  `{"choices":[{"message":{"content":"<JSON completion string>"}}]}`.
+  Completion segments must cover exactly the `[start-end]` boundaries requested
+  in the user prompt, or fallback occurs for schema/coverage errors rather than
+  the agency gate. Set a stable segment size on the isolated analyzer.
+- Pair each rejection test with a clean-completion control using the same request;
+  require clean text to pass unchanged with an LLM model_version. Capture container
+  logs to distinguish agency ValueError from network/schema fallback. Exercise
+  segment comments and all overall prose fields, plus validated customer citations
+  versus the same words uncited. Use direct unauthenticated `/analyze` requests on
+  the local analyzer, never browser-session cookies.
+- Stop the isolated analyzer/stub after collecting response JSON and logs.
+
 ## Devin Secrets Needed
 None — the whole stack runs offline with `.env.example` defaults.
