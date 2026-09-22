@@ -12,9 +12,8 @@ on:
         required: false
         default: ""
 
-# one production VM: every run (any ref, manual or not) serialises on the same group
 concurrency:
-  group: release-production
+  group: release-${{ github.ref }}
   cancel-in-progress: false
 
 env:
@@ -92,7 +91,7 @@ jobs:
     needs: [build-push]
     if: ${{ !cancelled() && (inputs.image_tag || needs.build-push.result == 'success') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     environment:
       name: production
       url: ${{ vars.DEPLOY_HEALTHCHECK_URL }}
@@ -109,6 +108,9 @@ jobs:
             test -f .env || { echo "production .env missing in $(pwd)"; exit 1; }
             git rev-parse --is-inside-work-tree >/dev/null 2>&1 || { echo "$(pwd) must be a git checkout of the repo"; exit 1; }
             export IMAGE_TAG="$DEPLOY_TAG" DOCKERHUB_NAMESPACE
+            # one VM, possibly several concurrent runs (main push + manual rollback): serialise on the host
+            exec 9>.deploy.lock
+            flock -w 900 9 || { echo "another deploy has held .deploy.lock for 15 min"; exit 1; }
             git fetch -q origin
             # preflight: pull with the target revision's compose file, before touching the checkout or .env,
             # so a missing tag or image leaves the VM untouched
