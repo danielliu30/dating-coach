@@ -101,7 +101,7 @@ push to main
               └─ deploy: ssh to the VM → compose pull → git checkout <sha> → pin IMAGE_TAG in .env → compose up -d → curl /healthz, /ml/healthz, /
 ```
 
-**Tagging convention.** Every image (`dating-coach-backend`, `-ml-analyzer`, `-web`) is pushed as both `latest` and the full commit SHA. The VM always runs a SHA tag: the deploy step writes `IMAGE_TAG=<sha>` into the production `.env`, so a later manual `docker compose up -d` on the VM keeps the same images instead of drifting to `latest`.
+**Tagging convention.** Every image (`dating-coach-backend`, `-ml-analyzer`, `-web`) is pushed with the full commit SHA; `latest` is additionally promoted only when the run is on `main` *and* that SHA is still the tip of `main` (so an older queued run or a manual dispatch on another branch can never move `latest` backwards). The VM always runs a SHA tag: the deploy step writes `IMAGE_TAG=<sha>` into the production `.env`, so a later manual `docker compose up -d` on the VM keeps the same images instead of drifting to `latest`.
 
 **Required GitHub repository secrets**
 

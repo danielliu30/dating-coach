@@ -29,7 +29,7 @@ Repository descriptions can be set with `updateRepositoryInfo`.
 ## Deployment flow (CI/CD)
 `.github/workflows/release.yml` (trigger: `push` to `main`, or `workflow_dispatch`):
 1. Runs `backend.yml`, `app.yml`, `ml-analyzer.yml`, `e2e.yml` as reusable workflows (`workflow_call`). Any failure stops the release.
-2. `build-push`: `docker compose --profile gateway build api ml-analyzer web` with `IMAGE_TAG=${{ github.sha }}`, `DOCKERHUB_NAMESPACE=$DOCKERHUB_USERNAME`, `WEB_API_URL=""` (same-origin bundle) and `GOOGLE_CLIENT_ID` from the repo variable; then `docker tag ... :latest` and pushes **both** the SHA and `latest` tags.
+2. `build-push`: `docker compose --profile gateway build api ml-analyzer web` with `IMAGE_TAG=${{ github.sha }}`, `DOCKERHUB_NAMESPACE=$DOCKERHUB_USERNAME`, `WEB_API_URL=""` (same-origin bundle) and `GOOGLE_CLIENT_ID` from the repo variable; pushes the SHA tags, then promotes `latest` only if the run is on `main` and `github.sha` is still `origin/main` (manual dispatches on other branches and superseded main runs publish SHA tags only).
 3. `deploy`: `appleboy/ssh-action` into the VM, then in `DEPLOY_DIR` (default `~/dating-coach`):
    ```bash
    git fetch origin && git show "$SHA:docker-compose.yml" > /tmp/c.yml
