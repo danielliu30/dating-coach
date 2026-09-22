@@ -155,6 +155,33 @@ Optional repository **variables**: `GOOGLE_CLIENT_ID` (baked into the web bundle
 
 A first `docker compose --profile gateway up -d` by hand is a good smoke test before wiring the secrets; after that every merge to `main` deploys itself, and the run goes red in Actions if `/healthz`, `/ml/healthz` or `/` does not answer through nginx within 90 s (the VM is then reverted to the previously pinned `IMAGE_TAG`/checkout automatically and the failing tag's logs are printed; the run still fails). Note that `migrate` only runs `up`, so a rollback does not undo schema changes — keep migrations backward-compatible with the previous release (expand/contract), or restore the DB separately before rolling back across a breaking migration.
 
+## Backups
+
+Postgres is the only stateful service worth backing up (Redis holds rate-limit counters and the token denylist, RabbitMQ only in-flight jobs). `scripts/backup.sh` and `scripts/restore.sh` work against the running compose stack and read `POSTGRES_USER` / `POSTGRES_DB` and the `BACKUP_*` settings from `.env`.
+
+**Schedule.** Daily, via cron on the VM as the deploy user (must be able to run `docker` without sudo), from the compose checkout:
+
+```bash
+crontab -e
+# 03:15 UTC every day; stdout/stderr appended to a log so a failing night is visible
+15 3 * * * $HOME/dating-coach/scripts/backup.sh >> $HOME/dating-coach-backup.log 2>&1
+```
+
+Each run does `docker compose exec -T postgres pg_dump --clean --if-exists -U $POSTGRES_USER $POSTGRES_DB | gzip` into `BACKUP_DIR/<db>-<UTC timestamp>.sql.gz` (default `<repo>/backups/`, git-ignored; `/var/backups/dating-coach` is a sensible production value), then deletes local dumps older than `BACKUP_RETENTION_DAYS` (default 14, i.e. the last 14 daily dumps stay). Each dump is a consistent snapshot as of the moment `pg_dump` starts — that timestamp is the recovery point, and anything committed after it is only in the next day's dump — so pick the schedule by how much data you can afford to lose.
+
+**Off-box storage.** Set `BACKUP_S3_URI=s3://<bucket>/dating-coach` plus `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (and `BACKUP_S3_ENDPOINT` for Backblaze B2, Cloudflare R2, Scaleway, MinIO, …) in `.env`, and install the AWS CLI on the VM (`sudo apt-get install -y awscli` or the official installer). Every dump is then also `aws s3 cp`'d to the bucket; a failed upload fails the run but leaves the local file. The script never prunes the bucket — set a lifecycle rule there (e.g. expire after 30–90 days) and use a write-only key so a compromised VM cannot delete history. As a second layer, enable your provider's scheduled VM/volume snapshots: the Postgres data lives in the `postgres-data` Docker volume (`/var/lib/docker/volumes/dating-coach_postgres-data`), and a snapshot of the VM disk is a whole-machine fallback that also covers `.env` and the nginx/TLS setup.
+
+**Restore.**
+
+```bash
+scripts/restore.sh backups/datingcoach-20260922T031500Z.sql.gz          # local file
+scripts/restore.sh s3://<bucket>/dating-coach/datingcoach-20260922T031500Z.sql.gz   # fetched with the same AWS_* / BACKUP_S3_ENDPOINT
+```
+
+It asks for confirmation (pass `--yes` to skip), stops `api` and `worker`, replays the dump into the running `postgres` container inside a single transaction after recreating the `public` schema (so the database ends up exactly as dumped, `schema_migrations` included; a corrupt dump rolls back and changes nothing), re-runs `migrate` so a dump taken before the current release's migrations is brought up to the schema the checked-out code expects, then starts `api` and `worker` again. If `migrate` fails they stay stopped rather than running against a schema they do not understand.
+
+**Rollback caveat.** The `migrate` service only runs `up`. Redeploying an older image tag does not undo a schema change, so to roll back across a *breaking* migration: restore a dump taken before that migration with `--no-start` (skips `migrate` and leaves `api`/`worker` stopped, so the current code never touches the old schema), then trigger the release workflow with the older `image_tag` — the older checkout's `migrate` only applies the migrations it knows about, which the restored `schema_migrations` already records, and its `api`/`worker` come up on the schema they were built for. For additive/backward-compatible migrations no restore is needed.
+
 ## Running components without Compose
 
 **Backend** (needs PostgreSQL, Redis and RabbitMQ reachable):
