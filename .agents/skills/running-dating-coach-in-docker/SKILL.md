@@ -1,6 +1,6 @@
 ---
 name: running-dating-coach-in-docker
-description: Build the dating-coach backend and ml-analyzer images, publish them to Docker Hub (danielliu30/*), run the stack from the published images, and expose it through nginx (compose gateway service or host-installed nginx).
+description: Build the dating-coach backend, ml-analyzer and web images, publish them to Docker Hub (danielliu30/*) manually or via the release.yml CI/CD pipeline, run the stack from the published images, deploy/roll back on the production VM, and expose it through nginx (compose gateway service or host-installed nginx).
 ---
 
 # Running dating-coach in Docker behind nginx
@@ -14,7 +14,8 @@ description: Build the dating-coach backend and ml-analyzer images, publish them
 
 Tags default to `latest`; override with `DOCKERHUB_NAMESPACE` / `IMAGE_TAG` env vars (they feed the `image:` fields in `docker-compose.yml`).
 
-## Build and publish
+## Build and publish (manual)
+CI does this on every merge to `main` (see [Deployment flow](#deployment-flow-cicd)); build by hand only for ad-hoc testing.
 ```bash
 cd <repo>
 echo "$DOCKERHUB_TOKEN" | docker login -u danielliu30 --password-stdin   # PAT from session secrets
@@ -24,6 +25,42 @@ docker compose --profile gateway push api ml-analyzer web   # `worker` shares th
 Verify with the Docker Hub MCP server (`mcp_tool server=dockerhub`):
 `listRepositoriesByNamespace {"namespace":"danielliu30"}` or `listRepositoryTags {"namespace":"danielliu30","repository":"dating-coach-backend"}`.
 Repository descriptions can be set with `updateRepositoryInfo`.
+
+## Deployment flow (CI/CD)
+`.github/workflows/release.yml` (trigger: `push` to `main`, or `workflow_dispatch`):
+1. Runs `backend.yml`, `app.yml`, `ml-analyzer.yml`, `e2e.yml` as reusable workflows (`workflow_call`). Any failure stops the release.
+2. `build-push`: `docker compose --profile gateway build api ml-analyzer web` with `IMAGE_TAG=${{ github.sha }}`, `DOCKERHUB_NAMESPACE=$DOCKERHUB_USERNAME`, `WEB_API_URL=""` (same-origin bundle) and `GOOGLE_CLIENT_ID` from the repo variable; pushes the SHA tags, then promotes `latest` only if the run is on `main` and `github.sha` is still `origin/main` (manual dispatches on other branches and superseded main runs publish SHA tags only).
+3. `deploy`: `appleboy/ssh-action` into the VM, then in `DEPLOY_DIR` (default `~/dating-coach`):
+   ```bash
+   git fetch origin && git show "$SHA:docker-compose.yml" > /tmp/c.yml
+   IMAGE_TAG=$SHA docker compose -f /tmp/c.yml --project-directory . --profile gateway pull api worker ml-analyzer web   # first: a bad tag changes nothing on the VM
+   git fetch origin && git checkout --detach "$SHA"      # compose file, nginx conf, backend/migrations must match the images
+   sed -i '/^IMAGE_TAG=/d;/^DOCKERHUB_NAMESPACE=/d' .env && printf 'IMAGE_TAG=%s\nDOCKERHUB_NAMESPACE=%s\n' "$SHA" "$NS" >> .env
+   IMAGE_TAG=$SHA docker compose --profile gateway up -d --no-build
+   curl -fsS $BASE/healthz && curl -fsS $BASE/ml/healthz && curl -fsS $BASE/   # BASE from DEPLOY_HEALTHCHECK_URL; retried 90 s, job fails otherwise
+   ```
+   Pinning `IMAGE_TAG` in the VM's `.env` means a manual `docker compose up -d` on the VM keeps the deployed SHA instead of drifting to `latest`.
+
+### GitHub secrets / variables
+| Name | Kind | Purpose |
+|---|---|---|
+| `DOCKERHUB_USERNAME` | secret | Hub account + image namespace |
+| `DOCKERHUB_TOKEN` | secret | Hub PAT (Read & Write) |
+| `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_KEY` | secret | SSH target for the deploy job (user must be in the `docker` group) |
+| `GOOGLE_CLIENT_ID` | variable | baked into the web bundle (public, so not a secret) |
+| `DEPLOY_DIR` | variable | compose directory on the VM (default `~/dating-coach`) |
+| `DEPLOY_HEALTHCHECK_URL` | variable | default `http://localhost/healthz`; `https://<domain>/healthz` once TLS exists |
+
+### Roll back
+Actions -> *Release (build, push, deploy)* -> *Run workflow*, `image_tag` = an earlier commit SHA (list with `listRepositoryTags` on the Docker Hub MCP server). Tests and build are skipped; only `deploy` runs with that tag. Manual equivalent on the VM: edit `IMAGE_TAG=` in `.env`, then `docker compose --profile gateway pull && docker compose --profile gateway up -d --no-build`.
+
+### One-time VM prerequisites
+- Docker Engine + Compose plugin; deploy user runs `docker` without sudo.
+- Git checkout of the repo at `DEPLOY_DIR` — required; the deploy job checks out the deployed SHA there.
+- Rollback caveat: `migrate` only runs `up`, so redeploying an older SHA does not revert schema changes; keep migrations backward-compatible or restore the DB first.
+- Production `.env` in that directory (from `.env.example`: `APP_ENV`, `JWT_SECRET`, `POSTGRES_PASSWORD`, `PUBLIC_APP_URL`, `CORS_ORIGINS`, SMTP, Stripe, `GOOGLE_CLIENT_ID`). The deploy job only rewrites `IMAGE_TAG`/`DOCKERHUB_NAMESPACE`.
+- SSH key pair: `ssh-keygen -t ed25519 -f deploy_key -N ''`; public half in `~/.ssh/authorized_keys`, private half in `DEPLOY_SSH_KEY`.
+- Port 80 reachable (or host nginx fronting it with `NGINX_PORT` moved, see below). Smoke-test once by hand with `docker compose --profile gateway up -d` before enabling the secrets.
 
 ## Run from the published images
 ```bash
