@@ -6,6 +6,12 @@ description: How to bring up and end-to-end test the dating-coach monorepo (Go c
 # End-to-end testing the dating-coach stack
 
 ## Bring up the stack
+For the published web build behind nginx (rather than Expo dev server), from repo root:
+`docker compose --env-file e2e/.env --profile gateway up -d --build`, then browse
+`http://localhost`. Keep `--env-file e2e/.env` on later compose commands for this stack.
+When explicitly authorized to remove disposable data, `cd e2e && npm run stack:down`
+removes the stack **and its volumes**.
+
 ```bash
 cd <repo>
 cp .env.example .env            # only if .env missing
@@ -113,9 +119,25 @@ Top tab labels may be truncated ("Coac…", "Analy…") at ~1024px — cosmetic,
   client emailed. A client-initiated reschedule drops a `scheduled` session back to `pending` with a
   fresh token; a coach-initiated one keeps it `scheduled`. Statuses: `pending, scheduled, declined,
   expired, completed, cancelled, no_show`.
-- **Chat offline queue/replay**: `docker compose stop api` (banner → "Reconnecting…"), send a message
-  (nothing renders while offline), `docker compose start api`; the message replays once — verify with
-  `select count(*) from chat_messages where body='…'` = 1.
+- **Chat offline queue/replay**: `docker compose stop api` (banner → "Reconnecting…"), send
+  several messages including two identical bodies. Each should immediately render a clock/pending
+  bubble. `docker compose start api`; every accepted send should settle once, and reconnect history
+  must retain pending bubbles. Check DB counts per body and thread (identical pair = 2, not 1).
+  Keep the chat mounted during this test: its pending state/outbox are memory-only.
+- **Connected pending state**: a localhost echo can be too fast to screenshot. Briefly
+  `docker compose pause api`, send while the existing socket still says Connected, screenshot the
+  clock, then promptly `docker compose unpause api`; the same bubble should become a single tick.
+- **Correlated rejection**: check the current `backend/internal/chat/service.go` validation limit
+  (4000 bytes at this writing). Paste a 4001-byte ASCII body in the real composer and send.
+  Queue it between valid offline sends to exercise an error overtaking Redis/hub echoes.
+  Outgoing message, echo, and rejection frames should retain their matching `client_id`.
+  Only the rejected bubble should disappear with a `Not sent: ...` notice; accepted sends persist.
+  Long input may expand the web composer enough to hide the history; if it remains expanded after
+  send, capture that as a UI defect before typing another character to restore the layout.
+- **WebSocket evidence safety**: DevTools Network Headers exposes the JWT in the socket URL.
+  Prefer Messages, hide/redact the request-name column, and never share Headers captures.
+  Passive CDP `Network.webSocketFrameSent/Received` payload capture can corroborate IDs/order
+  without recording socket URLs or session storage. IDs are not persisted in history/DB rows.
 - **Analysis "Try again" path**: analysis finishes in <2 s, so to see the pending/error state do
   `docker compose stop worker` first, submit, then `docker compose stop api` while the result screen
   polls; restart both and click "Try again".
@@ -187,9 +209,9 @@ Top tab labels may be truncated ("Coac…", "Analy…") at ~1024px — cosmetic,
   toggling a chip, pressing Refresh, and asserting the chip stays selected with Save still enabled.
 
 ## Known/likely rough edges to check rather than debug
-- Sending into a closed thread is correctly rejected server-side (nothing persisted) but the client
-  send is fire-and-forget (`ChatScreen.tsx`: "sending is fire-and-forget"), so the message silently
-  disappears with no error banner. Verify with a DB count, not the UI.
+- Sending into a closed thread should be rejected server-side (nothing persisted). Current chat
+  clients render optimistic sends and correlated rejection notices; verify both UI and DB rather
+  than assuming the older fire-and-forget behavior.
 - Top tab labels may be truncated ("Coac…", "Analy…") at ~1024px — cosmetic, worth flagging.
 - Transport-level failures surface the raw browser message "Failed to fetch" in the UI. Exception: the
   Account-screen delete failure is deliberately sanitized to "Could not delete your account. Please try
