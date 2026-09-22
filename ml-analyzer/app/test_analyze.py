@@ -509,7 +509,7 @@ def test_enforce_agency_is_the_shared_drafting_gate() -> None:
     from app.coaching import RULES, enforce_agency
     from app.scoring import llm
 
-    assert [rule.name for rule in RULES] == ["drafting"]
+    assert [rule.name for rule in RULES] == ["drafting", "mind_reading", "prescription"]
     assert llm.enforce_agency is enforce_agency
 
     sources = ["You could say I'm obsessed with climbing, but lately I mostly stay home"]
@@ -519,6 +519,194 @@ def test_enforce_agency_is_the_shared_drafting_gate() -> None:
         enforce_agency(["Fine so far.", "Try asking: What are you passionate about?"])
     with pytest.raises(ValueError, match="drafted a reply"):
         enforce_agency(['"You could say I\'m obsessed with climbing" would land better.'], sources)
+
+
+# Crowd-style takes in the voice of an online advice thread. They are a contrast set only:
+# never a target the coach is asked to match, never shown to a customer. Each one must
+# be rejected as drafting, mind-reading or prescription.
+CROWD_OPINIONS = [
+    "She's not into you, bro. If she wanted to she would.",
+    "He's just keeping you as a backup while he talks to other girls.",
+    "They're clearly playing games, classic breadcrumbing.",
+    "This guy is only after sex, don't waste your time.",
+    "She doesn't really like you, she's only replying to be polite.",
+    "Honestly? Drop her and move on. Plenty of fish.",
+    "You deserve better. Block him and never look back.",
+    "Stop texting them, unmatch, and find someone who actually puts in effort.",
+    "You should date someone who matches your energy, not chase people like this.",
+    "You need to ask her out already or cut your losses.",
+    "Just say 'hey, what are you doing this weekend?' and see what happens.",
+    "Try asking about her dog, girls love that.",
+    "A better reply would be 'my weekend is wide open, you?'",
+    "He was never going to reply, the conversation was dead after your third message.",
+    "She's out of your league, be realistic and lower your standards.",
+]
+
+
+def test_enforce_agency_rejects_mind_reading_and_prescription_but_passes_reflection() -> None:
+    """All three agency rules fire on their own samples while outcome-grounded, reflective feedback passes."""
+    from app.coaching import enforce_agency
+    from app.scoring.heuristic import HeuristicScorer
+
+    for text in (
+        "She's not into you.",
+        "He is clearly using you for attention.",
+        "They're just stringing you along.",
+        "The match doesn't really like you.",
+        "This person only wants validation.",
+        "She was never going to text back.",
+        "She\u2019s not into you.",
+        "She isn't interested in you.",
+        "They aren't really into you.",
+        "He wasn't going to reply anyway.",
+        "She likes you but is afraid to commit.",
+        "He wants a relationship.",
+        "They feel uncomfortable.",
+        "She's probably nervous.",
+        "I know she likes you.",
+        "I assume they feel uncomfortable.",
+        "You can tell he wants a relationship.",
+        "You didn't know she likes you until today.",
+        "You don't realise they feel uncomfortable.",
+    ):
+        with pytest.raises(ValueError, match="^llm mind-read the match"):
+            enforce_agency([text])
+    for text in ("Sam is clearly not interested in you.", "Sam isn't interested in you."):
+        with pytest.raises(ValueError, match="^llm mind-read the match"):
+            enforce_agency([text], match_name="Sam")
+    with pytest.raises(ValueError, match="^llm mind-read the match"):
+        enforce_agency(["J.J. is clearly not interested in you."], match_name="J.J.")
+    # A curly-quoted citation of a straight-quoted customer message is still exempt.
+    enforce_agency(['Message 2 (\u201cDon\u2019t text her again\u201d) drew no reply.'], ["Don't text her again"])
+
+    for text in (
+        "Drop them.",
+        "It's time to move on.",
+        "You should date someone who shares your hobbies.",
+        "You need to end things with him.",
+        "Walk away, you deserve better.",
+        "Stop chasing her and find someone else.",
+        "This isn't going anywhere.",
+        "You shouldn't date him.",
+        "Don\u2019t text her again.",
+        "Just block him.",
+        "You should leave them.",
+        "Leave him.",
+        "Please leave him.",
+        "Now block her.",
+        "You should honestly block him.",
+        "Just please leave them.",
+        "Don't block her, but leave him and move on.",
+        "Move on.",
+        "You need to walk away.",
+        "Ask her out.",
+        "Keep seeing him.",
+        "End things with them.",
+        "Find someone else.",
+        "Honestly, break it off.",
+    ):
+        with pytest.raises(ValueError, match="^llm prescribed the customer's dating life"):
+            enforce_agency([text])
+    for text in (
+        "Stop seeing Sam.",
+        "Give up on Sam and let Sam go.",
+        "Sam isn't worth your time.",
+        "You should ask Sam out.",
+    ):
+        with pytest.raises(ValueError, match="^llm prescribed the customer's dating life"):
+            enforce_agency([text], match_name="Sam")
+
+    with pytest.raises(ValueError, match="^llm drafted a reply"):
+        enforce_agency(["Try asking about her weekend."])
+
+    fine = [
+        'Message 3 ("Nice") got no reply; a one-word answer left the match little to respond to.',
+        "Message 5 only drew a short reply. What did you want that message to open up?",
+        "Message 1 landed: it drew a detailed reply about the trail.",
+        "The match may simply not have answered yet; nothing to read into the last message.",
+        "Two of your messages moved on to a new topic before the match had finished theirs.",
+        "Pattern: your questions get shorter as the conversation goes on. Is that worth thinking about?",
+        "You said you are looking for something serious; which of your messages here surfaces that?",
+        "It may not have given them much to engage with.",
+        "Message 2 asked about her dog and drew an engaged reply.",
+        "This stretch is worth a look at what made it hard to answer.",
+        "A one-line answer can leave them little to respond to.",
+        "A closed question can block him from elaborating.",
+        "A short answer can leave them, and the conversation, with nowhere to go.",
+        "Closed questions may block him, as before, from opening up.",
+        "Your follow-up questions now block her from elaborating.",
+        "Those one-liners honestly leave them, and you, with nothing to build on.",
+        "Sam asked two questions and you answered one.",
+        "Your messages move on quickly before the match has finished a thought.",
+        "Message 4 moves on straight to a new topic; the match had walked away from the previous one.",
+        "Message 6 asked whether she likes hiking and drew a long reply.",
+        "You asked him out in Message 3 and he said yes.",
+        "Whether you keep seeing him is your call; what did you notice about your own pacing?",
+        "You cannot know whether she likes you from this exchange.",
+        "Nothing here can tell you if he wants a relationship.",
+        "A slow reply does not prove they feel uncomfortable.",
+        "Don't assume she's nervous; look at what your own messages did.",
+        "You shouldn't assume she's nervous; focus on the reply you actually got.",
+        "You can't assume he wants a relationship from one message.",
+        "A short reply doesn't mean they feel uncomfortable.",
+        "I didn't assume she likes you; I focused on her detailed reply.",
+        "Message 4 doesn't suggest he wants a relationship, and nothing here can tell you if they feel rejected.",
+    ]
+    enforce_agency(fine, match_name="Sam")
+
+    # The fallback scorer's own wording must never trip the gate it falls back for.
+    messages = [
+        Message(position=0, sender="self", body="hey"),
+        Message(position=1, sender="match", body="hi"),
+        Message(position=2, sender="self", body="your profile says you bake - what was the last thing you made?"),
+        Message(position=3, sender="match", body="sourdough, badly. it came out like a frisbee, which my sister found hilarious"),
+        Message(position=4, sender="self", body="lol"),
+    ]
+    response = asyncio.run(HeuristicScorer(2).analyze(AnalyzeRequest(conversation_id="c", messages=messages)))
+    prose = [s.comment for s in response.segments] + [response.overall.summary]
+    prose += response.overall.strengths + response.overall.improvements + response.overall.patterns
+    prose += response.overall.reflection_questions
+    enforce_agency(prose)
+
+
+def test_crowd_opinions_are_all_rejected_by_the_brain() -> None:
+    """Every crowd-style opinion is a violation: the brain rejects online advice instead of imitating it."""
+    from app.coaching import enforce_agency
+
+    for opinion in CROWD_OPINIONS:
+        with pytest.raises(ValueError):
+            enforce_agency([opinion])
+
+
+def test_llm_parse_falls_back_on_any_agency_violation() -> None:
+    """``LLMScorer`` rejects mind-reading and prescription exactly as it rejects drafting."""
+    from app.config import Settings
+    from app.scoring.llm import LLMScorer
+
+    settings = Settings(
+        backend="llm", llm_provider="openai", llm_api_key="k", llm_model="m", llm_base_url="http://x",
+        llm_timeout=1.0, model_dir="", segment_size=2,
+    )
+    scorer = LLMScorer(settings)
+    boundaries = [(0, 1)]
+    good = {
+        "segments": [{"start_position": 0, "end_position": 1, "engagement_score": 0.7, "comment": "Message 1 drew a detailed reply."}],
+        "overall": {"engagement_score": 0.7, "summary": "Landing well.", "strengths": [], "improvements": []},
+    }
+    for field, text, error in (
+        ("improvements", "She's probably not that interested.", "mind-read"),
+        ("summary", "Time to move on from this one.", "prescribed"),
+        ("strengths", "Try asking what she does for fun.", "drafted"),
+    ):
+        value = [text] if field != "summary" else text
+        bad = dict(good, overall=dict(good["overall"], **{field: value}))
+        with pytest.raises(ValueError, match=error):
+            scorer._parse(json.dumps(bad), boundaries)
+
+    # A cited customer message that itself sounds like a violation is still exempt.
+    sources = ["honestly she's not into me anymore lol"]
+    cited = dict(good, overall=dict(good["overall"], improvements=['Message 2 ("she\'s not into me anymore") drew no reply.']))
+    assert scorer._parse(json.dumps(cited), boundaries, sources).overall.improvements
 
 
 def test_llm_parse_rejects_drafted_replies() -> None:
@@ -589,6 +777,10 @@ def test_strip_citations_blanks_only_provable_customer_quotes() -> None:
     assert (
         strip_citations('Message 4 ("She said "you could ask him about work"") stalled.', sources)
         == "Message 4 ( ) stalled."
+    )
+    assert (
+        strip_citations("Message 3 (\u201cYou could say I\u2019m obsessed\u201d) got no reply.", sources)
+        == "Message 3 ( ) got no reply."
     )
     for untouched in (
         'Message 3 says, "You could say I\'m obsessed", which drew no reply.',
