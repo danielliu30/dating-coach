@@ -1,6 +1,7 @@
 name: E2E (Playwright against the full stack)
 
 on:
+  workflow_call:
   push:
     branches: [main]
     paths:
@@ -22,7 +23,7 @@ on:
       - ".github/workflows/e2e.yml"
 
 concurrency:
-  group: e2e-${{ github.ref }}
+  group: e2e-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:

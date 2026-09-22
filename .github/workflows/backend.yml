@@ -1,6 +1,7 @@
 name: Backend (Go)
 
 on:
+  workflow_call:
   push:
     branches: [main]
     paths:
