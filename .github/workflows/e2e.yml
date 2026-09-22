@@ -1,6 +1,7 @@
 name: E2E (Playwright against the full stack)
 
 on:
+  workflow_call:
   push:
     branches: [main]
     paths:

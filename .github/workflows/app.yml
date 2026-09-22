@@ -1,6 +1,7 @@
 name: App (Expo/TypeScript)
 
 on:
+  workflow_call:
   push:
     branches: [main]
     paths:
