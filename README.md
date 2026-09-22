@@ -98,7 +98,7 @@ push to main
   └─ e2e.yml     ─┘
         └─ build-push: docker compose --profile gateway build/push api ml-analyzer web
               tags: <git sha> and latest  (worker reuses the backend image)
-              └─ deploy: ssh to the VM → git checkout <sha> → compose pull → pin IMAGE_TAG in .env → compose up -d → curl /healthz, /ml/healthz, /
+              └─ deploy: ssh to the VM → compose pull → git checkout <sha> → pin IMAGE_TAG in .env → compose up -d → curl /healthz, /ml/healthz, /
 ```
 
 **Tagging convention.** Every image (`dating-coach-backend`, `-ml-analyzer`, `-web`) is pushed as both `latest` and the full commit SHA. The VM always runs a SHA tag: the deploy step writes `IMAGE_TAG=<sha>` into the production `.env`, so a later manual `docker compose up -d` on the VM keeps the same images instead of drifting to `latest`.
@@ -125,7 +125,7 @@ Optional repository **variables**: `GOOGLE_CLIENT_ID` (baked into the web bundle
 4. Ports 80 (and 443 if you terminate TLS on the host) open; if a host nginx fronts the stack, move `NGINX_PORT` off 80 as described above.
 5. A deploy key: `ssh-keygen -t ed25519 -f deploy_key -N ''`, append `deploy_key.pub` to `~/.ssh/authorized_keys`, store the private half as `DEPLOY_SSH_KEY`.
 
-A first `docker compose --profile gateway up -d` by hand is a good smoke test before wiring the secrets; after that every merge to `main` deploys itself, and the run goes red in Actions if `/healthz`, `/ml/healthz` or `/` does not answer through nginx within 90 s (the new containers are left running for inspection; roll back with the `image_tag` input).
+A first `docker compose --profile gateway up -d` by hand is a good smoke test before wiring the secrets; after that every merge to `main` deploys itself, and the run goes red in Actions if `/healthz`, `/ml/healthz` or `/` does not answer through nginx within 90 s (the new containers are left running for inspection; roll back with the `image_tag` input). Note that `migrate` only runs `up`, so a rollback does not undo schema changes — keep migrations backward-compatible with the previous release (expand/contract), or restore the DB separately before rolling back across a breaking migration.
 
 ## Running components without Compose
 

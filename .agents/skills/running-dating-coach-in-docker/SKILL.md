@@ -32,8 +32,8 @@ Repository descriptions can be set with `updateRepositoryInfo`.
 2. `build-push`: `docker compose --profile gateway build api ml-analyzer web` with `IMAGE_TAG=${{ github.sha }}`, `DOCKERHUB_NAMESPACE=$DOCKERHUB_USERNAME`, `WEB_API_URL=""` (same-origin bundle) and `GOOGLE_CLIENT_ID` from the repo variable; then `docker tag ... :latest` and pushes **both** the SHA and `latest` tags.
 3. `deploy`: `appleboy/ssh-action` into the VM, then in `DEPLOY_DIR` (default `~/dating-coach`):
    ```bash
+   IMAGE_TAG=$SHA docker compose --profile gateway pull api worker ml-analyzer web   # first: a bad tag changes nothing on the VM
    git fetch origin && git checkout --detach "$SHA"      # compose file, nginx conf, backend/migrations must match the images
-   IMAGE_TAG=$SHA docker compose --profile gateway pull api worker ml-analyzer web
    sed -i '/^IMAGE_TAG=/d;/^DOCKERHUB_NAMESPACE=/d' .env && printf 'IMAGE_TAG=%s\nDOCKERHUB_NAMESPACE=%s\n' "$SHA" "$NS" >> .env
    IMAGE_TAG=$SHA docker compose --profile gateway up -d --no-build
    curl -fsS $BASE/healthz && curl -fsS $BASE/ml/healthz && curl -fsS $BASE/   # BASE from DEPLOY_HEALTHCHECK_URL; retried 90 s, job fails otherwise
@@ -55,7 +55,8 @@ Actions -> *Release (build, push, deploy)* -> *Run workflow*, `image_tag` = an e
 
 ### One-time VM prerequisites
 - Docker Engine + Compose plugin; deploy user runs `docker` without sudo.
-- Git checkout of the repo at `DEPLOY_DIR` (the deploy job checks out the deployed SHA there).
+- Git checkout of the repo at `DEPLOY_DIR` — required; the deploy job checks out the deployed SHA there.
+- Rollback caveat: `migrate` only runs `up`, so redeploying an older SHA does not revert schema changes; keep migrations backward-compatible or restore the DB first.
 - Production `.env` in that directory (from `.env.example`: `APP_ENV`, `JWT_SECRET`, `POSTGRES_PASSWORD`, `PUBLIC_APP_URL`, `CORS_ORIGINS`, SMTP, Stripe, `GOOGLE_CLIENT_ID`). The deploy job only rewrites `IMAGE_TAG`/`DOCKERHUB_NAMESPACE`.
 - SSH key pair: `ssh-keygen -t ed25519 -f deploy_key -N ''`; public half in `~/.ssh/authorized_keys`, private half in `DEPLOY_SSH_KEY`.
 - Port 80 reachable (or host nginx fronting it with `NGINX_PORT` moved, see below). Smoke-test once by hand with `docker compose --profile gateway up -d` before enabling the secrets.
