@@ -102,6 +102,7 @@ jobs:
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           envs: DEPLOY_TAG,DEPLOY_DIR,DOCKERHUB_NAMESPACE,HEALTHCHECK_URL
+          command_timeout: 25m
           script: |
             set -euo pipefail
             cd "${DEPLOY_DIR:-$HOME/dating-coach}"
