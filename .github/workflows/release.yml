@@ -80,7 +80,7 @@ jobs:
     timeout-minutes: 20
     environment:
       name: production
-      url: ${{ vars.DEPLOY_HEALTHCHECK_URL || 'http://localhost/healthz' }}
+      url: ${{ vars.DEPLOY_HEALTHCHECK_URL }}
     steps:
       - uses: appleboy/ssh-action@v1.2.4
         with:
@@ -92,22 +92,29 @@ jobs:
             set -euo pipefail
             cd "${DEPLOY_DIR:-$HOME/dating-coach}"
             test -f .env || { echo "production .env missing in $(pwd)"; exit 1; }
+            # migrations and nginx config are bind-mounted from the checkout, so it must match the image
+            if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+              git fetch -q origin && git checkout -q --detach "$DEPLOY_TAG"
+            fi
             sed -i '/^IMAGE_TAG=/d;/^DOCKERHUB_NAMESPACE=/d' .env
             printf 'IMAGE_TAG=%s\nDOCKERHUB_NAMESPACE=%s\n' "$DEPLOY_TAG" "$DOCKERHUB_NAMESPACE" >> .env
             export IMAGE_TAG="$DEPLOY_TAG"
             docker compose --profile gateway pull api worker ml-analyzer web
             docker compose --profile gateway up -d --no-build
+            base="${HEALTHCHECK_URL:-http://localhost/healthz}"; base="${base%/healthz}"
             for i in $(seq 1 45); do
-              if curl -fsS "${HEALTHCHECK_URL:-http://localhost/healthz}" >/dev/null 2>&1; then
-                echo "deployed $IMAGE_TAG, health check OK after ${i} attempts"
-                docker image prune -f >/dev/null
+              if curl -fsS "$base/healthz" >/dev/null 2>&1 \
+                && curl -fsS "$base/ml/healthz" >/dev/null 2>&1 \
+                && curl -fsS -o /dev/null "$base/"; then
+                echo "deployed $IMAGE_TAG, health checks OK after ${i} attempts"
+                docker image prune -af --filter "until=168h" >/dev/null
                 exit 0
               fi
               sleep 2
             done
-            echo "health check failed for $IMAGE_TAG"
+            echo "health checks failed for $IMAGE_TAG"
             docker compose --profile gateway ps
-            docker compose --profile gateway logs --no-color --tail 50 api migrate nginx
+            docker compose --profile gateway logs --no-color --tail 50 api ml-analyzer web migrate nginx
             exit 1
         env:
           DEPLOY_DIR: ${{ vars.DEPLOY_DIR }}
