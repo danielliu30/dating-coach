@@ -2,6 +2,9 @@
 .env.local
 *.log
 
+# scripts/backup.sh output
+/backups/
+
 # Go
 /backend/bin/
 
