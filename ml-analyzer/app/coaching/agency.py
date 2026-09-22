@@ -1,9 +1,14 @@
 """Deterministic enforcement of the AGENCY pillar on generated feedback.
 
 A prompt cannot guarantee behaviour, so every piece of feedback the model
-returns is scanned against keyword/pattern prefilters, one per agency rule.
+returns is scanned against keyword/pattern prefilters, one per agency rule:
+
+- ``DRAFTING``: ghostwriting a reply for the customer.
+- ``MIND_READING``: asserting the match's motives, intent or feelings.
+- ``PRESCRIPTION``: telling the customer whom to date, keep or drop.
+
 Any hit means the completion is treated as failed and the caller falls back
-to a scorer that cannot violate the rule.
+to a scorer that cannot violate the rules.
 """
 
 from __future__ import annotations
@@ -18,30 +23,111 @@ DRAFTING = re.compile(
     r"(you )?should have (said|asked|written)|say something like|for example[,:]? ask|"
     r"ask (her|him|them) (something like|about)|next time,? (say|ask)|instead,? (say|ask)|"
     r"consider (asking|saying)|perhaps (say|ask)|you (could|should) (reply|respond) with|"
+    r"(just|simply) (say|ask|text|send|reply|write)|"
     r"a better (reply|response|message) (would be|is|might be))\b",
     re.IGNORECASE,
 )
 
-# Phrases that claim to know why the match replied the way they did. The prompt forbids
-# them outright ("you cannot know that"), so any hit means the model diagnosed the match.
-# ``because`` counts only when it introduces a cause (a pronoun or ``of``), so a bare
-# "because" inside a reflection question does not cost a fallback, and feelings/decisions
-# are only diagnoses when attributed to the match (``_MATCH``: they/she/he/the match, with
-# optional auxiliaries such as "had" or "probably"), never to the customer ("Were you
-# bored?" is a reflection question). ``['’]`` matches ASCII and curly apostrophes so
-# "weren’t" is caught like "weren't".
-_MATCH = (
-    r"(they|she|he|(the|your|this) match)( (had|have|has|are|were|is|was|might|may|must|probably|likely|clearly|just|simply|also|then|been|being|feeling))*"
+# Third-person references to the match. Feedback only ever talks about "self", so any
+# claim about what "she/he/they" wants or feels is a claim about the match.
+_MATCH = r"(she|he|they|this (person|match|guy|girl)|the match|your match)"
+_MATCH_OBJ = r"(her|him|them|this (person|match|guy|girl)|the match|your match)"
+_IS = r"(?:'s|'re| is| are| was| were| seems?| sounds?| looks?)"
+_ISNT = r"(?: isn't| aren't| wasn't| weren't| is not| are not| was not| were not)"
+# Positive claims ("she likes you") are only assertions when not framed as unknowable:
+# "you cannot know whether she likes you" refuses the inference rather than making it.
+# Only "whether"/"if" and explicitly negated knowledge verbs count; "I know she likes you"
+# and "I assume they feel uncomfortable" are still assertions.
+# Factive past/present forms ("didn't know she likes you") still present the claim as true,
+# so only modal/imperative negation hedges factive verbs; non-factive inference/reporting and
+# entailment verbs ("didn't assume", "doesn't prove") deny the claim under any negation.
+_MODAL_NEG = ("cannot", "can't", "couldn't", "never", "shouldn't", "mustn't", "wouldn't")
+_ANY_NEG = _MODAL_NEG + ("don't", "not", "doesn't", "didn't", "won't")
+_FACTIVE = ("know", "tell", "realise", "realize")
+_NON_FACTIVE = ("assume", "guess", "conclude", "infer", "say", "claim", "suggest", "prove", "mean", "imply")
+_HEDGES = tuple(
+    [f"{n} {v}" for n in _MODAL_NEG for v in _FACTIVE]
+    + [f"{n} {v}" for n in _ANY_NEG for v in _NON_FACTIVE]
+)
+_HEDGED = r"(?<!\bwhether )(?<!\bif )" + "".join(rf"(?<!\b{h} )" for h in _HEDGES)
+
+# Phrases that assert the match's motives, intent, interest or feelings, which the
+# coach cannot know: only the customer's own behaviour and its visible outcome is fair game.
+MIND_READING = re.compile(
+    rf"\b({_MATCH}{_ISNT}(?: (?:really|that|very|actually))? (?:into|interested|attracted|invested|serious|keen)|"
+    rf"{_MATCH}{_IS}(?: (?:just|clearly|obviously|probably|definitely|simply|only|not really))?"
+    r" (?:not (?:that |really |very )?(?:into|interested|attracted|invested|serious|keen)|"
+    r"into you|interested in you|using you|playing (?:you|games)|stringing you along|"
+    r"leading you on|breadcrumbing|losing interest|bored(?: of| with)? you|ghosting you|"
+    r"wasting your time|keeping you (?:as|around)|(?:a|your) backup|an option|"
+    r"testing you|(?:seeing|talking to) (?:other|someone)|out of your league|"
+    r"only (?:after|in it for|looking for|want(?:s|ing)?) (?:sex|attention|validation|a hookup|an ego boost))|"
+    rf"{_MATCH} (?:doesn't|don't|does not|do not|didn't|did not|never) (?:really |actually )?"
+    r"(?:like|want|care about|respect|fancy|value) you|"
+    rf"{_MATCH} (?:only|just) (?:wants?|wanted) (?:sex|attention|validation|a hookup|an ego boost)|"
+    rf"{_MATCH}(?: (?:was|were|is|are) (?:never|not)|{_ISNT}) (?:going to|gonna) (?:reply|answer|text back|commit)|"
+    rf"{_HEDGED}{_MATCH}(?: (?:really|clearly|obviously|probably|definitely|secretly|still))? "
+    r"(?:likes|loves|fancies|wants|needs|misses|trusts|fears|resents|adores) you|"
+    rf"{_HEDGED}{_MATCH}(?: (?:really|clearly|obviously|probably|definitely))? wants? "
+    r"(?:a relationship|commitment|something (?:serious|casual)|to (?:see|date|meet|be with) you|space|out|more from you)|"
+    rf"{_HEDGED}{_MATCH}(?: (?:really|clearly|obviously|probably|definitely))? feels? "
+    r"(?:uncomfortable|pressured|smothered|rushed|ignored|bored|unsafe|overwhelmed|rejected|neglected|the same(?: way)?)|"
+    rf"{_HEDGED}{_MATCH}{_IS}(?: (?:just|clearly|obviously|probably|definitely|too))? "
+    r"(?:afraid|scared|nervous|worried|hesitant|intimidated|unsure|shy|insecure|in love|attached|smitten|falling for you))\b",
+    re.IGNORECASE,
+)
+
+# Phrases that tell the customer what to do with the relationship or whom to date,
+# instead of handing them the pattern to decide on themselves.
+# ``leave`` and ``block`` also describe what a message does to the match ("leaves them little
+# to answer", "blocks him from elaborating"), so they only count with a directive in front or
+# as a bare imperative opening a clause and ending it ("Leave him.", "..., and block her").
+_DIRECTIVE = r"(?:just |should |need to |time to |better to |you can |you could |you'd better )"
+_POLITE = r"(?:(?:please|now|honestly|seriously),? )?"
+_CLAUSE_START = r"(?:^|(?<=[.!?;:]\s)|(?<=\band )|(?<=\bor )|(?<=\bbut )|(?<=\bthen ))"
+_CLAUSE_END = r"(?=\s*(?:[.!?,;:]|$|and\b|or\b))"
+PRESCRIPTION = re.compile(
+    rf"\b({_DIRECTIVE}?(?:drop|dump|ditch|unmatch|ghost) {_MATCH_OBJ}|"
+    rf"{_DIRECTIVE}{_POLITE}(?:leave|block) {_MATCH_OBJ}|"
+    rf"{_CLAUSE_START}{_POLITE}(?:leave|block) {_MATCH_OBJ}{_CLAUSE_END}|"
+    rf"(?:you )?(?:shouldn't|should not|don't|do not|mustn't|must not|can't|cannot) "
+    r"(?:date|see|pursue|keep seeing|keep talking to|go out with|be with|text|message|chase|trust|wait for|leave|block) "
+    rf"{_MATCH_OBJ}|"
+    rf"(?:{_DIRECTIVE}|you (?:should|need to|ought to|have to|must) |{_CLAUSE_START}{_POLITE})(?:move on|walk away)(?! to\b)|"
+    rf"{_CLAUSE_START}{_POLITE}(?:ask {_MATCH_OBJ} out|(?:keep|stop) (?:seeing|texting|dating|talking to) {_MATCH_OBJ}|"
+    rf"end (?:it|this|things)(?: with {_MATCH_OBJ})?|break (?:it|things) off(?: with {_MATCH_OBJ})?|break up with {_MATCH_OBJ}|"
+    rf"(?:date|see|text|message|go out with|be with|commit to|pursue|forget|forgive|confront) {_MATCH_OBJ}){_CLAUSE_END}|"
+    rf"cut (?:{_MATCH_OBJ}|it|this) (?:off|loose)|cut your losses|"
+    rf"stop (?:texting|messaging|talking to|seeing|pursuing|chasing|wasting time on) (?:{_MATCH_OBJ}|this)|"
+    rf"give up on (?:{_MATCH_OBJ}|this)|let (?:{_MATCH_OBJ}|this one) go|"
+    r"(?:you're|you are|you'd be) better off (?:without|alone|elsewhere)|"
+    rf"you deserve (?:better|someone|more)|{_MATCH}(?:{_IS} not|{_ISNT}) (?:worth|right for you|the one|good enough|your type)|"
+    rf"you (?:should|need to|ought to|have to|must) (?:date|see|pursue|find|look for|go for|pick|choose|be with|end|break|ask {_MATCH_OBJ} out)"
+    r"(?: (?:someone|somebody|people|a (?:man|woman|guy|girl|partner)|(?:it|this|things) off|up|it|this|things))?|"
+    r"find someone (?:who|else|better|new)|not (?:the|a) (?:right|good) (?:match|fit) for you|"
+    rf"(?:this|it|{_MATCH}) (?:is|isn't|is not|are|aren't|are not) (?:going anywhere|worth (?:it|your time|pursuing)))\b",
+    re.IGNORECASE,
+)
+
+# Phrases that claim to know why the match replied the way they did (causal explanations,
+# where ``MIND_READING`` covers asserted states). The prompt forbids them outright ("you
+# cannot know that"), so any hit means the model diagnosed the match. ``because`` counts
+# only when it introduces a cause (a pronoun or ``of``), so a bare "because" inside a
+# reflection question does not cost a fallback, and feelings/decisions are only diagnoses
+# when attributed to the match (``_MATCH_AUX``: ``_MATCH`` plus optional auxiliaries such as
+# "had" or "probably"), never to the customer ("Were you bored?" is a reflection question).
+_MATCH_AUX = (
+    _MATCH + r"( (had|have|has|are|were|is|was|might|may|must|probably|likely|clearly|just|simply|also|then|been|being|feeling))*"
 )
 DIAGNOSIS = re.compile(
     r"\b(because (they|she|he|it|you|your|of)|due to|(that|this|which) is why|(the|one) reason (they|she|he|for)|why (they|she|he)|"
-    r"made it (hard|harder|difficult|tough|easy|easier)|" + _MATCH + r" (lost|lose|losing|been losing) interest|"
-    r"(not|wasn['’]?t|isn['’]?t|weren['’]?t) interested|"
+    r"made it (hard|harder|difficult|tough|easy|easier) for (her|him|them)|" + _MATCH_AUX + r" (lost|lose|losing|been losing) interest|"
+    r"(not|wasn't|isn't|weren't) interested|"
     r"(turned?|turning|put|putting|scared|scaring|pushed|pushing|drove|driving) (her|him|them) (off|away)|turn-?off|"
-    r"reject(ed|ion|ing|s)?|(didn['’]?t|did not|doesn['’]?t|does not) (like|fancy|care for|want) you|"
+    r"(you were|you got|you have been|you've been) rejected|reject(ed|ing|s)? you|rejection|(didn't|did not|doesn't|does not) (like|fancy|care for|want) you|"
     r"(bored|annoyed|overwhelmed|intimidated) (her|him|them)|too (needy|eager|keen|intense|much|forward|strong) for (her|him|them)|"
-    + _MATCH + r" (felt|feel|feels|feeling|seemed|seem|seems|got|gotten|was|were|been|being)? ?(bored|annoyed|overwhelmed|intimidated|uninterested|put off)|"
-    r"(made|making|makes) (her|him|them) lose interest|" + _MATCH + r" (decided|deciding|decide) (not to|against|to stop))\b",
+    + _MATCH_AUX + r" (felt|feel|feels|feeling|seemed|seem|seems|got|gotten|was|were|been|being)? ?(bored|annoyed|overwhelmed|intimidated|uninterested|put off)|"
+    r"(made|making|makes) (her|him|them) lose interest|" + _MATCH_AUX + r" (decided|deciding|decide) (not to|against|to stop))\b",
     re.IGNORECASE,
 )
 
@@ -51,6 +137,16 @@ CITATION_START = re.compile(r"message\s+\d+\s*\(\s*([\"\u201c])", re.IGNORECASE)
 CLOSING_QUOTE = re.compile(r"[\"\u201d]")
 # Shortest quotation that can be exempted from the scan.
 MIN_QUOTE_WORDS = 3
+
+
+_APOSTROPHES = str.maketrans({"\u2019": "'", "\u2018": "'"})
+
+
+def _normalise_subject(text: str, match_name: Optional[str]) -> str:
+    """Rewrite every whole-word occurrence of ``match_name`` (if any) as "the match" so the rules can see it."""
+    if match_name and match_name.strip():
+        text = re.sub(rf"(?<!\w){re.escape(match_name.strip())}(?!\w)", "the match", text, flags=re.IGNORECASE)
+    return text
 
 
 @dataclass(frozen=True)
@@ -64,13 +160,21 @@ class AgencyRule:
 
 RULES: Tuple[AgencyRule, ...] = (
     AgencyRule("drafting", DRAFTING, "llm drafted a reply for the customer"),
+    AgencyRule("mind_reading", MIND_READING, "llm mind-read the match"),
+    AgencyRule("prescription", PRESCRIPTION, "llm prescribed the customer's dating life"),
     # Deliberately broad: a needless fallback is safe, an invented explanation reaching the customer is not.
     AgencyRule("diagnosis", DIAGNOSIS, "llm diagnosed why the match replied"),
 )
 
 
-def enforce_agency(texts: Sequence[str], sources: Sequence[str] = ()) -> None:
+def enforce_agency(texts: Sequence[str], sources: Sequence[str] = (), match_name: Optional[str] = None) -> None:
     """Raise ``ValueError`` if any feedback text breaks an agency rule in ``RULES``.
+
+    Typographic apostrophes in ``texts`` and ``sources`` are folded to ``'``
+    before anything else, so contractions match and a curly-quoted citation
+    still matches a straight-quoted source. Every occurrence of ``match_name``
+    (when given) is read as "the match", so "Sam isn't into you" is caught the
+    same as "she isn't into you".
 
     Feedback is required to name and quote the customer's own messages
     briefly, so a quoted span is blanked before scanning only when it is
@@ -88,7 +192,8 @@ def enforce_agency(texts: Sequence[str], sources: Sequence[str] = ()) -> None:
     """
     normalised_sources = _normalise_sources(sources)
     for text in texts:
-        stripped = _strip_normalised_citations(text, normalised_sources)
+        text = text.translate(_APOSTROPHES)
+        stripped = _normalise_subject(_strip_normalised_citations(text, normalised_sources), match_name)
         for rule in RULES:
             if rule.pattern.search(stripped):
                 raise ValueError(f"{rule.error}: {text[:80]!r}")
@@ -109,8 +214,8 @@ def strip_citations(text: str, sources: Sequence[str] = ()) -> str:
 
 
 def _normalise_sources(sources: Sequence[str]) -> List[str]:
-    """``squash`` every non-blank source once, so a batch of texts can be stripped without re-normalising per text."""
-    return [squash(s) for s in sources if s.strip()]
+    """``squash`` every non-blank source once (apostrophes folded), so a batch of texts can be stripped without re-normalising per text."""
+    return [squash(s.translate(_APOSTROPHES)) for s in sources if s.strip()]
 
 
 def _strip_normalised_citations(text: str, normalised_sources: Sequence[str]) -> str:
@@ -118,7 +223,7 @@ def _strip_normalised_citations(text: str, normalised_sources: Sequence[str]) ->
 
     def citation_end(start: int) -> Optional[int]:
         for closing in reversed(list(CLOSING_QUOTE.finditer(text, start + 1))):
-            inner = squash(text[start + 1 : closing.start()])
+            inner = squash(text[start + 1 : closing.start()].translate(_APOSTROPHES))
             if len(inner.split()) >= MIN_QUOTE_WORDS and any(inner in s for s in normalised_sources):
                 return closing.end()
         return None

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, List, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 import httpx
 
@@ -106,7 +106,9 @@ class LLMScorer(Scorer):
 
         try:
             raw = await self._complete(prompt)
-            return self._parse(raw, boundaries, [m.body for m in request.messages if m.sender == "self"])
+            return self._parse(
+                raw, boundaries, [m.body for m in request.messages if m.sender == "self"], request.match_name
+            )
         except Exception:  # noqa: BLE001 - degrade instead of failing the job
             logger.exception("llm scoring failed, falling back to heuristic scorer")
             response = await self._fallback.analyze(request)
@@ -162,7 +164,13 @@ class LLMScorer(Scorer):
             response.raise_for_status()
             return response.json()["choices"][0]["message"]["content"]
 
-    def _parse(self, raw: str, boundaries: List[tuple[int, int]], sources: Sequence[str] = ()) -> AnalyzeResponse:
+    def _parse(
+        self,
+        raw: str,
+        boundaries: List[tuple[int, int]],
+        sources: Sequence[str] = (),
+        match_name: Optional[str] = None,
+    ) -> AnalyzeResponse:
         payload: Dict[str, Any] = json.loads(_strip_fences(raw))
         by_boundary: Dict[tuple[int, int], Segment] = {}
         for item in payload.get("segments", []):
@@ -192,7 +200,7 @@ class LLMScorer(Scorer):
         patterns = _string_list(overall, "patterns")
         prose = [s.comment for s in segments] + [str(overall.get("summary", ""))]
         prose += strengths + improvements + reflection_questions + patterns
-        enforce_agency(prose, sources)
+        enforce_agency(prose, sources, match_name)
         scores = [s.engagement_score for s in segments]
         return AnalyzeResponse(
             model_version=self.version,
