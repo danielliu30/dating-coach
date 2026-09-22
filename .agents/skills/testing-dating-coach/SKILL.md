@@ -223,7 +223,7 @@ Top tab labels may be truncated ("Coac…", "Analy…") at ~1024px — cosmetic,
   `{"choices":[{"message":{"content":"<JSON completion string>"}}]}`.
   Completion segments must cover exactly the `[start-end]` boundaries requested
   in the user prompt, or fallback occurs for schema/coverage errors rather than
-  the agency gate. Set a stable segment size on the isolated analyzer.
+  the agency gate. Set `ML_SEGMENT_SIZE` (default 4) explicitly on the isolated analyzer so the boundaries are predictable.
 - Pair each rejection test with a clean-completion control using the same request;
   require clean text to pass unchanged with an LLM model_version. Capture container
   logs to distinguish agency ValueError from network/schema fallback. Exercise
