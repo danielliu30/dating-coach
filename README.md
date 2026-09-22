@@ -65,7 +65,7 @@ Images are published automatically by CI on every merge to `main` (see [Deployme
 `nginx/` holds one route table in two flavours — `/api/*` and `/healthz` go to the API (WebSocket upgrades included), `/ml/*` goes to the ML service, and everything else goes to the `web` image (the exported Expo web bundle built by `app/Dockerfile`, with an SPA fallback):
 
 - Containerised: `docker compose --profile gateway up -d` adds the `web` and `nginx` services; open `http://localhost:${NGINX_PORT:-80}/`. If you change `NGINX_PORT`, set `PUBLIC_APP_URL` (and `CORS_ORIGINS`) to that origin as well.
-- Host-installed nginx: install `nginx/host-site.conf` as a site (instructions in the file); it proxies to the ports compose publishes on `localhost` (`web` on `${WEB_PORT:-3000}`; the file hardcodes 3000, edit it if you change `WEB_PORT`).
+- Host-installed nginx: install `nginx/host-site.conf` as a site (instructions in the file); it terminates TLS and proxies to the ports compose publishes on `localhost` (`web` on `${WEB_PORT:-3000}`; the file hardcodes 3000, edit it if you change `WEB_PORT`). See [HTTPS](#https-host-nginx--certbot) below.
 
 The web bundle is built with an empty `EXPO_PUBLIC_API_URL` (`WEB_API_URL` in `.env`), which means same-origin: REST and the chat WebSocket use the page's origin, so no CORS is involved. Keep `PUBLIC_APP_URL` on the nginx origin so the `/verify?token=...` deep links resolve through the proxy. The full workflow is written up in `.agents/skills/running-dating-coach-in-docker/SKILL.md`.
 
@@ -85,6 +85,34 @@ Sign-up returns a short-lived `verify`-scoped token that only reaches `/api/v1/a
 ```bash
 docker compose logs api | grep -i verification
 ```
+
+### HTTPS (host nginx + certbot)
+
+Production terminates TLS in an nginx installed on the VM; the compose stack keeps speaking plain HTTP on localhost. `nginx/host-site.conf` has a port-80 server that answers ACME challenges and 301s everything else to `https://`, and a `443 ssl` server with the same `/api/`, `/healthz`, `/ml/`, `/` routes (WebSocket `Upgrade`/`Connection` forwarding and `proxy_read_timeout 1h` included) using the Let's Encrypt paths `/etc/letsencrypt/live/<domain>/{fullchain,privkey}.pem`.
+
+```bash
+sudo apt-get install -y nginx certbot python3-certbot-nginx
+sudo certbot certonly --nginx -d <domain>            # DNS must already point at the VM; nginx's default :80 site serves the challenge
+sed 's/example.com/<domain>/g' nginx/host-site.conf | sudo tee /etc/nginx/sites-available/dating-coach >/dev/null
+sudo ln -sf /etc/nginx/sites-available/dating-coach /etc/nginx/sites-enabled/dating-coach
+sudo rm -f /etc/nginx/sites-enabled/default
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+Auto-renewal: the package installs `certbot.timer` (twice daily); check with `systemctl status certbot.timer` and `sudo certbot renew --dry-run`. Make sure the renewed cert is picked up by nginx with a deploy hook:
+
+```bash
+echo -e '#!/bin/sh\nsystemctl reload nginx' | sudo tee /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh >/dev/null
+sudo chmod +x /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
+```
+
+Then in the production `.env`:
+
+- `NGINX_PORT=127.0.0.1:8088` and `WEB_PORT=127.0.0.1:3000` — the host nginx owns 80/443, so the containerised gateway moves off 80 and both are bound to localhost only, so the host nginx is the sole public entrypoint for the web bundle (the compose file still publishes `api` :8080, `ml-analyzer` :8000, Postgres/Redis/RabbitMQ on all interfaces — keep those closed in the VM firewall and allow only 22/80/443). Then `docker compose --profile gateway up -d` as before.
+- `PUBLIC_APP_URL=https://<domain>` and `CORS_ORIGINS=https://<domain>` so verification/payment links and the CORS allow-list use the public origin.
+- GitHub variable `DEPLOY_HEALTHCHECK_URL=https://<domain>/healthz` so the deploy job probes through TLS.
+
+The chat WebSocket same-origin check is unaffected by TLS: nginx forwards `Host: <domain>` and the browser sends `Origin: https://<domain>`, and the API compares only the host part, so `Origin` and `Host` still match (and `https://<domain>` in `CORS_ORIGINS` matches explicitly as well).
 
 ## Deployment flow (CI/CD)
 
@@ -121,8 +149,8 @@ Optional repository **variables**: `GOOGLE_CLIENT_ID` (baked into the web bundle
 
 1. Docker Engine + the Compose plugin installed; the deploy user can run `docker` without sudo.
 2. `git clone` of this repo at `DEPLOY_DIR`. The deploy job runs `git fetch && git checkout <sha>` there so `docker-compose.yml`, `nginx/default.conf` and `backend/migrations/` (bind-mounted into the `migrate` service) always match the deployed images.
-3. A production `.env` in that directory (start from `.env.example`; set `APP_ENV`, `JWT_SECRET`, `POSTGRES_PASSWORD`, `PUBLIC_APP_URL`, `CORS_ORIGINS`, SMTP, Stripe, `GOOGLE_CLIENT_ID`). The deploy step appends/replaces only `IMAGE_TAG` and `DOCKERHUB_NAMESPACE`.
-4. Ports 80 (and 443 if you terminate TLS on the host) open; if a host nginx fronts the stack, move `NGINX_PORT` off 80 as described above.
+3. A production `.env` in that directory (start from `.env.example`; set `APP_ENV`, `JWT_SECRET`, `POSTGRES_PASSWORD`, `PUBLIC_APP_URL=https://<domain>`, `CORS_ORIGINS=https://<domain>`, SMTP, Stripe, `GOOGLE_CLIENT_ID`). The deploy step appends/replaces only `IMAGE_TAG` and `DOCKERHUB_NAMESPACE`.
+4. Ports 80 and 443 open, host nginx + certbot set up as in [HTTPS](#https-host-nginx--certbot) with `NGINX_PORT`/`WEB_PORT` moved off 80 and bound to localhost; `DEPLOY_HEALTHCHECK_URL=https://<domain>/healthz`.
 5. A deploy key: `ssh-keygen -t ed25519 -f deploy_key -N ''`, append `deploy_key.pub` to `~/.ssh/authorized_keys`, store the private half as `DEPLOY_SSH_KEY`.
 
 A first `docker compose --profile gateway up -d` by hand is a good smoke test before wiring the secrets; after that every merge to `main` deploys itself, and the run goes red in Actions if `/healthz`, `/ml/healthz` or `/` does not answer through nginx within 90 s (the VM is then reverted to the previously pinned `IMAGE_TAG`/checkout automatically and the failing tag's logs are printed; the run still fails). Note that `migrate` only runs `up`, so a rollback does not undo schema changes — keep migrations backward-compatible with the previous release (expand/contract), or restore the DB separately before rolling back across a breaking migration.
