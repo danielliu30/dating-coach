@@ -13,6 +13,8 @@ import (
 	"github.com/danielliu30/dating-coach/backend/internal/chat"
 	"github.com/danielliu30/dating-coach/backend/internal/coaching"
 	"github.com/danielliu30/dating-coach/backend/internal/config"
+	"github.com/danielliu30/dating-coach/backend/internal/notify"
+	"github.com/danielliu30/dating-coach/backend/internal/notify/live"
 	"github.com/danielliu30/dating-coach/backend/internal/payments"
 )
 
@@ -27,10 +29,11 @@ func testRouter(t *testing.T, issuer *auth.TokenIssuer) http.Handler {
 		&config.Config{Env: "test", CORSOrigins: []string{"*"}},
 		auth.Middleware(issuer),
 		handlers{
-			auth:     auth.NewHandler(auth.NewService(nil, nil, issuer, nil, 4, "", nil, nil, nil, 15*time.Minute, 30*time.Minute, time.Hour), auth.NewRateLimiter(nil, 100, time.Minute)),
-			coaching: coaching.NewHandler(coaching.NewService(nil, nil, payments.Disabled{}, 15*time.Minute, "", "", nil)),
-			chat:     chat.NewHandler(chat.NewService(nil, hub), hub, nil, []string{"*"}),
-			analysis: analysis.NewHandler(analysis.NewService(nil, nil, nil)),
+			auth:          auth.NewHandler(auth.NewService(nil, nil, issuer, nil, 4, "", nil, nil, nil, 15*time.Minute, 30*time.Minute, time.Hour), auth.NewRateLimiter(nil, 100, time.Minute)),
+			coaching:      coaching.NewHandler(coaching.NewService(nil, nil, payments.Disabled{}, 15*time.Minute, "", "", nil)),
+			chat:          chat.NewHandler(chat.NewService(nil, hub), hub, nil, []string{"*"}),
+			analysis:      analysis.NewHandler(analysis.NewService(nil, nil, nil)),
+			notifications: live.NewHandler(notify.NewHub(nil), nil, []string{"*"}),
 		},
 	)
 }
@@ -66,6 +69,9 @@ func TestPrivateRoutesRejectVerifyScope(t *testing.T) {
 		// An unparsable id keeps the request in the handler's own validation,
 		// so the unbacked service is never called.
 		{http.MethodPost, "/api/v1/analysis/conversations/not-a-uuid/reanalyze"},
+		// A plain GET is not a WebSocket handshake, so the handler refuses
+		// the upgrade before it touches the unbacked hub.
+		{http.MethodGet, "/api/v1/notifications/ws"},
 		{http.MethodGet, "/api/v1/coach/sessions"},
 		{http.MethodPut, "/api/v1/coach/profile"},
 	} {
