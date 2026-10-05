@@ -23,11 +23,13 @@ import (
 const (
 	accountRefresh = 15 * time.Second
 	writeTimeout   = 10 * time.Second
-	// readyTimeout bounds how long a new socket waits for its Redis
-	// subscription before announcing itself anyway; the client's refetch on
-	// ready and its fallback poll cover anything published in the gap.
-	readyTimeout = 5 * time.Second
 )
+
+// readyTimeout bounds how long a new socket waits for its Redis subscription
+// before announcing itself anyway, so the client refetches without waiting on
+// Redis; a second ready frame follows once the subscription is live. A
+// variable so tests can shorten it.
+var readyTimeout = 5 * time.Second
 
 // AccountStatus answers whether an account may still act, from wherever that
 // is recorded durably, so sockets can be exercised without a database.
@@ -103,6 +105,10 @@ func (h *Handler) websocket(w http.ResponseWriter, r *http.Request) {
 
 	readyTimer := time.NewTimer(readyTimeout)
 	defer readyTimer.Stop()
+	// Set when ready is announced early: anything published before the Redis
+	// subscription is live never reaches this socket, so its arrival is a
+	// second cue to refetch.
+	var lateReady <-chan struct{}
 	select {
 	case <-ctx.Done():
 		return
@@ -115,6 +121,7 @@ func (h *Handler) websocket(w http.ResponseWriter, r *http.Request) {
 	case <-ready:
 	case <-readyTimer.C:
 		slog.Warn("notification subscription not confirmed; announcing socket anyway", "user_id", principal.UserID)
+		lateReady = ready
 	}
 	h.write(ctx, conn, notify.Event{Type: notify.EventReady})
 
@@ -131,6 +138,9 @@ func (h *Handler) websocket(w http.ResponseWriter, r *http.Request) {
 		case <-expiry.C:
 			closeSocket(conn, socketExpired, principal.UserID, connID, "expiry")
 			return
+		case <-lateReady:
+			lateReady = nil
+			h.write(ctx, conn, notify.Event{Type: notify.EventReady})
 		case <-accountTicker.C:
 			if verdict := h.sessionStatus(ctx, principal.UserID); verdict != socketActive {
 				closeSocket(conn, verdict, principal.UserID, connID, "heartbeat")

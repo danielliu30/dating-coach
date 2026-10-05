@@ -34,6 +34,7 @@ func (s stubAccounts) UserActive(context.Context, uuid.UUID) (bool, error) {
 type harness struct {
 	hub       *notify.Hub
 	rdb       *redis.Client
+	mr        *miniredis.Miniredis
 	principal auth.Principal
 	url       string
 }
@@ -49,6 +50,7 @@ func newHarness(t *testing.T, accounts stubAccounts, expiresAt time.Time) *harne
 	h := &harness{
 		hub:       notify.NewHub(rdb),
 		rdb:       rdb,
+		mr:        mr,
 		principal: auth.Principal{UserID: uuid.New(), ExpiresAt: expiresAt},
 	}
 	handler := NewHandler(h.hub, accounts, nil).Routes()
@@ -213,5 +215,29 @@ func TestSessionStatus(t *testing.T) {
 				t.Fatalf("sessionStatus = %d, want %d", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestSocketAnnouncesReadyAgainOnceALateSubscriptionIsLive checks that a socket
+// that had to announce itself before Redis confirmed its subscription sends a
+// second ready frame once it does, so the client refetches anything published
+// in between.
+func TestSocketAnnouncesReadyAgainOnceALateSubscriptionIsLive(t *testing.T) {
+	defer func(saved time.Duration) { readyTimeout = saved }(readyTimeout)
+	readyTimeout = 50 * time.Millisecond
+
+	h := newHarness(t, stubAccounts{active: true}, time.Now().Add(time.Hour))
+	h.mr.Close()
+	ctx := testContext(t)
+	conn := h.dial(t, ctx)
+
+	if got := readEvent(t, ctx, conn); got.Type != notify.EventReady {
+		t.Fatalf("first frame = %+v, want %q", got, notify.EventReady)
+	}
+	if err := h.mr.Restart(); err != nil {
+		t.Fatalf("restart redis: %v", err)
+	}
+	if got := readEvent(t, ctx, conn); got.Type != notify.EventReady {
+		t.Fatalf("frame after redis returned = %+v, want a second %q", got, notify.EventReady)
 	}
 }
