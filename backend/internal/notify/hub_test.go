@@ -156,3 +156,56 @@ func TestEndSessionsDropsOnlyLiveSocketsOfThatUser(t *testing.T) {
 		t.Fatalf("dropped %d sockets of another account", spared)
 	}
 }
+
+// TestSlowSocketIsCutOffNotLeftWaiting checks that a socket whose buffer is full
+// has its event channel closed, ending it so the client reconnects and
+// refetches, while the user's other sockets keep receiving everything.
+func TestSlowSocketIsCutOffNotLeftWaiting(t *testing.T) {
+	hub, rdb, _ := newTestHub(t)
+	userID := uuid.New()
+
+	slow, ready, unsubSlow := hub.Subscribe(userID)
+	defer unsubSlow()
+	fast, _, unsubFast := hub.Subscribe(userID)
+	defer unsubFast()
+	waitReady(t, ready)
+
+	const sent = 20
+	for i := 0; i < sent; i++ {
+		publishRaw(t, rdb, userID, Event{Type: EventAnalysisReady})
+		receive(t, fast)
+	}
+
+	buffered := 0
+	for range slow {
+		buffered++
+	}
+	if buffered == 0 || buffered >= sent {
+		t.Fatalf("slow socket got %d of %d events before its channel closed", buffered, sent)
+	}
+}
+
+// TestCancelledPumpCannotFeedANewerSubscription checks that a message still
+// held by the pump of a subscription that has ended is not delivered to the
+// sockets of the user's next subscription.
+func TestCancelledPumpCannotFeedANewerSubscription(t *testing.T) {
+	hub, _, _ := newTestHub(t)
+	userID := uuid.New()
+
+	_, ready, unsubOld := hub.Subscribe(userID)
+	waitReady(t, ready)
+	hub.mu.Lock()
+	oldFeed := hub.users[userID]
+	hub.mu.Unlock()
+	unsubOld()
+
+	events, _, unsub := hub.Subscribe(userID)
+	defer unsub()
+	hub.broadcastLocal(userID, oldFeed, Event{Type: EventAnalysisReady})
+
+	select {
+	case event := <-events:
+		t.Fatalf("new socket received %+v from the old subscription", event)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
