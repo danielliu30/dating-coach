@@ -87,6 +87,14 @@ func TestPrivateRoutesRejectVerifyScope(t *testing.T) {
 		})
 	}
 
+	// Past authentication any status passes above, a 404 included; this one
+	// only the mounted notifications handler gives.
+	t.Run("GET /api/v1/notifications/ws reaches the socket handler", func(t *testing.T) {
+		if got := status(router, http.MethodGet, "/api/v1/notifications/ws", sessionToken); got != http.StatusUpgradeRequired {
+			t.Fatalf("status = %d, want %d from the handler refusing a non-upgrade request", got, http.StatusUpgradeRequired)
+		}
+	})
+
 	t.Run("GET /api/v1/auth/me stays reachable", func(t *testing.T) {
 		if got := status(router, http.MethodGet, "/api/v1/auth/me", verifyToken); got == http.StatusForbidden {
 			t.Fatal("verify-scoped token cannot reach /auth/me, so it cannot drive the verify screen")
