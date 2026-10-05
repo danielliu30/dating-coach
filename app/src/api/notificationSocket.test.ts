@@ -20,7 +20,7 @@ class FakeSocket {
   readyState = FakeSocket.CONNECTING;
   onopen: (() => void) | null = null;
   onmessage: ((event: { data: string }) => void) | null = null;
-  onclose: ((event: { code: number }) => void) | null = null;
+  onclose: ((event: { code: number; reason: string }) => void) | null = null;
   onerror: (() => void) | null = null;
   send = jest.fn();
   close = jest.fn(() => {
@@ -37,9 +37,9 @@ class FakeSocket {
   }
 
   /** Simulates the server closing the connection; `opened` sockets must call open() first. */
-  serverClose(code = 1006) {
+  serverClose(code = 1006, reason = '') {
     this.readyState = FakeSocket.CLOSED;
-    this.onclose?.({ code });
+    this.onclose?.({ code, reason });
   }
 
   receive(event: NotificationEvent) {
@@ -194,6 +194,40 @@ describe('NotificationSocket', () => {
     expect(FakeSocket.instances).toHaveLength(1);
     socket.connect();
     expect(FakeSocket.instances).toHaveLength(1);
+  });
+
+  it('tells the renewal a revoked session apart from an expired one', async () => {
+    const socket = new NotificationSocket(() => 'tok', { onEvent: jest.fn() });
+    socket.connect();
+    latest().open();
+    latest().serverClose(1008, 'session revoked');
+    await flush();
+    expect(renewSession).toHaveBeenLastCalledWith('revoked');
+
+    jest.advanceTimersByTime(1000);
+    latest().open();
+    latest().serverClose(1008, 'session expired');
+    await flush();
+    expect(renewSession).toHaveBeenLastCalledWith('expired');
+    socket.close();
+  });
+
+  it('a second connect() while connected opens nothing, so close() leaves no socket behind', async () => {
+    const onEvent = jest.fn();
+    const socket = new NotificationSocket(() => 'tok', { onEvent });
+    socket.connect();
+    socket.connect();
+    expect(FakeSocket.instances).toHaveLength(1);
+
+    const only = latest();
+    socket.close();
+    expect(only.close).toHaveBeenCalled();
+    only.serverClose();
+    only.receive({ type: 'ready' });
+    await flush();
+    jest.advanceTimersByTime(30_000);
+    expect(FakeSocket.instances).toHaveLength(1);
+    expect(onEvent).not.toHaveBeenCalled();
   });
 
   it('an error event closes the underlying socket', () => {
