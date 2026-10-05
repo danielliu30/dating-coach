@@ -1,4 +1,4 @@
-import { api } from './client';
+import { api, type SessionEndReason } from './client';
 import { wsURL } from '../config';
 import type { NotificationEvent } from './types';
 
@@ -34,9 +34,9 @@ export class NotificationSocket {
     private readonly handlers: Handlers,
   ) {}
 
-  /** Opens the socket; a no-op after close() or without a token. */
+  /** Opens the socket; a no-op after close(), while one is open, or without a token. */
   connect(): void {
-    if (this.closed) return;
+    if (this.closed || this.socket) return;
     const token = this.token();
     if (!token) {
       this.handlers.onStatus?.('closed');
@@ -54,6 +54,7 @@ export class NotificationSocket {
       this.handlers.onStatus?.('open');
     };
     socket.onmessage = (event) => {
+      if (socket !== this.socket) return;
       try {
         this.handlers.onEvent(JSON.parse(String(event.data)) as NotificationEvent);
       } catch {
@@ -61,10 +62,13 @@ export class NotificationSocket {
       }
     };
     socket.onclose = (event) => {
+      if (socket !== this.socket) return;
+      this.socket = null;
       const unopened = !this.opened;
       this.opened = false;
       this.handlers.onStatus?.('closed');
-      void this.scheduleReconnect(unopened, event.code === POLICY_VIOLATION);
+      const refused = event.code !== POLICY_VIOLATION ? null : event.reason === 'session revoked' ? 'revoked' : 'expired';
+      void this.scheduleReconnect(unopened, refused);
     };
     socket.onerror = () => socket.close();
   }
@@ -72,15 +76,16 @@ export class NotificationSocket {
   /**
    * Queues the next attempt, renewing the session first when the handshake
    * never opened (spaced every attemptsPerRenewal failures) or the API refused
-   * the session (always). A rejected renewal means the user is signed out, so
-   * the socket stops for good.
+   * the session (always), passing on whether it said the session expired or
+   * was revoked so a refused renewal tells the user which. A rejected renewal
+   * means the user is signed out, so the socket stops for good.
    */
-  private async scheduleReconnect(unopened: boolean, refused: boolean): Promise<void> {
+  private async scheduleReconnect(unopened: boolean, refused: SessionEndReason | null): Promise<void> {
     if (this.closed) return;
     if (unopened || refused) {
-      const due = refused || this.failures % attemptsPerRenewal === 0;
+      const due = refused !== null || this.failures % attemptsPerRenewal === 0;
       if (!refused) this.failures += 1;
-      if (due && (await api.renewSession()) === 'rejected') {
+      if (due && (await api.renewSession(refused ?? 'expired')) === 'rejected') {
         this.close();
         return;
       }
@@ -95,7 +100,8 @@ export class NotificationSocket {
   close(): void {
     this.closed = true;
     if (this.retry) clearTimeout(this.retry);
-    this.socket?.close();
+    const socket = this.socket;
     this.socket = null;
+    socket?.close();
   }
 }

@@ -118,7 +118,9 @@ func (h *Hub) EndSessions(userID uuid.UUID) {
 // Subscribe registers a socket for userID's notifications. The first socket a
 // user opens on this replica starts the Redis subscription; it returns the
 // socket's event channel, a channel closed once that subscription is live, and
-// the unsubscribe function the socket must call as it closes.
+// the unsubscribe function the socket must call as it closes. The event channel
+// is closed early if the socket falls so far behind that its buffer fills; the
+// socket should then end, so its client reconnects and refetches.
 func (h *Hub) Subscribe(userID uuid.UUID) (<-chan Event, <-chan struct{}, func()) {
 	sub := &subscriber{events: make(chan Event, 16)}
 
@@ -128,7 +130,7 @@ func (h *Hub) Subscribe(userID uuid.UUID) (<-chan Event, <-chan struct{}, func()
 		ctx, cancel := context.WithCancel(context.Background())
 		feed = &userFeed{subs: map[*subscriber]struct{}{}, cancel: cancel, ready: make(chan struct{})}
 		h.users[userID] = feed
-		go h.pump(ctx, userID, feed.ready)
+		go h.pump(ctx, userID, feed)
 	}
 	feed.subs[sub] = struct{}{}
 	h.mu.Unlock()
@@ -157,11 +159,11 @@ func (h *Hub) unsubscribe(userID uuid.UUID, sub *subscriber) {
 	}
 }
 
-// pump forwards Redis messages on userID's channel to the local sockets until
-// ctx is cancelled, closing ready once Redis confirms the subscription. A
+// pump forwards Redis messages on userID's channel to feed's sockets until ctx
+// is cancelled, closing feed.ready once Redis confirms the subscription. A
 // subscription that cannot be confirmed is retried every second; once live,
 // go-redis resubscribes by itself after a dropped connection.
-func (h *Hub) pump(ctx context.Context, userID uuid.UUID, ready chan struct{}) {
+func (h *Hub) pump(ctx context.Context, userID uuid.UUID, feed *userFeed) {
 	pubsub := h.rdb.Subscribe(ctx, UserChannel(userID))
 	defer func() {
 		if err := pubsub.Close(); err != nil {
@@ -184,46 +186,67 @@ func (h *Hub) pump(ctx context.Context, userID uuid.UUID, ready chan struct{}) {
 		case <-time.After(time.Second):
 		}
 	}
-	close(ready)
+	close(feed.ready)
 
 	// A blocking ReceiveMessage would not notice ctx being cancelled, so the
 	// last socket leaving could not end the subscription; Channel can be
 	// abandoned at any time.
-	messages := pubsub.Channel()
+	messages := pubsub.ChannelWithSubscriptions()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case msg, ok := <-messages:
+		case raw, ok := <-messages:
 			if !ok {
 				return
+			}
+			msg, isMessage := raw.(*redis.Message)
+			if !isMessage {
+				// go-redis resubscribes on its own after losing the connection,
+				// but Pub/Sub does not replay what was published meanwhile:
+				// cue the sockets to refetch, as a fresh connection would.
+				if sub, isSub := raw.(*redis.Subscription); isSub && sub.Kind == "subscribe" {
+					slog.Info("notification subscription restored", "user_id", userID)
+					h.broadcastLocal(userID, feed, Event{Type: EventReady})
+				}
+				continue
 			}
 			var event Event
 			if err := json.Unmarshal([]byte(msg.Payload), &event); err != nil {
 				slog.Error("decode notification", "error", err, "user_id", userID)
 				continue
 			}
-			h.broadcastLocal(userID, event)
+			h.broadcastLocal(userID, feed, event)
 		}
 	}
 }
 
-// broadcastLocal delivers an event to this replica's sockets for userID,
-// dropping it for sockets whose buffer is full rather than blocking the rest:
-// clients refetch on reconnect, so a dropped push is only a delay.
-func (h *Hub) broadcastLocal(userID uuid.UUID, event Event) {
+// broadcastLocal delivers an event to feed's sockets, provided feed is still
+// userID's current one: a pump cancelled by the last socket leaving may hold
+// one last message, which must not reach the sockets of a newer subscription.
+//
+// A socket whose buffer is full is cut off rather than allowed to block the
+// rest: its event channel is closed, which ends the socket, and the client's
+// reconnect refetches what it missed. Skipping just the event instead would
+// leave the client waiting on a push that never comes.
+func (h *Hub) broadcastLocal(userID uuid.UUID, feed *userFeed, event Event) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	feed, ok := h.users[userID]
-	if !ok {
+	if h.users[userID] != feed {
 		return
 	}
 	for sub := range feed.subs {
 		select {
 		case sub.events <- event:
 		default:
-			slog.Warn("dropping notification for slow client", "user_id", userID, "type", event.Type)
+			slog.Warn("dropping slow notification socket", "user_id", userID, "type", event.Type)
+			delete(feed.subs, sub)
+			close(sub.events)
 		}
+	}
+	if len(feed.subs) == 0 {
+		delete(h.users, userID)
+		feed.cancel()
 	}
 }
 
