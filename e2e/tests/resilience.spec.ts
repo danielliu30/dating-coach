@@ -1,4 +1,4 @@
-import { test, expect, type BrowserContext, type Page } from '@playwright/test';
+import { test, expect, type BrowserContext, type Page, type WebSocketRoute } from '@playwright/test';
 import { publishCoach } from '../helpers/api';
 import { makeAccount, signUpAndVerify } from '../helpers/signUpAndVerify';
 import { dbCount, dbOne, sleep, startService, stopService, waitForApi, waitForDb } from '../helpers/stack';
@@ -6,8 +6,9 @@ import { button, field, openTab } from '../helpers/ui';
 
 /**
  * Recipes that take services down mid-flow: the chat offline queue replaying
- * exactly once, and the analysis result screen's "Try again" after the worker
- * and API were unavailable. Services are always restarted in afterEach so a
+ * exactly once, the analysis result screen's "Try again" after the worker and
+ * API were unavailable, and the result screen following the notifications
+ * socket (push, and a refetch on reconnect for a push it missed). Services are always restarted in afterEach so a
  * failure cannot leave the stack broken for the next spec.
  */
 test.describe('service outages', () => {
@@ -100,5 +101,99 @@ test.describe('service outages', () => {
       (v) => v === 'succeeded',
     );
     expect(status).toBe('succeeded');
+  });
+
+  test.describe('analysis result via the notifications socket', () => {
+    /** Frames the API sent on each notifications socket, in connection order. */
+    let connections: { route: WebSocketRoute; frames: string[] }[];
+    /** While set, frames from the API are recorded but not handed to the page. */
+    let dropping: boolean;
+
+    test.beforeEach(async () => {
+      connections = [];
+      dropping = false;
+      await clientPage.routeWebSocket(/\/notifications\/ws/, (ws) => {
+        const server = ws.connectToServer();
+        const connection = { route: ws, frames: [] as string[] };
+        connections.push(connection);
+        server.onMessage((message) => {
+          connection.frames.push(String(message));
+          if (!dropping) ws.send(message);
+        });
+      });
+      // The route only sees sockets opened after it is installed, and a fresh
+      // load also resets the Analyse stack to its submit screen.
+      await clientPage.goto('/');
+    });
+
+    test.afterEach(async () => {
+      await clientPage.unrouteAll({ behavior: 'ignoreErrors' });
+    });
+
+    const connection = (i: number) => {
+      const c = connections[i];
+      if (!c) throw new Error(`notifications socket #${i + 1} was never opened`);
+      return c;
+    };
+    const types = (frames: string[]) => frames.map((f) => (JSON.parse(f) as { type: string }).type);
+
+    /** Submits the example transcript with the worker stopped and returns the queued analysis id. */
+    const submitQueued = async (title: string): Promise<string> => {
+      await stopService('worker');
+      await openTab(clientPage, 'Analyse');
+      await expect(clientPage.getByText('Analyse a conversation')).toBeVisible();
+      await field(clientPage, 'Title').fill(title);
+      await button(clientPage, 'Use the example').click();
+      await button(clientPage, 'Get feedback').click();
+      await expect(clientPage.getByText('Queued for analysis…')).toBeVisible({ timeout: 30_000 });
+      await expect.poll(() => connections.some((c) => types(c.frames).includes('ready')), { timeout: 30_000 }).toBe(true);
+      return dbOne(
+        `select a.id from analysis_results a join conversations c on c.id = a.conversation_id
+         where c.user_id = '${clientID}' and c.title = '${title}'`,
+      );
+    };
+
+    /** Counts the page's GETs of one analysis result from now on. */
+    const countResultFetches = (analysisID: string) => {
+      const counter = { n: 0 };
+      clientPage.on('request', (req) => {
+        if (req.method() === 'GET' && req.url().endsWith(`/analysis/results/${analysisID}`)) counter.n += 1;
+      });
+      return counter;
+    };
+
+    test('result screen reaches "Overall engagement" from the analysis_ready push', async () => {
+      const analysisID = await submitQueued(`Push ${Date.now()}`);
+      const fetches = countResultFetches(analysisID);
+
+      // The fallback poll is 30s, so finishing well inside it means the push did it.
+      await startService('worker');
+      await expect(clientPage.getByText('Overall engagement')).toBeVisible({ timeout: 20_000 });
+      const pushed = connections.flatMap((c) => c.frames).map((f) => JSON.parse(f) as Record<string, string>);
+      expect(pushed).toContainEqual(expect.objectContaining({ type: 'analysis_ready', analysis_id: analysisID }));
+      expect(fetches.n).toBe(1);
+      expect(connections).toHaveLength(1);
+    });
+
+    test('a socket reconnect refetches a result whose push was missed', async () => {
+      const analysisID = await submitQueued(`Missed push ${Date.now()}`);
+
+      // The page stops hearing the API, then the worker finishes the analysis.
+      dropping = true;
+      await startService('worker');
+      await waitForDb(`select status from analysis_results where id = '${analysisID}'`, (v) => v === 'succeeded');
+      await expect.poll(() => types(connection(0).frames), { timeout: 15_000 }).toContain('analysis_ready');
+      await expect(clientPage.getByText('Queued for analysis…')).toBeVisible();
+
+      // Dropping the socket makes the client reconnect; the new connection's
+      // ready frame is its cue to refetch what it missed.
+      const fetches = countResultFetches(analysisID);
+      dropping = false;
+      await connection(0).route.close({ code: 1012, reason: 'service restart' });
+      await expect(clientPage.getByText('Overall engagement')).toBeVisible({ timeout: 15_000 });
+      expect(connections.length).toBeGreaterThanOrEqual(2);
+      expect(types(connection(1).frames)).toContain('ready');
+      expect(fetches.n).toBeGreaterThanOrEqual(1);
+    });
   });
 });

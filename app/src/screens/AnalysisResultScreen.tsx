@@ -4,10 +4,12 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { api } from '../api/client';
+import { NotificationSocket } from '../api/notificationSocket';
 import type { AnalysisResult, Outcome } from '../api/types';
 import { Divider, EmptyState, IconDisc, SectionHeader, Skeleton, SkeletonCard, StatusPill } from '../components/kit';
 import { Badge, Button, Loading, Screen, ScoreBar, type IconName } from '../components/ui';
 import type { AnalysisStackParams } from '../navigation/types';
+import { useAuth } from '../state/auth';
 import { colors, fonts, radii, scoreColor, shared, type } from '../theme';
 
 const OUTCOMES: { value: Outcome; label: string; icon: IconName }[] = [
@@ -21,13 +23,17 @@ const OUTCOMES: { value: Outcome; label: string; icon: IconName }[] = [
 const scoreWord = (score: number): string =>
   score >= 0.66 ? 'Engaging' : score >= 0.4 ? 'Steady' : 'Flat';
 
-const POLL_MS = 2000;
+// The notifications socket says when the worker is done, so polling is only a
+// fallback for a push that never arrived; a failed request backs off from 2s.
+const FALLBACK_POLL_MS = 30_000;
+const RETRY_MS = 2000;
 const MAX_POLL_FAILURES = 5;
 
 export default function AnalysisResultScreen({
   route,
 }: NativeStackScreenProps<AnalysisStackParams, 'Result'>): React.ReactElement {
   const { conversationID } = route.params;
+  const { token } = useAuth();
   // A retry scores the conversation under a new analysis id, so the id being
   // polled outlives the one this screen was opened with.
   const [analysisID, setAnalysisID] = useState(route.params.analysisID);
@@ -42,34 +48,67 @@ export default function AnalysisResultScreen({
   const [labelFailed, setLabelFailed] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const failures = useRef(0);
+  // Bumped by every fetch, so only the latest one schedules the next: a push
+  // landing while a poll is in flight must not leave two loops running.
+  const fetches = useRef(0);
 
-  // The worker fills the result asynchronously, so poll until it settles. A
-  // transient request failure retries with backoff instead of giving up.
+  // Fetches the result and, while it is unsettled, schedules the fallback poll.
+  // A transient request failure retries with backoff instead of giving up.
   const poll = useCallback(async () => {
+    if (timer.current) clearTimeout(timer.current);
+    const fetch = ++fetches.current;
     try {
       const next = await api.analysisResult(analysisID);
+      if (fetch !== fetches.current) return;
       failures.current = 0;
       setError(null);
       setResult(next);
       if (next.status === 'pending' || next.status === 'running') {
-        timer.current = setTimeout(() => void poll(), POLL_MS);
+        timer.current = setTimeout(() => void poll(), FALLBACK_POLL_MS);
       }
     } catch (err) {
+      if (fetch !== fetches.current) return;
       failures.current += 1;
       if (failures.current >= MAX_POLL_FAILURES) {
         setError(err instanceof Error ? err.message : 'could not load analysis');
         return;
       }
-      timer.current = setTimeout(() => void poll(), POLL_MS * failures.current);
+      timer.current = setTimeout(() => void poll(), RETRY_MS * failures.current);
     }
   }, [analysisID]);
 
   useEffect(() => {
     void poll();
     return () => {
+      fetches.current += 1;
       if (timer.current) clearTimeout(timer.current);
     };
   }, [poll]);
+
+  // Read through refs so a renewed token or a retried analysis id reaches the
+  // socket without tearing it down.
+  const tokenRef = useRef(token);
+  tokenRef.current = token;
+  const watched = useRef({ analysisID, poll });
+  watched.current = { analysisID, poll };
+  const signedIn = token !== null;
+
+  // Refetch on every (re)connect, since an event published while the socket
+  // was down is gone, and whenever the worker settles the analysis on screen.
+  useEffect(() => {
+    if (!signedIn) return undefined;
+    const socket = new NotificationSocket(() => tokenRef.current, {
+      onEvent: (event) => {
+        const settled = event.type === 'analysis_ready' || event.type === 'analysis_failed';
+        if (event.type === 'ready' || (settled && event.analysis_id === watched.current.analysisID)) {
+          failures.current = 0;
+          void watched.current.poll();
+        }
+      },
+    });
+    socket.connect();
+    return () => socket.close();
+  }, [signedIn]);
 
   // A failed analysis keeps the transcript, so the analyzer can score it again
   // once whatever broke it is back: queue a new run and follow that one.
