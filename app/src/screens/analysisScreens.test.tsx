@@ -2,7 +2,8 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-
 import React from 'react';
 
 import { api } from '../api/client';
-import type { AnalysisResult } from '../api/types';
+import { NotificationSocket } from '../api/notificationSocket';
+import type { AnalysisResult, NotificationEvent } from '../api/types';
 import AnalysisHistoryScreen from './AnalysisHistoryScreen';
 import AnalysisResultScreen from './AnalysisResultScreen';
 
@@ -21,7 +22,25 @@ jest.mock('../api/client', () => ({
   },
 }));
 
+jest.mock('../state/auth', () => ({ useAuth: () => ({ token: 'tok' }) }));
+
+jest.mock('../api/notificationSocket', () => ({ NotificationSocket: jest.fn() }));
+
 const mocked = api as jest.Mocked<typeof api>;
+const SocketMock = NotificationSocket as unknown as jest.Mock;
+const socketClose = jest.fn();
+let pushEvent: (event: NotificationEvent) => void = () => {
+  throw new Error('no notification socket was opened');
+};
+
+beforeEach(() => {
+  SocketMock.mockReset();
+  socketClose.mockReset();
+  SocketMock.mockImplementation((_token: () => string | null, handlers: { onEvent: typeof pushEvent }) => {
+    pushEvent = handlers.onEvent;
+    return { connect: jest.fn(), close: socketClose };
+  });
+});
 const navigation = { navigate: jest.fn() };
 
 /** Analysis fixture; defaults to a completed result with one scored segment. */
@@ -128,25 +147,121 @@ describe('AnalysisResultScreen', () => {
     expect(screen.getByText(/did you actually enjoy this conversation/)).toBeTruthy();
   });
 
-  it('shows the loading state for pending/running and polls every 2s until it settles', async () => {
+  it('refetches when the push for this analysis arrives instead of polling', async () => {
     mocked.analysisResult
       .mockResolvedValueOnce(resultFixture({ status: 'pending', segments: null, overall: null }))
-      .mockResolvedValueOnce(resultFixture({ status: 'running', segments: null, overall: null }))
       .mockResolvedValueOnce(resultFixture());
     render(<AnalysisResultScreen {...props} />);
     await flush();
     expect(screen.getByText('Queued for analysis…')).toBeTruthy();
 
+    // Nothing is fetched on the old 2s cadence while waiting for the push.
     await act(async () => {
-      jest.advanceTimersByTime(2000);
+      jest.advanceTimersByTime(10_000);
     });
+    expect(mocked.analysisResult).toHaveBeenCalledTimes(1);
+
+    // Another analysis settling is not this screen's business.
+    await act(async () => pushEvent({ type: 'analysis_ready', analysis_id: 'other', conversation_id: 'c9' }));
+    expect(mocked.analysisResult).toHaveBeenCalledTimes(1);
+
+    await act(async () => pushEvent({ type: 'analysis_ready', analysis_id: 'a1', conversation_id: 'conv1' }));
+    expect(mocked.analysisResult).toHaveBeenCalledTimes(2);
+    expect(screen.getByText('Warm and curious.')).toBeTruthy();
+  });
+
+  it('shows the failed state when analysis_failed is pushed', async () => {
+    mocked.analysisResult
+      .mockResolvedValueOnce(resultFixture({ status: 'running', segments: null, overall: null }))
+      .mockResolvedValueOnce(resultFixture({ status: 'failed', error: 'model crashed' }));
+    render(<AnalysisResultScreen {...props} />);
+    await flush();
     expect(screen.getByText('Scoring your conversation…')).toBeTruthy();
 
-    await act(async () => {
-      jest.advanceTimersByTime(2000);
-    });
+    await act(async () => pushEvent({ type: 'analysis_failed', analysis_id: 'a1', conversation_id: 'conv1' }));
+    expect(screen.getByText('Analysis failed')).toBeTruthy();
+    expect(screen.getByText('model crashed')).toBeTruthy();
+  });
+
+  it('refetches on every socket (re)connect, covering pushes it missed', async () => {
+    mocked.analysisResult
+      .mockResolvedValueOnce(resultFixture({ status: 'pending', segments: null, overall: null }))
+      .mockResolvedValueOnce(resultFixture());
+    render(<AnalysisResultScreen {...props} />);
+    await flush();
+
+    await act(async () => pushEvent({ type: 'ready' }));
+    expect(mocked.analysisResult).toHaveBeenCalledTimes(2);
     expect(screen.getByText('Warm and curious.')).toBeTruthy();
+  });
+
+  it('ignores reconnects once the result has settled, so a flaky network cannot replace it', async () => {
+    mocked.analysisResult.mockResolvedValue(resultFixture());
+    render(<AnalysisResultScreen {...props} />);
+    await flush();
+
+    await act(async () => pushEvent({ type: 'ready' }));
+    await act(async () => pushEvent({ type: 'analysis_ready', analysis_id: 'a1' }));
+    expect(mocked.analysisResult).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('Warm and curious.')).toBeTruthy();
+  });
+
+  it('keeps a 30s fallback poll until it settles, without doubling up on pushes', async () => {
+    mocked.analysisResult
+      .mockResolvedValueOnce(resultFixture({ status: 'pending', segments: null, overall: null }))
+      .mockResolvedValueOnce(resultFixture({ status: 'running', segments: null, overall: null }))
+      .mockResolvedValueOnce(resultFixture({ status: 'running', segments: null, overall: null }))
+      .mockResolvedValueOnce(resultFixture());
+    render(<AnalysisResultScreen {...props} />);
+    await flush();
+
+    await act(async () => {
+      jest.advanceTimersByTime(30_000);
+    });
+    expect(screen.getByText('Scoring your conversation…')).toBeTruthy();
+    expect(mocked.analysisResult).toHaveBeenCalledTimes(2);
+
+    // A reconnect refetch restarts the fallback timer rather than adding one.
+    await act(async () => pushEvent({ type: 'ready' }));
     expect(mocked.analysisResult).toHaveBeenCalledTimes(3);
+    await act(async () => {
+      jest.advanceTimersByTime(29_999);
+    });
+    expect(mocked.analysisResult).toHaveBeenCalledTimes(3);
+    await act(async () => {
+      jest.advanceTimersByTime(1);
+    });
+    expect(mocked.analysisResult).toHaveBeenCalledTimes(4);
+    expect(screen.getByText('Warm and curious.')).toBeTruthy();
+
+    await act(async () => {
+      jest.advanceTimersByTime(120_000);
+    });
+    expect(mocked.analysisResult).toHaveBeenCalledTimes(4);
+  });
+
+  it('follows a retried analysis id with the same socket, and closes it on unmount', async () => {
+    mocked.analysisResult.mockResolvedValueOnce(resultFixture({ status: 'failed', error: 'model crashed' }));
+    mocked.reanalyzeConversation.mockResolvedValue(resultFixture({ id: 'a2', status: 'pending', segments: null, overall: null }));
+    mocked.analysisResult.mockResolvedValueOnce(resultFixture({ id: 'a2', status: 'pending', segments: null, overall: null }));
+    const view = render(<AnalysisResultScreen {...props} />);
+    await flush();
+    fireEvent.press(screen.getByText('Try again'));
+    await flush();
+    await flush();
+    const calls = mocked.analysisResult.mock.calls.length;
+
+    // The old id's events no longer apply; the new one's do.
+    await act(async () => pushEvent({ type: 'analysis_ready', analysis_id: 'a1', conversation_id: 'conv1' }));
+    expect(mocked.analysisResult).toHaveBeenCalledTimes(calls);
+    mocked.analysisResult.mockResolvedValueOnce(resultFixture({ id: 'a2' }));
+    await act(async () => pushEvent({ type: 'analysis_ready', analysis_id: 'a2', conversation_id: 'conv1' }));
+    expect(mocked.analysisResult).toHaveBeenLastCalledWith('a2');
+    expect(screen.getByText('Warm and curious.')).toBeTruthy();
+    expect(SocketMock).toHaveBeenCalledTimes(1);
+
+    view.unmount();
+    expect(socketClose).toHaveBeenCalled();
   });
 
   it('gives up after 5 poll failures with backoff, and "Try again" resets and re-polls', async () => {
