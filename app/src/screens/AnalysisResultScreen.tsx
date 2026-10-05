@@ -89,20 +89,25 @@ export default function AnalysisResultScreen({
   // socket without tearing it down.
   const tokenRef = useRef(token);
   tokenRef.current = token;
-  const watched = useRef({ analysisID, poll });
-  watched.current = { analysisID, poll };
+  const settled = result?.status === 'succeeded' || result?.status === 'failed';
+  const watched = useRef({ analysisID, poll, settled });
+  watched.current = { analysisID, poll, settled };
   const signedIn = token !== null;
 
-  // Refetch on every (re)connect, since an event published while the socket
-  // was down is gone, and whenever the worker settles the analysis on screen.
+  // Refetch on every (re)connect while the analysis is unsettled, since an event
+  // published while the socket was down is gone, and whenever the worker
+  // settles the analysis on screen. Once settled there is nothing to wait for,
+  // and refetching would let a flaky network replace the feedback with an error.
   useEffect(() => {
     if (!signedIn) return undefined;
     const socket = new NotificationSocket(() => tokenRef.current, {
       onEvent: (event) => {
         const settled = event.type === 'analysis_ready' || event.type === 'analysis_failed';
-        if (event.type === 'ready' || (settled && event.analysis_id === watched.current.analysisID)) {
+        const current = watched.current;
+        if (current.settled) return;
+        if (event.type === 'ready' || (settled && event.analysis_id === current.analysisID)) {
           failures.current = 0;
-          void watched.current.poll();
+          void current.poll();
         }
       },
     });

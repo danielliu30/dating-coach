@@ -1,4 +1,4 @@
-import { test, expect, type BrowserContext, type Page, type WebSocketRoute } from '@playwright/test';
+import { test, expect, type BrowserContext, type Page, type Request, type WebSocketRoute } from '@playwright/test';
 import { publishCoach } from '../helpers/api';
 import { makeAccount, signUpAndVerify } from '../helpers/signUpAndVerify';
 import { dbCount, dbOne, sleep, startService, stopService, waitForApi, waitForDb } from '../helpers/stack';
@@ -108,6 +108,8 @@ test.describe('service outages', () => {
     let connections: { route: WebSocketRoute; frames: string[] }[];
     /** While set, frames from the API are recorded but not handed to the page. */
     let dropping: boolean;
+    // Removed after each test, so one test's counters stop observing the next one's requests.
+    const requestListeners: ((req: Request) => void)[] = [];
 
     test.beforeEach(async () => {
       connections = [];
@@ -127,6 +129,7 @@ test.describe('service outages', () => {
     });
 
     test.afterEach(async () => {
+      for (const listener of requestListeners.splice(0)) clientPage.off('request', listener);
       await clientPage.unrouteAll({ behavior: 'ignoreErrors' });
     });
 
@@ -156,9 +159,11 @@ test.describe('service outages', () => {
     /** Counts the page's GETs of one analysis result from now on. */
     const countResultFetches = (analysisID: string) => {
       const counter = { n: 0 };
-      clientPage.on('request', (req) => {
+      const listener = (req: Request) => {
         if (req.method() === 'GET' && req.url().endsWith(`/analysis/results/${analysisID}`)) counter.n += 1;
-      });
+      };
+      requestListeners.push(listener);
+      clientPage.on('request', listener);
       return counter;
     };
 

@@ -195,6 +195,17 @@ describe('AnalysisResultScreen', () => {
     expect(screen.getByText('Warm and curious.')).toBeTruthy();
   });
 
+  it('ignores reconnects once the result has settled, so a flaky network cannot replace it', async () => {
+    mocked.analysisResult.mockResolvedValue(resultFixture());
+    render(<AnalysisResultScreen {...props} />);
+    await flush();
+
+    await act(async () => pushEvent({ type: 'ready' }));
+    await act(async () => pushEvent({ type: 'analysis_ready', analysis_id: 'a1' }));
+    expect(mocked.analysisResult).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('Warm and curious.')).toBeTruthy();
+  });
+
   it('keeps a 30s fallback poll until it settles, without doubling up on pushes', async () => {
     mocked.analysisResult
       .mockResolvedValueOnce(resultFixture({ status: 'pending', segments: null, overall: null }))
