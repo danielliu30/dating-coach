@@ -191,14 +191,25 @@ func (h *Hub) pump(ctx context.Context, userID uuid.UUID, feed *userFeed) {
 	// A blocking ReceiveMessage would not notice ctx being cancelled, so the
 	// last socket leaving could not end the subscription; Channel can be
 	// abandoned at any time.
-	messages := pubsub.Channel()
+	messages := pubsub.ChannelWithSubscriptions()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case msg, ok := <-messages:
+		case raw, ok := <-messages:
 			if !ok {
 				return
+			}
+			msg, isMessage := raw.(*redis.Message)
+			if !isMessage {
+				// go-redis resubscribes on its own after losing the connection,
+				// but Pub/Sub does not replay what was published meanwhile:
+				// cue the sockets to refetch, as a fresh connection would.
+				if sub, isSub := raw.(*redis.Subscription); isSub && sub.Kind == "subscribe" {
+					slog.Info("notification subscription restored", "user_id", userID)
+					h.broadcastLocal(userID, feed, Event{Type: EventReady})
+				}
+				continue
 			}
 			var event Event
 			if err := json.Unmarshal([]byte(msg.Payload), &event); err != nil {
