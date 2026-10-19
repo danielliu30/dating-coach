@@ -23,6 +23,7 @@ import (
 	"github.com/danielliu30/dating-coach/backend/internal/config"
 	"github.com/danielliu30/dating-coach/backend/internal/httpx"
 	"github.com/danielliu30/dating-coach/backend/internal/notify"
+	"github.com/danielliu30/dating-coach/backend/internal/notify/live"
 	"github.com/danielliu30/dating-coach/backend/internal/payments"
 	"github.com/danielliu30/dating-coach/backend/internal/store"
 )
@@ -97,14 +98,18 @@ func run() error {
 	// Sockets authenticated before a deletion would otherwise keep running
 	// until their next scheduled re-check; this closes them as it happens.
 	go auth.WatchRevocations(ctx, rdb, hub.EndSessions)
+	notifyHub := notify.NewHub(rdb)
+	go auth.WatchRevocations(ctx, rdb, notifyHub.EndSessions)
+	notificationsHandler := live.NewHandler(notifyHub, pg.Queries, cfg.CORSOrigins)
 	chatHandler := chat.NewHandler(chat.NewService(pg.Queries, hub), hub, pg.Queries, cfg.CORSOrigins)
 	analysisHandler := analysis.NewHandler(analysis.NewService(pg.Pool, pg.Queries, queue))
 
 	router := newRouter(cfg, auth.Middleware(issuer), handlers{
-		auth:     authHandler,
-		coaching: coachingHandler,
-		chat:     chatHandler,
-		analysis: analysisHandler,
+		auth:          authHandler,
+		coaching:      coachingHandler,
+		chat:          chatHandler,
+		analysis:      analysisHandler,
+		notifications: notificationsHandler,
 	})
 
 	server := &http.Server{
@@ -136,10 +141,11 @@ func run() error {
 
 // handlers groups the feature handlers newRouter mounts.
 type handlers struct {
-	auth     *auth.Handler
-	coaching *coaching.Handler
-	chat     *chat.Handler
-	analysis *analysis.Handler
+	auth          *auth.Handler
+	coaching      *coaching.Handler
+	chat          *chat.Handler
+	analysis      *analysis.Handler
+	notifications *live.Handler
 }
 
 // newRouter builds the API routing tree: an unauthenticated health check, the
@@ -171,6 +177,7 @@ func newRouter(cfg *config.Config, authenticate func(http.Handler) http.Handler,
 			private.Mount("/coaching", h.coaching.Routes())
 			private.Mount("/chat", h.chat.Routes())
 			private.Mount("/analysis", h.analysis.Routes())
+			private.Mount("/notifications", h.notifications.Routes())
 			private.Route("/coach", func(coach chi.Router) {
 				coach.Use(auth.RequireCoach)
 				coach.Mount("/", h.coaching.CoachRoutes())
