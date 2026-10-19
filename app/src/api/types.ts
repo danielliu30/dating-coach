@@ -184,6 +184,17 @@ export interface ChatMessage {
   created_at: string;
 }
 
+/**
+ * Frame on the notifications socket. `ready` is sent once the server is
+ * listening for the caller's events, so anything that finished before it has
+ * to be refetched; the analysis events name the analysis they settle.
+ */
+export interface NotificationEvent {
+  type: 'ready' | 'analysis_ready' | 'analysis_failed';
+  analysis_id?: string;
+  conversation_id?: string;
+}
+
 export type ChatEventType = 'message' | 'typing' | 'presence' | 'history' | 'error';
 
 export interface ChatEvent {
