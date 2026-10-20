@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/danielliu30/dating-coach/backend/internal/notify"
 	"github.com/danielliu30/dating-coach/backend/internal/store/db"
@@ -19,12 +20,14 @@ type Worker struct {
 	queries  *db.Queries
 	ml       *MLClient
 	notifier notify.Notifier
+	rdb      *redis.Client
 }
 
 // NewWorker wires the worker dependencies; called once from cmd/worker, whose
-// consumer loop invokes Handle for every delivery.
-func NewWorker(queries *db.Queries, ml *MLClient, notifier notify.Notifier) *Worker {
-	return &Worker{queries: queries, ml: ml, notifier: notifier}
+// consumer loop invokes Handle for every delivery. rdb carries the live
+// notification events the API fans out to the owner's open sockets.
+func NewWorker(queries *db.Queries, ml *MLClient, notifier notify.Notifier, rdb *redis.Client) *Worker {
+	return &Worker{queries: queries, ml: ml, notifier: notifier, rdb: rdb}
 }
 
 // Handle processes a single job. It returns an error only for failures worth
@@ -133,8 +136,9 @@ func (w *Worker) fail(ctx context.Context, analysisID uuid.UUID, lastAttempt boo
 	return nil
 }
 
-// notifyReady records and delivers the "analysis ready" notification. Email/push
-// delivery itself is a stub until the mobile clients register device tokens.
+// notifyReady records and delivers the "analysis ready" notification and tells
+// the owner's open sockets the result can be fetched. Email/push delivery itself
+// is a stub until the mobile clients register device tokens.
 func (w *Worker) notifyReady(ctx context.Context, job Job, analysisID uuid.UUID) {
 	userID, err := uuid.Parse(job.UserID)
 	if err != nil {
@@ -154,6 +158,13 @@ func (w *Worker) notifyReady(ctx context.Context, job Job, analysisID uuid.UUID)
 		Kind:    analysisQueueKind,
 		Payload: payload,
 	})
+	// The socket event is published even without a notification row: what
+	// the app refetches is the analysis, which is already complete.
+	w.publish(ctx, userID, notify.Event{
+		Type:           notify.EventAnalysisReady,
+		AnalysisID:     analysisID.String(),
+		ConversationID: job.ConversationID,
+	})
 	if err != nil {
 		slog.Error("create notification", "error", err)
 		return
@@ -165,5 +176,14 @@ func (w *Worker) notifyReady(ctx context.Context, job Job, analysisID uuid.UUID)
 	}
 	if err := w.queries.MarkNotificationSent(ctx, notification.ID); err != nil {
 		slog.Error("mark notification sent", "error", err)
+	}
+}
+
+// publish announces event on userID's notification channel. It is best effort:
+// a failure is only logged, because a client that missed the event refetches
+// the analysis when its socket reconnects and polls it as a fallback.
+func (w *Worker) publish(ctx context.Context, userID uuid.UUID, event notify.Event) {
+	if err := notify.Publish(ctx, w.rdb, userID, event); err != nil {
+		slog.Error("publish notification event", "error", err, "type", event.Type, "analysis_id", event.AnalysisID)
 	}
 }

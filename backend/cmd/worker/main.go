@@ -48,24 +48,27 @@ func run() error {
 	}
 	defer pg.Close()
 
+	// The worker revokes the sessions of the accounts it deletes, so it needs
+	// the same denylist the API writes, and publishes analysis events on the
+	// channels the API's notification sockets subscribe to.
+	rdb, err := store.OpenRedis(ctx, cfg.RedisURL)
+	if err != nil {
+		return err
+	}
+	defer rdb.Close()
+
 	notifier := notify.New(cfg)
 	worker := analysis.NewWorker(
 		pg.Queries,
 		analysis.NewMLClient(cfg.MLServiceURL, cfg.MLServiceTimeout),
 		notifier,
+		rdb,
 	)
 	provider, err := payments.New(cfg.PaymentsEnabled)
 	if err != nil {
 		return err
 	}
 	bookings := coaching.NewService(pg.Pool, pg.Queries, provider, cfg.PaymentHoldTTL, cfg.PublicAppURL, cfg.MailFrom, nil)
-	// The worker revokes the sessions of the accounts it deletes, so it needs
-	// the same denylist the API writes.
-	rdb, err := store.OpenRedis(ctx, cfg.RedisURL)
-	if err != nil {
-		return err
-	}
-	defer rdb.Close()
 
 	deleter := account.NewWorker(pg.Queries, auth.NewDenylist(rdb, cfg.JWTTTL))
 
