@@ -34,25 +34,43 @@ func (silentNotifier) Push(context.Context, string, string, string) error { retu
 // and returns a function receiving the next event published there.
 func subscribeUser(t *testing.T, rdb *redis.Client, userID uuid.UUID) func() notify.Event {
 	t.Helper()
+	messages := subscribeChannel(t, rdb, userID)
+	return func() notify.Event {
+		t.Helper()
+		event, ok := receiveWithin(t, messages, 5*time.Second)
+		if !ok {
+			t.Fatal("no event published")
+		}
+		return event
+	}
+}
+
+// subscribeChannel opens a live Redis subscription on userID's notification
+// channel, closed when the test ends, and returns its message stream.
+func subscribeChannel(t *testing.T, rdb *redis.Client, userID uuid.UUID) <-chan *redis.Message {
+	t.Helper()
 	ctx := context.Background()
 	sub := rdb.Subscribe(ctx, notify.UserChannel(userID))
 	t.Cleanup(func() { _ = sub.Close() })
 	if _, err := sub.Receive(ctx); err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
-	return func() notify.Event {
-		t.Helper()
-		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		defer cancel()
-		msg, err := sub.ReceiveMessage(ctx)
-		if err != nil {
-			t.Fatalf("no event published: %v", err)
-		}
+	return sub.Channel()
+}
+
+// receiveWithin returns the next event on messages, or false when none arrives
+// within wait.
+func receiveWithin(t *testing.T, messages <-chan *redis.Message, wait time.Duration) (notify.Event, bool) {
+	t.Helper()
+	select {
+	case msg := <-messages:
 		var event notify.Event
 		if err := json.Unmarshal([]byte(msg.Payload), &event); err != nil {
 			t.Fatalf("decode %s: %v", msg.Payload, err)
 		}
-		return event
+		return event, true
+	case <-time.After(wait):
+		return notify.Event{}, false
 	}
 }
 
@@ -175,5 +193,39 @@ func TestHandlePublishesAnalysisReady(t *testing.T) {
 	}
 	if row.Status != "succeeded" {
 		t.Fatalf("status = %q, want succeeded before the event announces it", row.Status)
+	}
+}
+
+// TestHandlePublishesAnalysisFailedOnlyOnLastAttempt checks the result screen
+// hears about a failure once it is final, and not while a redelivery may still
+// succeed.
+func TestHandlePublishesAnalysisFailedOnlyOnLastAttempt(t *testing.T) {
+	f := newWorkerFixture(t)
+	rdb := redis.NewClient(&redis.Options{Addr: miniredis.RunT(t).Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+	sub := subscribeChannel(t, rdb, f.userID)
+	w := NewWorker(f.queries, mlServer(t, http.StatusInternalServerError), silentNotifier{}, rdb)
+
+	if err := w.Handle(context.Background(), f.job, false); err == nil {
+		t.Fatal("Handle succeeded although the analyzer failed")
+	}
+	if event, ok := receiveWithin(t, sub, 200*time.Millisecond); ok {
+		t.Fatalf("published %+v while attempts were left", event)
+	}
+
+	if err := w.Handle(context.Background(), f.job, true); err != nil {
+		t.Fatalf("last attempt: %v", err)
+	}
+	want := notify.Event{Type: notify.EventAnalysisFailed, AnalysisID: f.job.AnalysisID, ConversationID: f.job.ConversationID}
+	got, ok := receiveWithin(t, sub, 5*time.Second)
+	if !ok || got != want {
+		t.Fatalf("published %+v (%v), want %+v", got, ok, want)
+	}
+	row, err := f.queries.GetAnalysisResult(context.Background(), uuid.MustParse(f.job.AnalysisID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.Status != "failed" {
+		t.Fatalf("status = %q, want failed before the event announces it", row.Status)
 	}
 }

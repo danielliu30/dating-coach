@@ -54,15 +54,15 @@ func (w *Worker) Handle(ctx context.Context, job Job, lastAttempt bool) error {
 
 	conversation, err := w.queries.GetConversation(ctx, conversationID)
 	if err != nil {
-		return w.fail(ctx, analysisID, lastAttempt, fmt.Errorf("load conversation: %w", err))
+		return w.fail(ctx, job, analysisID, lastAttempt, fmt.Errorf("load conversation: %w", err))
 	}
 	messages, err := w.queries.ListMessages(ctx, conversationID)
 	if err != nil {
-		return w.fail(ctx, analysisID, lastAttempt, fmt.Errorf("load messages: %w", err))
+		return w.fail(ctx, job, analysisID, lastAttempt, fmt.Errorf("load messages: %w", err))
 	}
 	preferences, err := w.datingPreferences(ctx, conversation.UserID)
 	if err != nil {
-		return w.fail(ctx, analysisID, lastAttempt, fmt.Errorf("load preferences: %w", err))
+		return w.fail(ctx, job, analysisID, lastAttempt, fmt.Errorf("load preferences: %w", err))
 	}
 
 	req := MLRequest{
@@ -83,16 +83,16 @@ func (w *Worker) Handle(ctx context.Context, job Job, lastAttempt bool) error {
 
 	resp, err := w.ml.Analyze(ctx, req)
 	if err != nil {
-		return w.fail(ctx, analysisID, lastAttempt, err)
+		return w.fail(ctx, job, analysisID, lastAttempt, err)
 	}
 
 	segments, err := json.Marshal(resp.Segments)
 	if err != nil {
-		return w.fail(ctx, analysisID, lastAttempt, fmt.Errorf("encode segments: %w", err))
+		return w.fail(ctx, job, analysisID, lastAttempt, fmt.Errorf("encode segments: %w", err))
 	}
 	overall, err := json.Marshal(resp.Overall)
 	if err != nil {
-		return w.fail(ctx, analysisID, lastAttempt, fmt.Errorf("encode overall: %w", err))
+		return w.fail(ctx, job, analysisID, lastAttempt, fmt.Errorf("encode overall: %w", err))
 	}
 
 	if _, err := w.queries.CompleteAnalysis(ctx, db.CompleteAnalysisParams{
@@ -123,9 +123,10 @@ func (w *Worker) datingPreferences(ctx context.Context, userID uuid.UUID) (strin
 	return user.DatingPreferences, nil
 }
 
-// fail records a permanent failure on the analysis row, or returns cause so the
-// job is redelivered when there are attempts left.
-func (w *Worker) fail(ctx context.Context, analysisID uuid.UUID, lastAttempt bool, cause error) error {
+// fail records a permanent failure on the analysis row and tells the owner's
+// open sockets about it, or returns cause so the job is redelivered when there
+// are attempts left.
+func (w *Worker) fail(ctx context.Context, job Job, analysisID uuid.UUID, lastAttempt bool, cause error) error {
 	if !lastAttempt {
 		return cause
 	}
@@ -133,6 +134,16 @@ func (w *Worker) fail(ctx context.Context, analysisID uuid.UUID, lastAttempt boo
 	if _, err := w.queries.FailAnalysis(ctx, db.FailAnalysisParams{ID: analysisID, Error: cause.Error()}); err != nil {
 		return fmt.Errorf("mark analysis failed: %w", err)
 	}
+	userID, err := uuid.Parse(job.UserID)
+	if err != nil {
+		slog.Error("parse user id", "error", err, "analysis_id", analysisID)
+		return nil
+	}
+	w.publish(ctx, userID, notify.Event{
+		Type:           notify.EventAnalysisFailed,
+		AnalysisID:     analysisID.String(),
+		ConversationID: job.ConversationID,
+	})
 	return nil
 }
 
