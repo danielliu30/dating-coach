@@ -112,7 +112,7 @@ Two design choices worth noting:
 - **The ML service is fully decoupled.** It has no database and shares none with the backend; the only coupling is the HTTP contract (the agreed request and response shapes). That means the scoring engine can be replaced, retrained or scaled independently of everything else — which is what makes Section 5 possible.
 - **Analysis is asynchronous.** Because scoring runs through the queue and worker, a slow or unavailable model never blocks the app, and the worker can retry.
 
-Live chat between clients and coaches is persisted in PostgreSQL and fanned out over Redis so any API instance can serve a chat connection. Engineering detail — authentication, chat, deployment, the full API surface — is in the root [`README.md`](../README.md); the analyzer's contracts and configuration are in [`ml-analyzer/README.md`](../ml-analyzer/README.md).
+Live chat between clients and coaches is persisted in PostgreSQL and fanned out over Redis so any API instance can serve a chat connection. Engineering detail — authentication, chat, deployment, the full API surface — is in the root [`README.md`](../README.md), and the real-time delivery architecture (chat and notification sockets over Redis pub/sub) is in [`docs/realtime.md`](realtime.md); the analyzer's contracts and configuration are in [`ml-analyzer/README.md`](../ml-analyzer/README.md).
 
 ---
 
