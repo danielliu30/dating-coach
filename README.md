@@ -114,6 +114,29 @@ Then in the production `.env`:
 
 The chat WebSocket same-origin check is unaffected by TLS: nginx forwards `Host: <domain>` and the browser sends `Origin: https://<domain>`, and the API compares only the host part, so `Origin` and `Host` still match (and `https://<domain>` in `CORS_ORIGINS` matches explicitly as well).
 
+#### Cloudflare in front (optional)
+
+> **Depends on [#187](https://github.com/danielliu30/dating-coach/issues/187).** `nginx/host-site.conf` sets `X-Forwarded-For`/`X-Real-IP` from `$remote_addr`, which becomes a Cloudflare edge IP once traffic is proxied, so every visitor would share one auth rate-limit bucket. Land the client-IP forwarding change from #187 (or apply it alongside these steps) before pointing production traffic through Cloudflare.
+
+With the host nginx + certbot setup above already working, in the Cloudflare dashboard:
+
+1. Add the site to Cloudflare and switch the registrar's nameservers to the ones Cloudflare assigns.
+2. DNS: create a **Proxied** (orange-cloud) `A` record for `<domain>` pointing at the VM IP.
+3. SSL/TLS → Overview: set the encryption mode to **Full (strict)** — the origin already terminates the Let's Encrypt cert in `nginx/host-site.conf`.
+4. SSL/TLS → Edge Certificates: optionally enable **Always Use HTTPS**.
+5. Caching: leave the defaults. Cloudflare honors the `Cache-Control` headers set in `app/nginx.conf` (`immutable` for hashed assets, `no-cache` for `index.html`), so no page rules are needed.
+
+On the VM, restrict inbound 443 and 80 (80 is still needed for ACME renewals) to Cloudflare's published ranges, <https://www.cloudflare.com/ips-v4> and <https://www.cloudflare.com/ips-v6>, so the origin cannot be reached (or `CF-Connecting-IP` spoofed) directly. For example with `ufw` (keep 22 open; re-run when Cloudflare updates its list):
+
+```bash
+for ip in $(curl -fsS https://www.cloudflare.com/ips-v4) $(curl -fsS https://www.cloudflare.com/ips-v6); do
+  sudo ufw allow proto tcp from "$ip" to any port 80,443
+done
+sudo ufw delete allow 80/tcp; sudo ufw delete allow 443/tcp   # drop any open-to-all 80/443 rules
+```
+
+WebSockets and the same-origin model are unaffected: the browser-facing origin stays `https://<domain>`, so `WEB_API_URL`, `CORS_ORIGINS` and `PUBLIC_APP_URL` are unchanged.
+
 ## Deployment flow (CI/CD)
 
 `.github/workflows/release.yml` turns a merge to `main` into a production deploy:
