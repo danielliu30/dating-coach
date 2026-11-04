@@ -59,6 +59,12 @@ Actions -> *Release (build, push, deploy)* -> *Run workflow*, `image_tag` = an e
 - Git checkout of the repo at `DEPLOY_DIR` — required; the deploy job checks out the deployed SHA there.
 - Rollback caveat: `migrate` only runs `up`, so redeploying an older SHA does not revert schema changes; keep migrations backward-compatible or restore the DB first.
 - Production `.env` in that directory (from `.env.example`: `APP_ENV`, `JWT_SECRET`, `POSTGRES_PASSWORD`, `PUBLIC_APP_URL=https://<domain>`, `CORS_ORIGINS=https://<domain>`, SMTP, Stripe, `GOOGLE_CLIENT_ID`, `NGINX_PORT=127.0.0.1:8088`, `WEB_PORT=127.0.0.1:3000`). The deploy job only rewrites `IMAGE_TAG`/`DOCKERHUB_NAMESPACE`.
+- Example-secret guard: with `APP_ENV` set to anything but `development`, `api` and `worker` exit at startup (`config.ValidateSecrets`, called right after `config.Load` in `cmd/api` and `cmd/worker`) while any `.env.example`/compose default is still in place. The fatal log line (`"api exited"` / `"worker exited"`) names each offending variable, never its value. Rejected:
+  - `JWT_SECRET` — the example value (`change-me-…`, compose's `dev-secret-change-me`), shorter than 32 bytes, or fewer than 10 distinct characters. Generate one with `openssl rand -hex 32`.
+  - `POSTGRES_PASSWORD` / the password inside `DATABASE_URL` equal to `datingcoach`.
+  - `RABBITMQ_URL` with `guest:guest` (or no credentials, which amqp treats as guest). Set `RABBITMQ_USER` / `RABBITMQ_PASSWORD` (URL-safe characters) in `.env`; compose creates that broker user and builds the URL from it.
+  - `SMTP_PASSWORD`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` that still contain a `change-me` or `xxxxxxxx` placeholder.
+  If a deploy's health checks time out, check `docker compose logs api worker` for `refusing to start with APP_ENV=…`. Local stacks keep `APP_ENV=development` and the defaults keep working.
 - SSH key pair: `ssh-keygen -t ed25519 -f deploy_key -N ''`; public half in `~/.ssh/authorized_keys`, private half in `DEPLOY_SSH_KEY`.
 - Ports 80/443 reachable, host nginx + certbot installed (variant B below) with `NGINX_PORT`/`WEB_PORT` moved off 80. Smoke-test once by hand with `docker compose --profile gateway up -d` before enabling the secrets.
 

@@ -18,8 +18,11 @@ type Config struct {
 	HTTPAddr string
 
 	DatabaseURL string
-	RedisURL    string
-	RabbitMQURL string
+	// PostgresPassword is only read to reject the example default outside
+	// development; the connection itself uses DatabaseURL.
+	PostgresPassword string
+	RedisURL         string
+	RabbitMQURL      string
 
 	JWTSecret       string
 	JWTTTL          time.Duration
@@ -110,6 +113,7 @@ func Load() (*Config, error) {
 		Env:                  env("APP_ENV", "development"),
 		HTTPAddr:             env("HTTP_ADDR", ":8080"),
 		DatabaseURL:          env("DATABASE_URL", ""),
+		PostgresPassword:     env("POSTGRES_PASSWORD", ""),
 		RedisURL:             env("REDIS_URL", "redis://localhost:6379/0"),
 		RabbitMQURL:          env("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/"),
 		JWTSecret:            env("JWT_SECRET", ""),
