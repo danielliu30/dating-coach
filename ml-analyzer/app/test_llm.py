@@ -5,7 +5,7 @@ import httpx
 import pytest
 import respx
 
-from app.coaching import BRAIN_VERSION
+from app.coaching import AGENCY_VERSION, BRAIN_VERSION
 from app.config import Settings
 from app.schemas import AnalyzeRequest, Message
 from app.scoring.llm import SYSTEM_PROMPT, LLMScorer
@@ -111,7 +111,7 @@ def test_analyze_parses_segments_and_overall(provider: str) -> None:
     with respx.mock(assert_all_called=True) as mock:
         mock.post(f"https://llm.test/v1{path}").mock(return_value=httpx.Response(200, json=response))
         result = asyncio.run(scorer.analyze(_request()))
-    assert result.model_version == f"llm-{provider}-test-model+{BRAIN_VERSION}"
+    assert result.model_version == f"llm-{provider}-test-model+{BRAIN_VERSION}+{AGENCY_VERSION}"
     assert [(s.start_position, s.end_position, s.engagement_score) for s in result.segments] == [
         (0, 1, 0.8),
         (2, 3, 0.4),

@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 import httpx
 
-from ..coaching import BRAIN_VERSION, enforce_agency, render_pillars
+from ..coaching import AGENCY_VERSION, BRAIN_VERSION, enforce_agency, render_pillars
 from ..config import Settings
 from ..schemas import AnalyzeRequest, AnalyzeResponse, Message, Overall, Segment
 from .base import Scorer, align_segments, chunk, clamp, transcript
@@ -97,7 +97,7 @@ class LLMScorer(Scorer):
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self.version = f"llm-{settings.llm_provider}-{settings.llm_model}+{BRAIN_VERSION}"
+        self.version = f"llm-{settings.llm_provider}-{settings.llm_model}+{BRAIN_VERSION}+{AGENCY_VERSION}"
         self._fallback = HeuristicScorer(settings.segment_size)
 
     async def analyze(self, request: AnalyzeRequest) -> AnalyzeResponse:
