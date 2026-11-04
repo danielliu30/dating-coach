@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -15,12 +16,16 @@ import (
 type Handler struct {
 	svc     *Service
 	limiter *RateLimiter
+	tickets *WSTickets
 }
 
 // NewHandler builds the auth handler; cmd/api mounts its Routes.
 func NewHandler(svc *Service, limiter *RateLimiter) *Handler {
 	return &Handler{svc: svc, limiter: limiter}
 }
+
+// SetWSTickets enables POST /ws-ticket. Without it the route answers 503.
+func (h *Handler) SetWSTickets(tickets *WSTickets) { h.tickets = tickets }
 
 // Routes mounts the auth endpoints. The credential endpoints are rate limited
 // per IP; /me sits behind the authentication middleware.
@@ -45,6 +50,7 @@ func (h *Handler) Routes(authenticate func(http.Handler) http.Handler) http.Hand
 		private.Get("/me", h.me)
 		private.Patch("/me", h.updateMe)
 		private.Delete("/me", h.deleteMe)
+		private.With(RequireScope(ScopeSession)).Post("/ws-ticket", h.wsTicket)
 	})
 	return r
 }
@@ -251,4 +257,26 @@ func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusOK, profile)
+}
+
+// wsTicket handles POST /ws-ticket. It mints a single-use ticket, valid for
+// WSTicketTTL, that a browser WebSocket passes as ?ticket= in place of its
+// access token, so the JWT never appears in a URL.
+func (h *Handler) wsTicket(w http.ResponseWriter, r *http.Request) {
+	principal, ok := PrincipalFrom(r.Context())
+	if !ok {
+		httpx.Error(w, http.StatusUnauthorized, "unauthenticated")
+		return
+	}
+	if h.tickets == nil {
+		httpx.Error(w, http.StatusServiceUnavailable, "websocket tickets unavailable")
+		return
+	}
+	ticket, err := h.tickets.Issue(r.Context(), principal)
+	if err != nil {
+		slog.Error("issue websocket ticket", "error", err, "user_id", principal.UserID)
+		httpx.Error(w, http.StatusServiceUnavailable, "websocket tickets unavailable")
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"ticket": ticket, "expires_in": int(h.tickets.ttl / time.Second)})
 }
