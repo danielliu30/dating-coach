@@ -132,8 +132,9 @@ DIAGNOSIS = re.compile(
 )
 
 # The one citation syntax the prompt mandates, ``Message N ("...")``, up to and including the
-# opening quote (group 1). Citations written any other way are simply not exempted.
-CITATION_START = re.compile(r"message\s+\d+\s*\(\s*([\"\u201c])", re.IGNORECASE)
+# opening quote (group ``quote``); group ``number`` is N. Citations written any other way are
+# simply not exempted.
+CITATION_START = re.compile(r"message\s+(?P<number>\d{1,6})\s*\(\s*(?P<quote>[\"\u201c])", re.IGNORECASE)
 CLOSING_QUOTE = re.compile(r"[\"\u201d]")
 # Shortest quotation that can be exempted from the scan.
 MIN_QUOTE_WORDS = 3
@@ -180,10 +181,13 @@ def enforce_agency(texts: Sequence[str], sources: Sequence[str] = (), match_name
     briefly, so a quoted span is blanked before scanning only when it is
     provably a citation: it is written in the prompt's ``Message N ("...")``
     syntax (``CITATION_START``), is at least ``MIN_QUOTE_WORDS`` long and is,
-    case- and whitespace-insensitively, a substring of one of the ``sources``
-    bodies. Everything else, including unquoted text that happens to echo a
-    short customer message and quoted text the model wrote itself (even when
-    it reuses the customer's words), is checked. A citation written any other
+    case- and whitespace-insensitively, a substring of the cited message's
+    body ``sources[N - 1]``. ``sources`` is indexed by message number, so a
+    message that is not the customer's has a blank slot. A quote attributed to
+    the wrong message, or an ``N`` outside ``sources``, is not exempted and is
+    scanned like any other text. Everything else, including unquoted text that
+    happens to echo a short customer message and quoted text the model wrote
+    itself (even when it reuses the customer's words), is checked. A citation written any other
     way is not exempted, so a customer message that itself sounds like a
     violation can still cause a needless (but safe) fallback.
 
@@ -204,8 +208,10 @@ def strip_citations(text: str, sources: Sequence[str] = ()) -> str:
 
     A span is blanked only when it is written in the prompt's ``Message N
     ("...")`` syntax (``CITATION_START``), is at least ``MIN_QUOTE_WORDS`` long
-    and is, case- and whitespace-insensitively, a substring of one of the
-    ``sources`` bodies; the ``Message N (`` prefix and everything else is kept.
+    and is, case- and whitespace-insensitively, a substring of the cited
+    message's body ``sources[N - 1]`` (``sources`` is indexed by message number;
+    an out-of-range ``N`` blanks nothing); the ``Message N (`` prefix and
+    everything else is kept.
     For a citation whose quote itself contains quotes, the longest closing
     quote that still matches a source wins, so the customer message is exempted
     whole. With no ``sources`` nothing is blanked.
@@ -214,24 +220,26 @@ def strip_citations(text: str, sources: Sequence[str] = ()) -> str:
 
 
 def _normalise_sources(sources: Sequence[str]) -> List[str]:
-    """``squash`` every non-blank source once (apostrophes folded), so a batch of texts can be stripped without re-normalising per text."""
-    return [squash(s.translate(_APOSTROPHES)) for s in sources if s.strip()]
+    """``squash`` every source once (apostrophes folded), keeping each at its index so ``Message N`` still maps to ``[N - 1]``."""
+    return [squash(s.translate(_APOSTROPHES)) for s in sources]
 
 
 def _strip_normalised_citations(text: str, normalised_sources: Sequence[str]) -> str:
     """``strip_citations`` for sources already passed through ``_normalise_sources``."""
 
-    def citation_end(start: int) -> Optional[int]:
+    def citation_end(start: int, source: str) -> Optional[int]:
         for closing in reversed(list(CLOSING_QUOTE.finditer(text, start + 1))):
             inner = squash(text[start + 1 : closing.start()].translate(_APOSTROPHES))
-            if len(inner.split()) >= MIN_QUOTE_WORDS and any(inner in s for s in normalised_sources):
+            if len(inner.split()) >= MIN_QUOTE_WORDS and inner in source:
                 return closing.end()
         return None
 
     kept, cursor = [], 0
     for match in CITATION_START.finditer(text):
-        start = match.start(1)
-        end = citation_end(start) if start >= cursor else None
+        start = match.start("quote")
+        number = int(match.group("number"))
+        in_range = 1 <= number <= len(normalised_sources)
+        end = citation_end(start, normalised_sources[number - 1]) if in_range and start >= cursor else None
         if end is None:
             continue
         kept.append(text[cursor:start] + " ")

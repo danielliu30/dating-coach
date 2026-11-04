@@ -8,7 +8,7 @@ import respx
 from app.coaching import BRAIN_VERSION
 from app.config import Settings
 from app.schemas import AnalyzeRequest, Message
-from app.scoring.llm import SYSTEM_PROMPT, LLMScorer
+from app.scoring.llm import SYSTEM_PROMPT, LLMScorer, citation_sources
 
 
 def _settings(provider: str = "openai", **overrides: object) -> Settings:
@@ -157,6 +157,40 @@ def test_analyze_falls_back_to_heuristic_for_completion_failures(failure: str) -
         result = asyncio.run(scorer.analyze(_request()))
     assert result.model_version == f"{scorer.version}+fallback:{scorer._fallback.version}"
     assert [(s.start_position, s.end_position) for s in result.segments] == [(0, 1), (2, 3)]
+
+
+def test_citation_sources_are_indexed_by_message_number() -> None:
+    """Slot ``N - 1`` holds the customer's ``Message N``; match messages and positions past the count are blank."""
+    messages = _request().messages + [Message(position=9, sender="self", body="Out of range")]
+    assert citation_sources(messages) == ["How was your weekend?", "", "That sounds fun.", "", ""]
+
+
+@pytest.mark.parametrize(("number", "exempt"), [(3, True), (1, False), (2, False), (9, False)])
+def test_analyze_exempts_a_citation_only_for_the_cited_message(number: int, exempt: bool) -> None:
+    """analyze() keeps a correctly numbered citation of violating words and falls back when ``N`` is wrong."""
+    request = AnalyzeRequest(
+        conversation_id="llm-citation",
+        messages=[
+            Message(position=0, sender="self", body="Hey, how was the hike?"),
+            Message(position=1, sender="match", body="Good thanks."),
+            Message(position=2, sender="self", body="You could say I'm obsessed with climbing"),
+            Message(position=3, sender="match", body="Nice."),
+        ],
+    )
+    payload = _analysis_payload()
+    citation = f'Message {number} ("You could say I\'m obsessed with climbing") drew a brief reply.'
+    payload["overall"]["improvements"] = [citation]  # type: ignore[index]
+    scorer = LLMScorer(_settings())
+    with respx.mock(assert_all_called=True) as mock:
+        mock.post("https://llm.test/v1/chat/completions").mock(
+            return_value=httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(payload)}}]})
+        )
+        result = asyncio.run(scorer.analyze(request))
+    if exempt:
+        assert result.model_version == scorer.version
+        assert result.overall.improvements == [citation]
+    else:
+        assert result.model_version == f"{scorer.version}+fallback:{scorer._fallback.version}"
 
 
 def test_parse_strips_fences_and_clamps_scores() -> None:
