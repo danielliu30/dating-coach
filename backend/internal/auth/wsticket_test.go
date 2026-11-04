@@ -129,7 +129,7 @@ func TestMiddlewareTicketOnWebSocketUpgrade(t *testing.T) {
 				req.Header.Set("Upgrade", "websocket")
 			}
 			rec := httptest.NewRecorder()
-			Middleware(issuer, tc.redeemer)(next).ServeHTTP(rec, req)
+			Middleware(issuer, tc.redeemer, nil)(next).ServeHTTP(rec, req)
 			if rec.Code != tc.want {
 				t.Fatalf("status = %d, want %d", rec.Code, tc.want)
 			}

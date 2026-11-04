@@ -29,6 +29,9 @@ type Principal struct {
 	// ignore, since every request is authenticated again; long-lived
 	// connections cannot, and read it to stop outliving their own token.
 	ExpiresAt time.Time
+	// IssuedAt is when the presented token was minted, which the revocation
+	// check compares against: a token issued at or before a revocation is dead.
+	IssuedAt time.Time
 }
 
 // IsCoach reports whether the caller may use the coach-only endpoints.
@@ -67,47 +70,71 @@ func isWebSocketUpgrade(r *http.Request) bool {
 // Middleware rejects requests without a valid bearer token. A WebSocket
 // upgrade may instead carry a single-use ?ticket= minted by POST
 // /auth/ws-ticket, which tickets redeems; tickets may be nil to disable that.
-// A ticket that cannot be checked because Redis is down answers 503: the
-// request is refused rather than let through unauthenticated.
-func Middleware(issuer *TokenIssuer, tickets TicketRedeemer) func(http.Handler) http.Handler {
+//
+// Every authenticated caller is then checked against revocations, so a token
+// issued before its account was signed out (or locked out) stops working at
+// once instead of when it expires. This fails closed: when Redis cannot answer
+// the request gets 503 rather than going through unchecked. revocations may be
+// nil only in tests.
+func Middleware(issuer *TokenIssuer, tickets TicketRedeemer, revocations Revocations) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if ticket := r.URL.Query().Get("ticket"); ticket != "" && tickets != nil && isWebSocketUpgrade(r) {
-				principal, err := tickets.Redeem(r.Context(), ticket)
-				switch {
-				case errors.Is(err, ErrInvalidTicket):
-					httpx.Error(w, http.StatusUnauthorized, "invalid ticket")
-					return
-				case err != nil:
-					slog.Error("redeem websocket ticket", "error", err)
+			principal, status, msg := authenticate(r, issuer, tickets)
+			if status != 0 {
+				httpx.Error(w, status, msg)
+				return
+			}
+			if revocations != nil {
+				since, err := revocations.RevokedSince(r.Context(), principal.UserID)
+				if err != nil {
+					slog.Error("check session revocation", "error", err, "user_id", principal.UserID)
 					httpx.Error(w, http.StatusServiceUnavailable, "authentication unavailable")
 					return
 				}
-				next.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), principal)))
-				return
-			}
-			raw := bearerToken(r)
-			if raw == "" {
-				httpx.Error(w, http.StatusUnauthorized, "missing bearer token")
-				return
-			}
-			claims, err := issuer.Parse(raw)
-			if err != nil {
-				httpx.Error(w, http.StatusUnauthorized, "invalid token")
-				return
-			}
-			userID, err := claims.UserID()
-			if err != nil {
-				httpx.Error(w, http.StatusUnauthorized, "invalid token subject")
-				return
-			}
-			principal := Principal{UserID: userID, Email: claims.Email, Role: claims.Role, Scope: claims.Scope}
-			if claims.ExpiresAt != nil {
-				principal.ExpiresAt = claims.ExpiresAt.Time
+				if !since.IsZero() && !principal.IssuedAt.After(since) {
+					httpx.Error(w, http.StatusUnauthorized, "session revoked")
+					return
+				}
 			}
 			next.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), principal)))
 		})
 	}
+}
+
+// authenticate resolves r's caller from its ticket or bearer token. A non-zero
+// status is the error response to send instead.
+func authenticate(r *http.Request, issuer *TokenIssuer, tickets TicketRedeemer) (Principal, int, string) {
+	if ticket := r.URL.Query().Get("ticket"); ticket != "" && tickets != nil && isWebSocketUpgrade(r) {
+		principal, err := tickets.Redeem(r.Context(), ticket)
+		switch {
+		case errors.Is(err, ErrInvalidTicket):
+			return Principal{}, http.StatusUnauthorized, "invalid ticket"
+		case err != nil:
+			slog.Error("redeem websocket ticket", "error", err)
+			return Principal{}, http.StatusServiceUnavailable, "authentication unavailable"
+		}
+		return principal, 0, ""
+	}
+	raw := bearerToken(r)
+	if raw == "" {
+		return Principal{}, http.StatusUnauthorized, "missing bearer token"
+	}
+	claims, err := issuer.Parse(raw)
+	if err != nil {
+		return Principal{}, http.StatusUnauthorized, "invalid token"
+	}
+	userID, err := claims.UserID()
+	if err != nil {
+		return Principal{}, http.StatusUnauthorized, "invalid token subject"
+	}
+	principal := Principal{UserID: userID, Email: claims.Email, Role: claims.Role, Scope: claims.Scope}
+	if claims.ExpiresAt != nil {
+		principal.ExpiresAt = claims.ExpiresAt.Time
+	}
+	if claims.IssuedAt != nil {
+		principal.IssuedAt = claims.IssuedAt.Time
+	}
+	return principal, 0, ""
 }
 
 // RequireScope rejects callers whose token was not issued for the given scope.

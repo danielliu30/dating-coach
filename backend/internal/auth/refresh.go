@@ -110,6 +110,18 @@ func (s *Service) Refresh(ctx context.Context, raw string) (Session, error) {
 		return Session{}, ErrInvalidRefreshToken
 	}
 
+	// A token issued before the account's last revocation is dead even if it
+	// survived the sign-out's delete, as one rotated concurrently with it can.
+	if s.denylist != nil {
+		since, err := s.denylist.RevokedSince(ctx, row.UserID)
+		if err != nil {
+			return Session{}, err
+		}
+		if !since.IsZero() && !row.IssuedAt.After(since) {
+			return Session{}, ErrInvalidRefreshToken
+		}
+	}
+
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return Session{}, fmt.Errorf("begin: %w", err)
