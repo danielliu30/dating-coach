@@ -236,7 +236,7 @@ npx expo export --platform web    # production web bundle
 | Chat     | `POST /chat/threads` · `GET /chat/threads` · `GET/POST /chat/threads/{id}/messages` · `POST /chat/threads/{id}/close` · `GET /chat/threads/{id}/ws`                      |
 | Analysis | `POST /analysis/conversations` · `GET /analysis/conversations` · `GET /analysis/conversations/{id}/result` · `POST /analysis/conversations/{id}/reanalyze` · `POST /analysis/conversations/{id}/label` · `GET /analysis/results/{id}` · `POST /analysis/images` |
 
-All endpoints except the auth ones require `Authorization: Bearer <jwt>`; the WebSocket accepts `?token=<jwt>`.
+All endpoints except the auth ones and `POST /api/v1/booking/respond` require `Authorization: Bearer <jwt>`; the WebSocket accepts `?token=<jwt>`. `POST /booking/respond` (`{session_id, token, action}`, the coach's emailed confirm/decline link) authenticates by its single-use token, is rate limited per IP and per session (`AUTH_RATE_LIMIT` per `AUTH_RATE_WINDOW`), and answers every unusable token with the same 404.
 
 ## Configuration
 

@@ -1691,6 +1691,7 @@ const updateSessionStatus = `-- name: UpdateSessionStatus :one
 UPDATE coaching_sessions
 SET status = $2,
     payment_status = CASE WHEN $2 = 'cancelled' AND payment_status = 'authorized' THEN 'releasing' ELSE payment_status END,
+    confirmation_token = NULL,
     calendar_sequence = calendar_sequence + 1,
     updated_at = now()
 WHERE id = $1 AND status = $3
@@ -1705,6 +1706,7 @@ type UpdateSessionStatusParams struct {
 
 // A participant's cancel clears the hold marker so a late payment refunds
 // rather than reinstates, even if the sweeper had already released the hold.
+// The emailed confirmation token dies with the pending state.
 func (q *Queries) UpdateSessionStatus(ctx context.Context, arg UpdateSessionStatusParams) (CoachingSession, error) {
 	row := q.db.QueryRow(ctx, updateSessionStatus, arg.ID, arg.Status, arg.ExpectedStatus)
 	var i CoachingSession
