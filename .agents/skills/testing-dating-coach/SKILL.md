@@ -209,9 +209,6 @@ Top tab labels may be truncated ("Coac…", "Analy…") at ~1024px — cosmetic,
   toggling a chip, pressing Refresh, and asserting the chip stays selected with Save still enabled.
 
 ## Known/likely rough edges to check rather than debug
-- Sending into a closed thread should be rejected server-side (nothing persisted). Current chat
-  clients render optimistic sends and correlated rejection notices; verify both UI and DB rather
-  than assuming the older fire-and-forget behavior.
 - Top tab labels may be truncated ("Coac…", "Analy…") at ~1024px — cosmetic, worth flagging.
 - Transport-level failures surface the raw browser message "Failed to fetch" in the UI. Exception: the
   Account-screen delete failure is deliberately sanitized to "Could not delete your account. Please try
