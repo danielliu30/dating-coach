@@ -89,7 +89,7 @@ func run() error {
 	}
 	authHandler := auth.NewHandler(authSvc, limiter)
 	wsTickets := auth.NewWSTickets(rdb, auth.WSTicketTTL)
-	authHandler.SetWSTickets(wsTickets)
+	authHandler.SetWSTickets(wsTickets, auth.NewRateLimiter(rdb, auth.WSTicketsPerMinute, time.Minute))
 	provider, err := payments.New(cfg.PaymentsEnabled)
 	if err != nil {
 		return err

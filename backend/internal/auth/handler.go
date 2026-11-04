@@ -2,6 +2,7 @@ package auth
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -17,6 +18,9 @@ type Handler struct {
 	svc     *Service
 	limiter *RateLimiter
 	tickets *WSTickets
+	// ticketLimiter bounds tickets minted per user, so one account cannot
+	// flood Redis with live ticket keys.
+	ticketLimiter *RateLimiter
 }
 
 // NewHandler builds the auth handler; cmd/api mounts its Routes.
@@ -24,8 +28,11 @@ func NewHandler(svc *Service, limiter *RateLimiter) *Handler {
 	return &Handler{svc: svc, limiter: limiter}
 }
 
-// SetWSTickets enables POST /ws-ticket. Without it the route answers 503.
-func (h *Handler) SetWSTickets(tickets *WSTickets) { h.tickets = tickets }
+// SetWSTickets enables POST /ws-ticket, minting at most limiter's budget per
+// user. Without it the route answers 503.
+func (h *Handler) SetWSTickets(tickets *WSTickets, limiter *RateLimiter) {
+	h.tickets, h.ticketLimiter = tickets, limiter
+}
 
 // Routes mounts the auth endpoints. The credential endpoints are rate limited
 // per IP; /me sits behind the authentication middleware.
@@ -270,6 +277,17 @@ func (h *Handler) wsTicket(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.tickets == nil {
 		httpx.Error(w, http.StatusServiceUnavailable, "websocket tickets unavailable")
+		return
+	}
+	allowed, err := h.ticketLimiter.Allow(r.Context(), "wsticket:"+principal.UserID.String())
+	if err != nil {
+		slog.Error("websocket ticket rate limiter unavailable", "error", err)
+		httpx.Error(w, http.StatusServiceUnavailable, "websocket tickets unavailable")
+		return
+	}
+	if !allowed {
+		w.Header().Set("Retry-After", fmt.Sprintf("%d", int(h.ticketLimiter.window.Seconds())))
+		httpx.Error(w, http.StatusTooManyRequests, "too many requests")
 		return
 	}
 	ticket, err := h.tickets.Issue(r.Context(), principal)
