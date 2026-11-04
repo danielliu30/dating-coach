@@ -141,10 +141,10 @@ func TestMiddlewareTicketOnWebSocketUpgrade(t *testing.T) {
 }
 
 func TestWSTicketEndpoint(t *testing.T) {
-	tickets, _ := newTestTickets(t)
+	tickets, mr := newTestTickets(t)
 	svc := NewService(nil, nil, nil, nil, 0, "", nil, nil, &stubPublisher{}, 15*time.Minute, time.Minute, time.Hour)
 	h := NewHandler(svc, failOpenLimiter(t))
-	h.SetWSTickets(tickets)
+	h.SetWSTickets(tickets, NewRateLimiter(redis.NewClient(&redis.Options{Addr: mr.Addr()}), 2, time.Minute))
 	owner := Principal{UserID: uuid.New(), Role: RoleUser, Scope: ScopeSession}
 	asScope := func(scope string) func(http.Handler) http.Handler {
 		return func(next http.Handler) http.Handler {
@@ -180,5 +180,17 @@ func TestWSTicketEndpoint(t *testing.T) {
 	got, err := tickets.Redeem(context.Background(), body.Ticket)
 	if err != nil || got.UserID != owner.UserID {
 		t.Fatalf("redeem minted ticket = %+v, %v", got, err)
+	}
+
+	ticketCall := func() int {
+		rec := httptest.NewRecorder()
+		h.Routes(asScope(ScopeSession)).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/ws-ticket", nil))
+		return rec.Code
+	}
+	if code := ticketCall(); code != http.StatusOK {
+		t.Fatalf("second ticket status = %d, want 200", code)
+	}
+	if code := ticketCall(); code != http.StatusTooManyRequests {
+		t.Fatalf("ticket over the per-user budget status = %d, want 429", code)
 	}
 }

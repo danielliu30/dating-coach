@@ -22,6 +22,10 @@ const wsTicketKeyPrefix = "auth:wsticket:"
 // redeemed by the WebSocket upgrade that follows it.
 const WSTicketTTL = 30 * time.Second
 
+// WSTicketsPerMinute caps tickets minted per user per minute: above the app's
+// reconnect rate (backoff starts at 1s), far below a Redis-flooding loop.
+const WSTicketsPerMinute = 60
+
 // ErrInvalidTicket means a ticket is unknown, already redeemed or expired. The
 // three are deliberately indistinguishable to the caller.
 var ErrInvalidTicket = errors.New("invalid websocket ticket")
