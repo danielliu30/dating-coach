@@ -669,6 +669,35 @@ def test_enforce_agency_rejects_mind_reading_and_prescription_but_passes_reflect
     enforce_agency(prose)
 
 
+def test_enforce_agency_passes_reported_leave_and_block_but_rejects_direct_ones() -> None:
+    """A leave/block directive reported from someone else or asked as a question is description, not prescription."""
+    from app.coaching import enforce_agency
+
+    enforce_agency(
+        [
+            "You wrote that your friends think you should leave them.",
+            "You asked whether you should leave them.",
+            "Your friends think that you should leave them; what do your own messages show you?",
+            "Your sister said you need to block him.",
+            "You wonder if you could leave them.",
+            "You think you should leave him, but what did Message 3 show you?",
+            "You asked whether you should leave Sam.",
+        ],
+        match_name="Sam",
+    )
+    for text in (
+        "You should leave them.",
+        "I think you should leave him.",
+        "We think you need to block her.",
+        "I think that you should leave them.",
+        "I believe you could leave them.",
+        "Honestly, you should leave him.",
+        "Your friends are right, you should leave them.",
+    ):
+        with pytest.raises(ValueError, match="^llm prescribed the customer's dating life"):
+            enforce_agency([text])
+
+
 def test_crowd_opinions_are_all_rejected_by_the_brain() -> None:
     """Every crowd-style opinion is a violation: the brain rejects online advice instead of imitating it."""
     from app.coaching import enforce_agency
