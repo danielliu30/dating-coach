@@ -113,7 +113,7 @@ func (s *Service) Refresh(ctx context.Context, raw string) (Session, error) {
 		// their lifetime. A Redis failure only logs, since the middleware
 		// already refuses every request while Redis is down.
 		if s.denylist != nil {
-			if err := s.denylist.Revoke(ctx, row.UserID); err != nil {
+			if err := s.denylist.RevokeSessions(ctx, row.UserID); err != nil {
 				slog.Error("revoke sessions after refresh token reuse", "error", err, "user_id", row.UserID)
 			}
 		}
