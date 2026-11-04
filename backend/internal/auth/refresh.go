@@ -83,7 +83,8 @@ func (s *Service) issueRefreshToken(ctx context.Context, q *db.Queries, user db.
 // the legitimate client has already moved on to the token it was given back:
 // every refresh token of that account is deleted, which ends the sessions of
 // both the attacker and the victim, and the account has to sign in again. The
-// access tokens already minted survive until they expire, which is minutes.
+// access tokens already minted are denylisted as well, which also closes the
+// account's open sockets on every replica.
 //
 // Spending the presented token and storing its replacement share a
 // transaction, so a failure half way through cannot leave the caller holding a
@@ -106,6 +107,15 @@ func (s *Service) Refresh(ctx context.Context, raw string) (Session, error) {
 		slog.Warn("refresh token reused", "user_id", row.UserID)
 		if _, err := s.queries.RevokeUserRefreshTokens(ctx, row.UserID); err != nil {
 			return Session{}, fmt.Errorf("revoke reused refresh tokens: %w", err)
+		}
+		// Whoever holds the stolen pair may already hold access tokens and open
+		// sockets too: denylist them all now rather than letting them run out
+		// their lifetime. A Redis failure only logs, since the middleware
+		// already refuses every request while Redis is down.
+		if s.denylist != nil {
+			if err := s.denylist.Revoke(ctx, row.UserID); err != nil {
+				slog.Error("revoke sessions after refresh token reuse", "error", err, "user_id", row.UserID)
+			}
 		}
 		return Session{}, ErrInvalidRefreshToken
 	}
