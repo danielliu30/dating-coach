@@ -179,7 +179,7 @@ func (h *Hub) pump(ctx context.Context, userID uuid.UUID, feed *userFeed) {
 		if ctx.Err() != nil {
 			return
 		}
-		slog.Error("confirm notification subscription", "error", err, "user_id", userID)
+		slog.Warn("confirm notification subscription", "error", err, "user_id", userID)
 		select {
 		case <-ctx.Done():
 			return
