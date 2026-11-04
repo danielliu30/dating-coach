@@ -25,7 +25,7 @@ func TestDenylistRevokedSince(t *testing.T) {
 		t.Fatalf("never revoked = %v, %v; want zero, nil", since, err)
 	}
 	before := time.Now()
-	if err := d.Revoke(ctx, user); err != nil {
+	if err := d.RevokeSessions(ctx, user); err != nil {
 		t.Fatalf("revoke: %v", err)
 	}
 	since, err := d.RevokedSince(ctx, user)
@@ -37,6 +37,20 @@ func TestDenylistRevokedSince(t *testing.T) {
 	mr.Set(revokedKeyPrefix+legacy.String(), "1")
 	if since, err := d.RevokedSince(ctx, legacy); err != nil || !since.After(time.Now().Add(24*time.Hour)) {
 		t.Fatalf("legacy entry = %v, %v; want a time that revokes every token", since, err)
+	}
+
+	deleted := uuid.New()
+	if err := d.Revoke(ctx, deleted); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	if err := d.RevokeSessions(ctx, deleted); err != nil {
+		t.Fatalf("revoke sessions: %v", err)
+	}
+	if since, err := d.RevokedSince(ctx, deleted); err != nil || !since.After(time.Now().Add(24*time.Hour)) {
+		t.Fatalf("account-wide revoke after a sign-out = %v, %v; want it to still revoke every token", since, err)
+	}
+	if ttl := mr.TTL(revokedKeyPrefix + deleted.String()); ttl != time.Minute+revocationGrace {
+		t.Fatalf("entry ttl = %v, want %v", ttl, time.Minute+revocationGrace)
 	}
 
 	mr.Close()

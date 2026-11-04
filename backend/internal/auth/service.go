@@ -188,7 +188,7 @@ func (s *Service) SignOut(ctx context.Context, userID uuid.UUID) error {
 	if s.denylist == nil {
 		return ErrRevocationUnavailable
 	}
-	if err := s.denylist.Revoke(ctx, userID); err != nil {
+	if err := s.denylist.RevokeSessions(ctx, userID); err != nil {
 		return fmt.Errorf("%w: %w", ErrRevocationUnavailable, err)
 	}
 	return nil
