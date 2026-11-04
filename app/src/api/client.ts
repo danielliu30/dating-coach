@@ -228,6 +228,16 @@ export class ApiClient {
     return this.request<{ status: string }>('DELETE', '/auth/me');
   }
 
+  /**
+   * Mints a single-use, ~30s ticket a WebSocket presents as ?ticket= in place
+   * of the access token. Going through request() means an expired access
+   * token is renewed here, over HTTP, before the socket is attempted.
+   */
+  async wsTicket(): Promise<string> {
+    const { ticket } = await this.request<{ ticket: string }>('POST', '/auth/ws-ticket');
+    return ticket;
+  }
+
   // --- coaching -------------------------------------------------------------
 
   async listCoaches(acceptingOnly = true): Promise<Coach[]> {

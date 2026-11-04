@@ -146,7 +146,7 @@ export default function ChatScreen({
       onStatus,
     });
     socketRef.current = socket;
-    socket.connect();
+    void socket.connect();
     return () => {
       socket.close();
       socketRef.current = null;
