@@ -27,6 +27,10 @@ export class ApiError extends Error {
   }
 }
 
+/** Status of an ApiError raised when the request never got a usable answer from the API. */
+export const TRANSPORT_ERROR_STATUS = 0;
+export const TRANSPORT_ERROR_MESSAGE = "Can't reach the server. Check your connection and try again.";
+
 type TokenProvider = () => string | null;
 
 /**
@@ -127,18 +131,36 @@ export class ApiClient {
   private async request<T>(method: string, path: string, body?: unknown, renewed = false): Promise<T> {
     const token = this.token();
     const principal = this.principal();
-    const response = await fetch(`${API_BASE_URL}${API_PREFIX}${path}`, {
-      method,
-      headers: {
-        Accept: 'application/json',
-        ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
+    let response: Response;
+    let text: string;
+    try {
+      response = await fetch(`${API_BASE_URL}${API_PREFIX}${path}`, {
+        method,
+        headers: {
+          Accept: 'application/json',
+          ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+      text = await response.text();
+    } catch (err) {
+      // The browser's own wording ("Failed to fetch", "Network request failed")
+      // means nothing to a user; keep it for the console only.
+      console.warn(`${method} ${path}`, err);
+      throw new ApiError(TRANSPORT_ERROR_STATUS, TRANSPORT_ERROR_MESSAGE);
+    }
 
-    const text = await response.text();
-    const payload = text ? (JSON.parse(text) as unknown) : null;
+    let payload: unknown = null;
+    try {
+      payload = text ? (JSON.parse(text) as unknown) : null;
+    } catch (err) {
+      // A non-JSON success body (e.g. a proxy's HTML page) is no answer from the
+      // API. A non-JSON error body keeps its status, so a 401 still renews and
+      // callers can still branch on 403/404.
+      console.warn(`${method} ${path}: non-JSON response (${response.status})`, err);
+      if (response.ok) throw new ApiError(TRANSPORT_ERROR_STATUS, TRANSPORT_ERROR_MESSAGE);
+    }
 
     if (!response.ok) {
       if (response.status === 401 && token && !renewed && principal === this.principal()) {

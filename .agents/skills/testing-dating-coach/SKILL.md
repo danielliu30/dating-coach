@@ -213,10 +213,11 @@ Top tab labels may be truncated ("Coac…", "Analy…") at ~1024px — cosmetic,
   clients render optimistic sends and correlated rejection notices; verify both UI and DB rather
   than assuming the older fire-and-forget behavior.
 - Top tab labels may be truncated ("Coac…", "Analy…") at ~1024px — cosmetic, worth flagging.
-- Transport-level failures surface the raw browser message "Failed to fetch" in the UI. Exception: the
-  Account-screen delete failure is deliberately sanitized to "Could not delete your account. Please try
-  again." and the underlying error only appears via `console.warn('delete account', err)` — check the
-  DevTools console (F12) for the real reason when a delete failure looks unexplained.
+- Transport-level failures (API unreachable, CORS/TLS, non-JSON success body) surface as "Can't reach
+  the server. Check your connection and try again." (`ApiError` status 0); the raw browser error
+  ("Failed to fetch") only appears via `console.warn` from `ApiClient.request`. The Account-screen delete
+  failure is sanitized separately to "Could not delete your account. Please try again." and logged via
+  `console.warn('delete account', err)` — check the DevTools console (F12) for the real reason.
 - Old leftover tabs from previous rounds can spam `GET /chat/threads/<id>/ws → 404` every 10 s in the
   API log; close them before reading logs.
 - Historical (fixed as of 1499e3b, re-check if regressed): `no_show` rejected by the DB CHECK
