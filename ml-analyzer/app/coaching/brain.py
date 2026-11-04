@@ -16,8 +16,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Sequence, Tuple
 
-# Bump whenever a pillar's principles change so scorer outputs stay traceable.
-BRAIN_VERSION = "brain-v1"
+# Bump whenever a pillar's principles change *or* the enforcement gate
+# (``agency.enforce_agency``) changes which outputs it accepts, so scorer outputs
+# stay traceable to both the philosophy and the policy that produced them.
+BRAIN_VERSION = "brain-v2"
 
 
 @dataclass(frozen=True)

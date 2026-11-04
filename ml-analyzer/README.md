@@ -33,8 +33,12 @@ review tracks have their own prompts and are not yet wired to the brain):
 
 The LLM `SYSTEM_PROMPT` is composed from the rendered pillars
 (`render_pillars()`), not written by hand, and `BRAIN_VERSION` is appended to
-`model_version` (e.g. `llm-openai-gpt-4o+brain-v1`) so every stored result is
-traceable to the philosophy revision that produced it.
+`model_version` (e.g. `llm-openai-gpt-4o+brain-v2`) so every stored result is
+traceable to the philosophy revision that produced it. `BRAIN_VERSION` is bumped
+when a pillar's principles change **or** when the `enforce_agency` gate changes
+which outputs it accepts (`brain-v2` covers the enforcement changes from #140 and
+#148), so two results with the same `model_version` were produced under the same
+prompt and the same acceptance policy.
 
 The model generates its own feedback from this brain. What online forums or
 Reddit would say is never a target to match and is never fed into or copied into
