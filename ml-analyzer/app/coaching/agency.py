@@ -112,15 +112,21 @@ PRESCRIPTION = re.compile(
 # Phrases that claim to know why the match replied the way they did (causal explanations,
 # where ``MIND_READING`` covers asserted states). The prompt forbids them outright ("you
 # cannot know that"), so any hit means the model diagnosed the match. ``because`` counts
-# only when it introduces a cause (a pronoun or ``of``), so a bare "because" inside a
-# reflection question does not cost a fallback, and feelings/decisions are only diagnoses
+# only when it introduces a cause (a pronoun or ``of``) or, in a statement whose subject is
+# the match, a noun phrase (``_BECAUSE_NOUN``: "They withdrew because the topic became stale"),
+# so a bare "because" inside a reflection question does not cost a fallback, and feelings/decisions are only diagnoses
 # when attributed to the match (``_MATCH_AUX``: ``_MATCH`` plus optional auxiliaries such as
 # "had" or "probably"), never to the customer ("Were you bored?" is a reflection question).
 _MATCH_AUX = (
     _MATCH + r"( (had|have|has|are|were|is|was|might|may|must|probably|likely|clearly|just|simply|also|then|been|being|feeling))*"
 )
+# Up to six plain words after the match subject, then ``because <determiner>``; the
+# lookahead skips questions, whose sentence ends in "?" before any "." or "!".
+_BECAUSE_NOUN = (
+    r"(?![^.!?]*\?)" + _MATCH_AUX + r"( [\w']+){1,6} because (the|a|an|this|that|these|those|their|his|her|its)"
+)
 DIAGNOSIS = re.compile(
-    r"\b(because (they|she|he|it|you|your|of)|due to|(that|this|which) is why|(the|one) reason (they|she|he|for)|why (they|she|he)|"
+    r"\b(because (they|she|he|it|you|your|of)|" + _BECAUSE_NOUN + r"|due to|(that|this|which) is why|(the|one) reason (they|she|he|for)|why (they|she|he)|"
     r"made it (hard|harder|difficult|tough|easy|easier) for (her|him|them)|" + _MATCH_AUX + r" (lost|lose|losing|been losing) interest|"
     r"(not|wasn't|isn't|weren't) interested|"
     r"(turned?|turning|put|putting|scared|scaring|pushed|pushing|drove|driving) (her|him|them) (off|away)|turn-?off|"

@@ -808,6 +808,9 @@ def test_llm_parse_rejects_diagnosing_why_the_match_replied() -> None:
         "They had decided not to continue.",
         "They are losing interest as the thread goes on.",
         "She has been feeling bored since Message 3.",
+        "They withdrew because the topic became stale.",
+        "She went quiet after Message 3 because the plan was vague.",
+        "Your match stopped replying because a question felt too personal.",
     )
     for field in ("summary", "improvements", "reflection_questions", "patterns", "strengths"):
         for diagnosis in diagnoses:
@@ -837,9 +840,18 @@ def test_llm_parse_rejects_diagnosing_why_the_match_replied() -> None:
         "Were you bored by this exchange, or did you want to continue?",
         "Did you lose interest before they did?",
         "You decided not to follow up after Message 6.",
+        "Was it because the topic became stale?",
+        "Did they go quiet because the plan felt vague, or did you stop asking?",
+        "The topic became stale because the questions repeated.",
+        "You asked again because the first question got no reply.",
     ):
         ok = dict(good, overall=dict(good["overall"], patterns=[outcome_only]))
         assert scorer._parse(json.dumps(ok), boundaries).overall.patterns == [outcome_only]
+
+    from app.coaching import enforce_agency
+
+    with pytest.raises(ValueError, match="^llm diagnosed why the match replied"):
+        enforce_agency(["Sam withdrew because the topic became stale."], match_name="Sam")
 
 
 def test_strip_citations_blanks_only_provable_customer_quotes() -> None:
