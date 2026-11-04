@@ -76,7 +76,7 @@ func run() error {
 	limiter := auth.NewRateLimiter(rdb, cfg.AuthRateLimit, cfg.AuthRateWindow)
 	// The middleware checks every request against the denylist and fails
 	// closed when Redis is down; its announcements close open sockets at once.
-	denylist := auth.NewDenylist(rdb, cfg.JWTTTL)
+	denylist := auth.NewDenylist(rdb, max(cfg.JWTTTL, cfg.VerifyTokenTTL))
 	verificationCodes := auth.NewVerificationCache(rdb, auth.VerificationCodeTTL)
 
 	authSvc := auth.NewService(pg.Pool, pg.Queries, issuer, notifier, cfg.BcryptCost, cfg.PublicAppURL, verificationCodes, denylist, deletions, cfg.JWTTTL, cfg.VerifyTokenTTL, cfg.RefreshTokenTTL)

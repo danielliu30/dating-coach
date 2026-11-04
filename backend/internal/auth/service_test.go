@@ -178,6 +178,41 @@ func TestRefreshRotatesAndDetectsReuse(t *testing.T) {
 	}
 }
 
+// TestRefreshRefusesTokensIssuedBeforeARevocation covers a refresh token that
+// outlives a sign-out's delete, as one rotated concurrently with it can: the
+// revocation time alone must stop it, while a later sign-in still refreshes.
+func TestRefreshRefusesTokensIssuedBeforeARevocation(t *testing.T) {
+	svc, _, pool := newTestService(t)
+	ctx := context.Background()
+
+	user := verifiedUser(t, svc, pool)
+	stale, err := svc.SignIn(ctx, user.email, user.password)
+	if err != nil {
+		t.Fatalf("sign in: %v", err)
+	}
+	claims, err := svc.issuer.Parse(stale.Token)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	userID, _ := claims.UserID()
+	time.Sleep(10 * time.Millisecond)
+	if err := svc.denylist.RevokeSessions(ctx, userID); err != nil {
+		t.Fatalf("revoke sessions: %v", err)
+	}
+	if _, err := svc.Refresh(ctx, stale.RefreshToken); !errors.Is(err, ErrInvalidRefreshToken) {
+		t.Fatalf("refresh token from before the revocation: error = %v, want %v", err, ErrInvalidRefreshToken)
+	}
+
+	time.Sleep(10 * time.Millisecond)
+	fresh, err := svc.SignIn(ctx, user.email, user.password)
+	if err != nil {
+		t.Fatalf("sign in again: %v", err)
+	}
+	if _, err := svc.Refresh(ctx, fresh.RefreshToken); err != nil {
+		t.Fatalf("refresh token from after the revocation: %v", err)
+	}
+}
+
 // TestRotationKeepsTheFamilyAndSignInStartsANewOne covers what the family is
 // for: every token a session rotates through belongs to one chain, so a later
 // reuse can be scoped to it, while a second sign-in is a chain of its own and
