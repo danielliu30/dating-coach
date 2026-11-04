@@ -43,6 +43,9 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	if err := cfg.ValidateSecrets(); err != nil {
+		return err
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
