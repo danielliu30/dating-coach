@@ -127,7 +127,7 @@ func TestMiddlewareQueryTokenOnlyOnWebSocketUpgrade(t *testing.T) {
 				req.Header.Set("Upgrade", tc.upgrade)
 			}
 			rec := httptest.NewRecorder()
-			Middleware(issuer, nil)(next).ServeHTTP(rec, req)
+			Middleware(issuer, nil, nil)(next).ServeHTTP(rec, req)
 			if rec.Code != tc.want {
 				t.Fatalf("status = %d, want %d", rec.Code, tc.want)
 			}

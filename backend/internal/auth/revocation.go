@@ -2,8 +2,10 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -24,11 +26,12 @@ const (
 // its token just after the revocation was written.
 const revocationGrace = 5 * time.Minute
 
-// Revocations reports whether an account's outstanding tokens must be refused.
-// Middleware depends on the interface rather than Denylist so it can be
-// exercised without a live Redis.
+// Revocations reports since when an account's tokens must be refused: every
+// token issued at or before the returned time is revoked, and a zero time means
+// none are. Middleware depends on the interface rather than Denylist so it can
+// be exercised without a live Redis.
 type Revocations interface {
-	Revoked(ctx context.Context, userID uuid.UUID) (bool, error)
+	RevokedSince(ctx context.Context, userID uuid.UUID) (time.Time, error)
 }
 
 // Denylist is the Redis-backed record of accounts whose tokens were revoked
@@ -47,7 +50,8 @@ func NewDenylist(rdb *redis.Client, ttl time.Duration) *Denylist {
 	return &Denylist{rdb: rdb, ttl: ttl + revocationGrace}
 }
 
-// Revoke marks every outstanding token for userID as unusable. It returns an
+// Revoke marks every token for userID issued up to now as unusable; tokens
+// minted afterwards (a fresh sign-in) are unaffected. It returns an
 // error when Redis is unreachable. Account deletion calls it on a best-effort
 // basis and only logs a failure: once the deletion is recorded, the worker
 // revokes before it removes any rows, so this call only shortens the window in
@@ -58,7 +62,8 @@ func NewDenylist(rdb *redis.Client, ttl time.Duration) *Denylist {
 // makes the revocation true, and listeners that miss the announcement still
 // pick it up from their own periodic re-check.
 func (d *Denylist) Revoke(ctx context.Context, userID uuid.UUID) error {
-	if err := d.rdb.Set(ctx, revokedKeyPrefix+userID.String(), "1", d.ttl).Err(); err != nil {
+	now := strconv.FormatInt(time.Now().UnixNano(), 10)
+	if err := d.rdb.Set(ctx, revokedKeyPrefix+userID.String(), now, d.ttl).Err(); err != nil {
 		return fmt.Errorf("revoke sessions for %s: %w", userID, err)
 	}
 	if err := d.rdb.Publish(ctx, revokedChannel, userID.String()).Err(); err != nil {
@@ -103,12 +108,28 @@ func WatchRevocations(ctx context.Context, rdb *redis.Client, onRevoked func(uui
 	}
 }
 
-// Revoked reports whether userID is on the denylist. A Redis failure is
-// returned rather than treated as "not revoked", so callers can fail closed.
-func (d *Denylist) Revoked(ctx context.Context, userID uuid.UUID) (bool, error) {
-	n, err := d.rdb.Exists(ctx, revokedKeyPrefix+userID.String()).Result()
-	if err != nil {
-		return false, fmt.Errorf("check revocation for %s: %w", userID, err)
+// RevokedSince returns when userID's tokens were last revoked, or the zero
+// time if they never were. A Redis failure is returned rather than treated as
+// "not revoked", so callers can fail closed. An entry that does not hold a
+// timestamp (written before entries carried one) revokes every token.
+func (d *Denylist) RevokedSince(ctx context.Context, userID uuid.UUID) (time.Time, error) {
+	val, err := d.rdb.Get(ctx, revokedKeyPrefix+userID.String()).Result()
+	if errors.Is(err, redis.Nil) {
+		return time.Time{}, nil
 	}
-	return n > 0, nil
+	if err != nil {
+		return time.Time{}, fmt.Errorf("check revocation for %s: %w", userID, err)
+	}
+	nanos, err := strconv.ParseInt(val, 10, 64)
+	if err != nil || nanos < minRevocationNanos {
+		return revokeEverything, nil
+	}
+	return time.Unix(0, nanos), nil
 }
+
+// minRevocationNanos (2001-09-09) separates real timestamps from the "1" that
+// entries held before they carried one.
+const minRevocationNanos = 1_000_000_000_000_000_000
+
+// revokeEverything is a revocation time no token's issue time can reach.
+var revokeEverything = time.Unix(1<<40, 0)

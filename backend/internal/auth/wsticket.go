@@ -56,6 +56,7 @@ type ticketPrincipal struct {
 	Role      string    `json:"role"`
 	Scope     string    `json:"scope"`
 	ExpiresAt time.Time `json:"exp"`
+	IssuedAt  time.Time `json:"iat"`
 }
 
 func ticketKey(ticket string) string {
@@ -72,7 +73,7 @@ func (t *WSTickets) Issue(ctx context.Context, p Principal) (string, error) {
 		return "", fmt.Errorf("generate websocket ticket: %w", err)
 	}
 	ticket := base64.RawURLEncoding.EncodeToString(raw)
-	payload, err := json.Marshal(ticketPrincipal{UserID: p.UserID.String(), Email: p.Email, Role: p.Role, Scope: p.Scope, ExpiresAt: p.ExpiresAt})
+	payload, err := json.Marshal(ticketPrincipal{UserID: p.UserID.String(), Email: p.Email, Role: p.Role, Scope: p.Scope, ExpiresAt: p.ExpiresAt, IssuedAt: p.IssuedAt})
 	if err != nil {
 		return "", fmt.Errorf("encode websocket ticket: %w", err)
 	}
@@ -97,7 +98,7 @@ func (t *WSTickets) Redeem(ctx context.Context, ticket string) (Principal, error
 	if err := json.Unmarshal(payload, &stored); err != nil {
 		return Principal{}, ErrInvalidTicket
 	}
-	p := Principal{Email: stored.Email, Role: stored.Role, Scope: stored.Scope, ExpiresAt: stored.ExpiresAt}
+	p := Principal{Email: stored.Email, Role: stored.Role, Scope: stored.Scope, ExpiresAt: stored.ExpiresAt, IssuedAt: stored.IssuedAt}
 	if err := p.UserID.UnmarshalText([]byte(stored.UserID)); err != nil {
 		return Principal{}, ErrInvalidTicket
 	}
