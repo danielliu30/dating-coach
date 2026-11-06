@@ -513,7 +513,7 @@ def test_enforce_agency_is_the_shared_drafting_gate() -> None:
     assert llm.enforce_agency is enforce_agency
 
     sources = ["You could say I'm obsessed with climbing, but lately I mostly stay home"]
-    enforce_agency(['Message 3 ("You could say I\'m obsessed with climbing") got no reply.'], sources)
+    enforce_agency(['Message 1 ("You could say I\'m obsessed with climbing") got no reply.'], sources)
     enforce_agency(["Message 3 did not invite the match to respond with much detail."])
     with pytest.raises(ValueError, match="^llm drafted a reply for the customer"):
         enforce_agency(["Fine so far.", "Try asking: What are you passionate about?"])
@@ -577,7 +577,7 @@ def test_enforce_agency_rejects_mind_reading_and_prescription_but_passes_reflect
     with pytest.raises(ValueError, match="^llm mind-read the match"):
         enforce_agency(["J.J. is clearly not interested in you."], match_name="J.J.")
     # A curly-quoted citation of a straight-quoted customer message is still exempt.
-    enforce_agency(['Message 2 (\u201cDon\u2019t text her again\u201d) drew no reply.'], ["Don't text her again"])
+    enforce_agency(['Message 1 (\u201cDon\u2019t text her again\u201d) drew no reply.'], ["Don't text her again"])
 
     for text in (
         "Drop them.",
@@ -733,7 +733,7 @@ def test_llm_parse_falls_back_on_any_agency_violation() -> None:
             scorer._parse(json.dumps(bad), boundaries)
 
     # A cited customer message that itself sounds like a violation is still exempt.
-    sources = ["honestly she's not into me anymore lol"]
+    sources = ["", "honestly she's not into me anymore lol"]
     cited = dict(good, overall=dict(good["overall"], improvements=['Message 2 ("she\'s not into me anymore") drew no reply.']))
     assert scorer._parse(json.dumps(cited), boundaries, sources).overall.improvements
 
@@ -765,6 +765,8 @@ def test_llm_parse_rejects_drafted_replies() -> None:
             scorer._parse(json.dumps(worse), boundaries)
 
     sources = [
+        "",
+        "",
         "You could say I'm obsessed with climbing, but lately I mostly stay home",
         'She said "you could ask him about work"',
         "say",
@@ -851,7 +853,7 @@ def test_llm_parse_rejects_diagnosing_why_the_match_replied() -> None:
     with pytest.raises(ValueError, match="^llm (diagnosed why the match replied|mind-read the match)"):
         scorer._parse(json.dumps(bad_comment), boundaries)
 
-    sources = ["I only ask because you seem busy every weekend"]
+    sources = ["", "I only ask because you seem busy every weekend"]
     cited = 'Message 2 ("I only ask because you seem busy") drew a one-word reply.'
     fine = dict(good, overall=dict(good["overall"], improvements=[cited]))
     assert scorer._parse(json.dumps(fine), boundaries, sources).overall.improvements == [cited]
@@ -887,7 +889,7 @@ def test_strip_citations_blanks_only_provable_customer_quotes() -> None:
     """``strip_citations`` blanks ``Message N ("...")`` spans that match a source and leaves everything else."""
     from app.coaching import strip_citations
 
-    sources = ["You could say I'm obsessed with climbing", 'She said "you could ask him about work"']
+    sources = ["", "", "You could say I'm obsessed with climbing", 'She said "you could ask him about work"']
     assert strip_citations('Message 3 ("You could say I\'m obsessed") got no reply.', sources) == "Message 3 ( ) got no reply."
     assert (
         strip_citations('Message 4 ("She said "you could ask him about work"") stalled.', sources)
@@ -907,6 +909,27 @@ def test_strip_citations_blanks_only_provable_customer_quotes() -> None:
     assert strip_citations('Message 3 ("You could say I\'m obsessed") got no reply.') == (
         'Message 3 ("You could say I\'m obsessed") got no reply.'
     )
+
+
+def test_citation_exemption_checks_only_the_cited_message() -> None:
+    """A quote is exempted only against ``sources[N - 1]``; a wrong or out-of-range ``N`` is scanned like any text."""
+    from app.coaching import enforce_agency, strip_citations
+
+    sources = ["", "", "You could say I'm obsessed with climbing", "Sounds fun, what trail was it?"]
+    quote = '("You could say I\'m obsessed with climbing") got no reply.'
+
+    assert strip_citations(f"Message 3 {quote}", sources) == "Message 3 ( ) got no reply."
+    enforce_agency([f"Message 3 {quote}"], sources)
+
+    for wrong in (2, 4):
+        assert strip_citations(f"Message {wrong} {quote}", sources) == f"Message {wrong} {quote}"
+        with pytest.raises(ValueError, match="^llm drafted a reply"):
+            enforce_agency([f"Message {wrong} {quote}"], sources)
+
+    for out_of_range in (0, 5, 999999, 10**7):
+        assert strip_citations(f"Message {out_of_range} {quote}", sources) == f"Message {out_of_range} {quote}"
+        with pytest.raises(ValueError, match="^llm drafted a reply"):
+            enforce_agency([f"Message {out_of_range} {quote}"], sources)
 
 
 def test_llm_parse_reads_and_guards_reflection_fields() -> None:
