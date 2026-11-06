@@ -86,9 +86,28 @@ _DIRECTIVE = r"(?:just |should |need to |time to |better to |you can |you could 
 _POLITE = r"(?:(?:please|now|honestly|seriously),? )?"
 _CLAUSE_START = r"(?:^|(?<=[.!?;:]\s)|(?<=\band )|(?<=\bor )|(?<=\bbut )|(?<=\bthen ))"
 _CLAUSE_END = r"(?=\s*(?:[.!?,;:]|$|and\b|or\b))"
+# A directive reported from someone else or posed as a question ("your friends think you should
+# leave them", "you asked whether you should leave them") describes the customer's situation
+# rather than prescribing it. Present-tense reporting verbs also open the coach's own advice
+# ("I think you should leave him"), so those only count as reported without an "I"/"we" subject.
+_REPORTED_ALWAYS = ("whether", "if") + tuple(
+    f"{v}{t}"
+    for v in ("thinks", "thought", "says", "said", "feels", "felt", "believes", "believed",
+              "suggests", "suggested", "asks", "asked", "wonders", "wondered", "writes", "wrote",
+              "mentioned", "told you")
+    for t in ("", " that")
+)
+_REPORTED_UNLESS_FIRST_PERSON = tuple(f"{v}{t}" for v in ("think", "say", "feel", "believe") for t in ("", " that"))
+_NOT_REPORTED = "".join(
+    [rf"(?<!\b{r} you )(?<!\b{r} )" for r in _REPORTED_ALWAYS]
+    + [
+        rf"(?:(?<=\bI {r} you )|(?<=\bwe {r} you )|(?<!\b{r} you ))(?:(?<=\bI {r} )|(?<=\bwe {r} )|(?<!\b{r} ))"
+        for r in _REPORTED_UNLESS_FIRST_PERSON
+    ]
+)
 PRESCRIPTION = re.compile(
     rf"\b({_DIRECTIVE}?(?:drop|dump|ditch|unmatch|ghost) {_MATCH_OBJ}|"
-    rf"{_DIRECTIVE}{_POLITE}(?:leave|block) {_MATCH_OBJ}|"
+    rf"{_NOT_REPORTED}{_DIRECTIVE}{_POLITE}(?:leave|block) {_MATCH_OBJ}|"
     rf"{_CLAUSE_START}{_POLITE}(?:leave|block) {_MATCH_OBJ}{_CLAUSE_END}|"
     rf"(?:you )?(?:shouldn't|should not|don't|do not|mustn't|must not|can't|cannot) "
     r"(?:date|see|pursue|keep seeing|keep talking to|go out with|be with|text|message|chase|trust|wait for|leave|block) "
