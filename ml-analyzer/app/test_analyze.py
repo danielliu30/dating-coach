@@ -422,7 +422,10 @@ def test_brain_renders_all_three_pillars() -> None:
     """The brain renders AGENCY, FEEDBACK and SUPPORT with every principle, and is versioned."""
     from app.coaching import AGENCY, BRAIN_VERSION, FEEDBACK, PILLARS, SUPPORT, render_pillars
 
+    from app.coaching import AGENCY_VERSION
+
     assert BRAIN_VERSION.startswith("brain-v")
+    assert AGENCY_VERSION.startswith("agency-v")
     assert PILLARS == (AGENCY, FEEDBACK, SUPPORT)
 
     text = render_pillars()
@@ -480,7 +483,7 @@ def test_llm_prompt_reviews_only_self_messages_and_never_drafts() -> None:
 
 def test_llm_prompt_is_composed_from_the_brain() -> None:
     """The system prompt embeds all three rendered pillars and the scorer's version carries BRAIN_VERSION."""
-    from app.coaching import BRAIN_VERSION, PILLARS, render_pillars
+    from app.coaching import AGENCY_VERSION, BRAIN_VERSION, PILLARS, render_pillars
     from app.config import Settings
     from app.scoring.llm import SYSTEM_PROMPT, LLMScorer
 
@@ -496,12 +499,12 @@ def test_llm_prompt_is_composed_from_the_brain() -> None:
         llm_timeout=1.0, model_dir="", segment_size=2,
     )
     scorer = LLMScorer(settings)
-    assert scorer.version == f"llm-openai-m+{BRAIN_VERSION}"
+    assert scorer.version == f"llm-openai-m+{BRAIN_VERSION}+{AGENCY_VERSION}"
     good = {
         "segments": [{"start_position": 0, "end_position": 1, "engagement_score": 0.7, "comment": "Message 1 drew a detailed reply."}],
         "overall": {"engagement_score": 0.7, "summary": "Landing well.", "strengths": [], "improvements": []},
     }
-    assert scorer._parse(json.dumps(good), [(0, 1)]).model_version.endswith(BRAIN_VERSION)
+    assert scorer._parse(json.dumps(good), [(0, 1)]).model_version.endswith(f"+{BRAIN_VERSION}+{AGENCY_VERSION}")
 
 
 def test_enforce_agency_is_the_shared_drafting_gate() -> None:

@@ -17,6 +17,11 @@ import re
 from dataclasses import dataclass
 from typing import List, Optional, Pattern, Sequence, Tuple
 
+# Bump whenever ``enforce_agency`` changes which outputs it accepts (patterns,
+# exemptions, rules), so stored results record the acceptance policy they
+# passed. v1: original gate; v2: #140; v3: #148.
+AGENCY_VERSION = "agency-v3"
+
 # Phrases that mean the model drafted a reply for the customer instead of hinting.
 DRAFTING = re.compile(
     r"\b(try (asking|saying|something like)|you could (say|ask|write|reply|respond)|"

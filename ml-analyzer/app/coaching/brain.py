@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from typing import Sequence, Tuple
 
 # Bump whenever a pillar's principles change so scorer outputs stay traceable.
+# Changes to the enforcement gate bump ``agency.AGENCY_VERSION`` instead.
 BRAIN_VERSION = "brain-v1"
 
 
