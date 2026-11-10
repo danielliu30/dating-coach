@@ -90,12 +90,20 @@ def transcript(messages: Sequence[LabeledMessage]) -> str:
     return "\n".join(f"[{m.position}] {m.sender}: {m.body}" for m in sorted(messages, key=lambda m: m.position))
 
 
-def to_segment_rows(examples: Sequence[TrainingExample]) -> Iterator[Tuple[str, float]]:
+def _has_self(messages: Sequence[LabeledMessage]) -> bool:
+    return any(m.sender == "self" for m in messages)
+
+
+def to_segment_rows(examples: Sequence[TrainingExample], self_only: bool = True) -> Iterator[Tuple[str, float]]:
     """Flatten examples into (segment transcript, target score) pairs.
 
     Human per-segment labels win. When they are absent, the conversation outcome
     is used as a weak label for every segment — noisy, but it is what makes
     passively collected data usable.
+
+    ``self_only`` (the default) drops windows with no ``self`` message, matching
+    ``HeuristicScorer``'s rule that only the customer's messages are judged: a
+    match-only stretch says nothing about the customer's own messages.
     """
     for example in examples:
         by_position = {m.position: m for m in example.messages}
@@ -106,26 +114,27 @@ def to_segment_rows(examples: Sequence[TrainingExample]) -> Iterator[Tuple[str, 
                     for p in range(segment.start_position, segment.end_position + 1)
                     if p in by_position
                 ]
-                if window:
+                if window and (_has_self(window) or not self_only):
                     yield transcript(window), max(0.0, min(1.0, segment.engagement_score))
             continue
 
         weak = OUTCOME_SCORE.get(example.outcome or "", None)
         if weak is None:
             weak = 0.6 if example.reply_received else 0.2 if example.reply_received is False else None
-        if weak is None:
+        if weak is None or (self_only and not _has_self(example.messages)):
             continue
         yield transcript(example.messages), weak
 
 
 def split(
-    examples: Sequence[TrainingExample], eval_fraction: float = 0.1
+    examples: Sequence[TrainingExample], eval_fraction: float = 0.1, self_only: bool = True
 ) -> Tuple[List[Tuple[str, float]], List[Tuple[str, float]]]:
     """Flatten examples into rows with a group-disjoint train/eval split.
 
     Grouping is by ``group_key`` (user when known, otherwise conversation), so no
     segment of an evaluated conversation is ever seen during training. The group
-    hash keeps the assignment stable as the dataset grows.
+    hash keeps the assignment stable as the dataset grows. ``self_only`` is
+    passed to ``to_segment_rows`` for both sides.
     """
     eval_fraction = max(0.0, min(1.0, eval_fraction))
     buckets: Dict[str, List[TrainingExample]] = {}
@@ -141,4 +150,4 @@ def split(
 
     train_examples = [e for k in keys if k not in eval_keys for e in buckets[k]]
     eval_examples = [e for k in keys if k in eval_keys for e in buckets[k]]
-    return list(to_segment_rows(train_examples)), list(to_segment_rows(eval_examples))
+    return list(to_segment_rows(train_examples, self_only)), list(to_segment_rows(eval_examples, self_only))
