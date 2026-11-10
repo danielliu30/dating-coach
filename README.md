@@ -218,6 +218,8 @@ Without `LLM_API_KEY` both tracks fall back to dependency-free heuristic scorers
 
 Both are tailored to `users.dating_preferences`: free text the customer edits on the Account screen (`PATCH /auth/me`), which the backend attaches to every ML request — the worker reads it for messages, the API reads it for photos. The app never sends preferences with the analysis request itself, so they cannot go stale.
 
+Message analyses also score `users.coaching_goals`: the coaching-brain pillars (`agency`, `feedback`, `support`) the customer picked on the Account screen. The worker forwards them as `focus_areas`, and the result's `overall.goal_scores[]` holds one `{goal, score, comment}` entry for each goal the analyzer could judge.
+
 **Expo app checks:**
 
 ```bash
