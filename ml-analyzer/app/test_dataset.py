@@ -3,7 +3,6 @@ import json
 from app.schemas import Message
 from app.scoring.base import chunk
 
-
 import training.dataset as dataset_module
 from training.dataset import (
     OUTCOME_SCORE,
