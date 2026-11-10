@@ -1,8 +1,3 @@
-import sys
-
-import pytest
-
-import train
 from training.dataset import TrainingExample, split, to_segment_rows
 
 MESSAGES = [
@@ -56,9 +51,3 @@ def test_split_does_not_spend_eval_slots_on_filtered_groups() -> None:
     usable = [_example(key, MESSAGES, outcome="kept_talking") for key in ("u18", "u19")]
     train_rows, eval_rows = split(match_only + usable, eval_fraction=0.5)
     assert (len(train_rows), len(eval_rows)) == (1, 1)
-
-
-@pytest.mark.parametrize(("flag", "expected"), [([], True), (["--self-only"], True), (["--no-self-only"], False)])
-def test_train_self_only_flag_defaults_on(monkeypatch: pytest.MonkeyPatch, flag: list[str], expected: bool) -> None:
-    monkeypatch.setattr(sys, "argv", ["train.py", "--data", "x.jsonl", *flag])
-    assert train.parse_args().self_only is expected

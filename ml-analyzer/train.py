@@ -33,12 +33,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--learning-rate", type=float, default=2e-5)
     parser.add_argument("--max-length", type=int, default=512)
     parser.add_argument("--include-unconsented", action="store_true")
-    parser.add_argument(
-        "--self-only",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Drop segment windows with no 'self' message, as HeuristicScorer judges only the customer (default: on)",
-    )
     parser.add_argument("--dry-run", action="store_true", help="Report dataset stats and exit")
     return parser.parse_args()
 
@@ -47,7 +41,7 @@ def main() -> None:
     args = parse_args()
 
     examples = load_jsonl(args.data, require_consent=not args.include_unconsented)
-    train_rows, eval_rows = split(examples, self_only=args.self_only)
+    train_rows, eval_rows = split(examples)
     if not train_rows:
         raise SystemExit(f"no usable labeled segments in {args.data}")
     segments = len(train_rows) + len(eval_rows)
