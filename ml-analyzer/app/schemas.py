@@ -39,7 +39,7 @@ class AnalyzeRequest(BaseModel):
         max_length=len(PILLAR_KEYS),
         description=(
             "Coaching-brain pillar keys the customer wants to improve on (see PILLAR_KEYS); "
-            "the response carries one overall.goal_scores entry per area. Distinct from preferences."
+            "the response carries at most one overall.goal_scores entry per area. Distinct from preferences."
         ),
     )
 

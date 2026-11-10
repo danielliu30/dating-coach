@@ -94,11 +94,13 @@ This applies to "reflection_questions" and "patterns" exactly as it does to \
 - When the customer's stated preferences are given, relate the hints to them \
 (e.g. whether their messages surface what they are actually looking for).
 - "goal_scores": when the request lists focus areas the customer chose to \
-improve on, return exactly one entry per listed focus area, with "goal" set to \
-its key. score: 1.0 = the customer's own messages in this conversation fully \
+improve on, return at most one entry per listed focus area, with "goal" set to \
+its key. Leave a focus area out when the customer's own messages give nothing \
+to judge it by (e.g. there are none, or the pillar is not visible in what \
+they wrote); never guess a score. score: 1.0 = the customer's own messages in this conversation fully \
 live up to that pillar's principles; 0.0 = they work against them. The \
 comment says, citing the customer's words as above, what in their messages \
-earned the score. Every rule here applies to it: describe, never draft, never \
+earned the score; it is never empty. Every rule here applies to it: describe, never draft, never \
 say why the match replied the way they did. When no focus areas are listed, \
 return "goal_scores": [].
 - Judge concrete behaviour, not grammar. Never moralise, never mention that \
@@ -256,7 +258,7 @@ def focus_area_spec(focus_areas: Sequence[str]) -> str:
     blocks = "\n".join(f'- "{p.key}": ' + render_pillar(p).replace("\n", "\n  ") for p in pillars)
     keys = ", ".join(f'"{p.key}"' for p in pillars)
     return (
-        f"Focus areas the customer chose to improve on (return one overall.goal_scores entry for each of {keys}):\n"
+        f"Focus areas the customer chose to improve on (return at most one overall.goal_scores entry for each of {keys}):\n"
         f"{blocks}\n"
     )
 
@@ -266,9 +268,10 @@ def _goal_scores(overall: Dict[str, Any], focus_areas: Sequence[str]) -> List[Go
 
     With no focus areas requested the key is ignored (the contract asks for
     ``[]``) and ``[]`` is returned. Otherwise the value must be a JSON array of
-    objects with exactly one entry per requested area: a missing, duplicate or
-    unrequested ``goal``, a non-numeric ``score`` or a non-string ``comment``
-    raises ``ValueError`` so the caller falls back to the heuristic scorer, as
+    objects with at most one entry per requested area; an area the model had no
+    evidence for is left out, as the heuristic scorer does. A duplicate or
+    unrequested ``goal``, a non-numeric ``score`` or a missing or blank
+    ``comment`` raises ``ValueError`` so the caller falls back to the heuristic scorer, as
     it does for missing segments. Scores are clamped to 0-1, comments cut to
     300 characters, and the result follows ``focus_areas`` order.
     """
@@ -285,14 +288,16 @@ def _goal_scores(overall: Dict[str, Any], focus_areas: Sequence[str]) -> List[Go
             raise ValueError(f"llm returned a goal score for unrequested goal {item.get('goal')!r}")
         if pillar.key in by_goal:
             raise ValueError(f"llm returned duplicate goal score {pillar.key!r}")
-        score, comment = item.get("score"), item.get("comment", "")
-        if isinstance(score, bool) or not isinstance(score, (int, float)) or not isinstance(comment, str):
+        score, comment = item.get("score"), item.get("comment")
+        if (
+            isinstance(score, bool)
+            or not isinstance(score, (int, float))
+            or not isinstance(comment, str)
+            or not comment.strip()
+        ):
             raise ValueError(f"llm returned a malformed goal score for {pillar.key!r}: {str(item)[:80]!r}")
-        by_goal[pillar.key] = GoalScore(goal=pillar.key, score=clamp(score), comment=comment[:300])
-    missing = [goal for goal in wanted if goal not in by_goal]
-    if missing:
-        raise ValueError(f"llm did not score goals {missing}")
-    return [by_goal[goal] for goal in wanted]
+        by_goal[pillar.key] = GoalScore(goal=pillar.key, score=clamp(score), comment=comment.strip()[:300])
+    return [by_goal[goal] for goal in wanted if goal in by_goal]
 
 
 def _string_list(overall: Dict[str, Any], key: str, limit: int = 5, max_chars: int = 300) -> List[str]:

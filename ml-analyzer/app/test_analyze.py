@@ -660,7 +660,7 @@ def test_llm_prompt_lists_chosen_focus_areas_with_their_principles() -> None:
 
     request = AnalyzeRequest(conversation_id="f1", messages=messages, focus_areas=["feedback", "agency"])
     prompt = scorer._user_prompt(request, [(0, 0)])
-    assert 'return one overall.goal_scores entry for each of "agency", "feedback"' in prompt
+    assert 'return at most one overall.goal_scores entry for each of "agency", "feedback"' in prompt
     assert f'- "agency": AGENCY: {AGENCY.stance}' in prompt
     assert prompt.index('"agency":') < prompt.index('"feedback":')
     for principle in AGENCY.principles + FEEDBACK.principles:
@@ -673,7 +673,7 @@ def test_llm_prompt_lists_chosen_focus_areas_with_their_principles() -> None:
 
 
 def test_llm_parse_validates_goal_scores_against_focus_areas() -> None:
-    """_parse keeps one clamped goal score per requested area and rejects missing, extra or malformed entries."""
+    """_parse keeps at most one clamped goal score per requested area and rejects extra or malformed entries."""
     scorer = _focus_scorer()
     boundaries = [(0, 1)]
 
@@ -692,11 +692,15 @@ def test_llm_parse_validates_goal_scores_against_focus_areas() -> None:
     parsed = scorer._parse(completion(good), boundaries, focus_areas=["agency", "feedback"]).overall.goal_scores
     assert [(g.goal, g.score) for g in parsed] == [("agency", 0.3), ("feedback", 1.0)]
 
+    # An area the model had no evidence for is left out, as the heuristic scorer does.
+    partial = scorer._parse(completion([good[0]]), boundaries, focus_areas=["agency", "feedback"]).overall
+    assert [g.goal for g in partial.goal_scores] == ["feedback"]
+    assert scorer._parse(completion([]), boundaries, focus_areas=["support"]).overall.goal_scores == []
+
     # Without focus areas the key is ignored, whatever the model put there.
     assert scorer._parse(completion("junk"), boundaries).overall.goal_scores == []
 
     bad_cases = {
-        "missing": [good[0]],
         "unrequested": good + [{"goal": "support", "score": 0.5, "comment": "c"}],
         "unknown": [good[1], {"goal": "confidence", "score": 0.5, "comment": "c"}],
         "duplicate": good + [good[0]],
@@ -706,6 +710,8 @@ def test_llm_parse_validates_goal_scores_against_focus_areas() -> None:
         "bool score": [good[1], {"goal": "feedback", "score": True, "comment": "c"}],
         "no score": [good[1], {"goal": "feedback", "comment": "c"}],
         "comment not a string": [good[1], {"goal": "feedback", "score": 0.5, "comment": ["c"]}],
+        "no comment": [good[1], {"goal": "feedback", "score": 0.5}],
+        "blank comment": [good[1], {"goal": "feedback", "score": 0.5, "comment": "  "}],
     }
     for name, goal_scores in bad_cases.items():
         with pytest.raises(ValueError, match="goal"):
@@ -728,7 +734,7 @@ def test_llm_goal_score_comments_pass_the_agency_gate() -> None:
 
 
 def test_llm_goal_score_failure_falls_back_to_heuristic_goal_scores(monkeypatch) -> None:
-    """When the completion omits a requested goal score, the fallback still answers with heuristic goal_scores."""
+    """When a goal score is malformed (here: no comment), the fallback still answers with heuristic goal_scores."""
     scorer = _focus_scorer()
     messages = [
         Message(position=0, sender="self", body="How was your weekend?"),
@@ -739,7 +745,7 @@ def test_llm_goal_score_failure_falls_back_to_heuristic_goal_scores(monkeypatch)
         return json.dumps(
             {
                 "segments": [{"start_position": 0, "end_position": 1, "engagement_score": 0.8, "comment": "Fine."}],
-                "overall": {"engagement_score": 0.8, "goal_scores": []},
+                "overall": {"engagement_score": 0.8, "goal_scores": [{"goal": "feedback", "score": 0.9, "comment": ""}]},
             }
         )
 
