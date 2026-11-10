@@ -322,6 +322,24 @@ def test_trained_honors_preferences(monkeypatch: pytest.MonkeyPatch, tmp_path) -
     assert any("a fellow climber" in q for q in response.overall.reflection_questions)
 
 
+def test_trained_agency_gate_ignores_echoed_preferences_and_messages(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """Preferences and message excerpts the heuristic echoes are the customer's words, so they never trigger the fallback."""
+    scorer, _ = _stub_trained_scorer(monkeypatch, [0.9], tmp_path)
+    request = AnalyzeRequest(
+        conversation_id="trained-5",
+        preferences="find someone who shares my values",
+        messages=[
+            Message(position=0, sender="self", body="You should just leave your job and travel"),
+            Message(position=1, sender="match", body="ha"),
+        ],
+    )
+    response = asyncio.run(scorer.analyze(request))
+
+    assert response.model_version == scorer.version
+    assert response.segments[0].engagement_score == 0.9
+    assert "find someone who shares my values" in response.overall.summary
+
+
 def test_trained_falls_back_to_heuristic_when_prose_breaks_agency(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     """An agency violation in the generated prose degrades to the heuristic scorer, as LLMScorer does."""
     import app.scoring.trained as trained

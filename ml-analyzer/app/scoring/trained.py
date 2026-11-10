@@ -21,7 +21,9 @@ from ..schemas import AnalyzeRequest, AnalyzeResponse, Overall, Segment
 from .base import Scorer, align_segments, chunk, clamp, transcript
 from .heuristic import (
     HeuristicScorer,
+    SelfMessageReview,
     _comment,
+    _excerpt,
     _improvements,
     _strengths,
     _summary,
@@ -125,6 +127,7 @@ class TrainedScorer(Scorer):
 
         prose = [s.comment for s in segments] + [overall.summary]
         prose += overall.strengths + overall.improvements + overall.reflection_questions + overall.patterns
+        prose = [_without_user_text(text, request, reviews) for text in prose]
         try:
             enforce_agency(prose, citation_sources(request.messages), request.match_name)
         except ValueError:
@@ -134,3 +137,17 @@ class TrainedScorer(Scorer):
             return response
 
         return AnalyzeResponse(model_version=self.version, segments=align_segments(segments), overall=overall)
+
+
+def _without_user_text(text: str, request: AnalyzeRequest, reviews: Sequence[SelfMessageReview]) -> str:
+    """Blank what the heuristic echoes verbatim (stated preferences, message excerpts) so the gate scans only its wording.
+
+    The customer's own words are theirs to choose; a preference like "find
+    someone who shares my values" must not read as the analyzer prescribing.
+    """
+    echoed = [_excerpt(m) for m in request.messages] + [_excerpt(r.reply) for r in reviews if r.reply is not None]
+    if request.preferences and request.preferences.strip():
+        echoed.append(request.preferences.strip()[:200])
+    for snippet in sorted(set(echoed), key=len, reverse=True):
+        text = text.replace(snippet, " ")
+    return text
