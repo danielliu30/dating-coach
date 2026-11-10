@@ -345,7 +345,8 @@ are written to `<checkpoint>/eval_vs_llm.jsonl`.
 | Holdout conversations the LLM scored without fallback | `>= 90%` |
 
 The script exits `0` when the gate passes, `1` when it fails and `2` when it
-cannot run (no `LLM_API_KEY`, no checkpoint, empty data). Undefined metrics,
+could not evaluate (no `LLM_API_KEY`, checkpoint or eval data, or scoring
+crashed). Undefined metrics,
 for example a collapsed model whose scores are all identical, count as
 failures. The thresholds live in `scripts/eval_vs_llm.py`
 (`GATE_MAX_MAE`, `GATE_MIN_KAPPA`, `GATE_MIN_COVERAGE`). Re-run the gate

@@ -188,3 +188,28 @@ def test_main_scores_holdout_and_writes_pairs(monkeypatch: pytest.MonkeyPatch, t
     records = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
     assert len(records) == 19
     assert {"conversation_id", "trained", "llm", "label", "abs_diff"} <= set(records[0])
+
+
+def test_main_without_data_or_with_crashing_scorer_is_not_a_gate_verdict(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys
+) -> None:
+    """A missing eval file or a scorer crash exits 2 (not evaluated), never 1 (gate failed)."""
+    monkeypatch.setenv("LLM_API_KEY", "test-key")
+    eval_vs_llm.get_settings.cache_clear()
+
+    class Crashing(Scorer):
+        def __init__(self, settings) -> None:  # noqa: ANN001
+            self.version = "crashing"
+
+        async def analyze(self, request: AnalyzeRequest) -> AnalyzeResponse:
+            raise RuntimeError("ML_BACKEND=trained needs the training dependencies")
+
+    monkeypatch.setattr(eval_vs_llm, "TrainedScorer", Crashing)
+    monkeypatch.setattr(eval_vs_llm, "LLMScorer", Crashing)
+    try:
+        assert eval_vs_llm.main(["--checkpoint", str(tmp_path), "--data", str(tmp_path / "missing.jsonl")]) == 2
+        assert "no eval file" in capsys.readouterr().err
+        assert eval_vs_llm.main(["--checkpoint", str(tmp_path)]) == 2
+        assert "gate was not evaluated" in capsys.readouterr().err
+    finally:
+        eval_vs_llm.get_settings.cache_clear()

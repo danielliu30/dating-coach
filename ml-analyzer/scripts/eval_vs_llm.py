@@ -12,7 +12,8 @@ Cohen's kappa on the ``label_for`` buckets. Conversations where the LLM fell
 back to the heuristic scorer are excluded, so the trained model is never
 compared against the heuristic. Per-segment pairs go to ``--out``.
 
-Exit status: 0 gate passed, 1 gate failed, 2 not runnable (no LLM key, no data).
+Exit status: 0 gate passed, 1 gate failed, 2 not evaluated (no LLM key,
+checkpoint or data, or scoring crashed).
 See "Serving gate" in README.md for the thresholds.
 """
 
@@ -22,6 +23,7 @@ import argparse
 import asyncio
 import json
 import sys
+import traceback
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Dict, List, Sequence, Tuple
@@ -184,6 +186,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not Path(args.checkpoint).is_dir():
         print(f"eval_vs_llm: no checkpoint at {args.checkpoint}; run train.py first", file=sys.stderr)
         return 2
+    if not Path(args.data).is_file():
+        print(f"eval_vs_llm: no eval file at {args.data}", file=sys.stderr)
+        return 2
     examples = load_jsonl(args.data, require_consent=not args.include_unconsented)
     if not examples:
         print(f"eval_vs_llm: no usable conversations in {args.data}", file=sys.stderr)
@@ -191,7 +196,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     trained = TrainedScorer(replace(settings, backend="trained", model_dir=args.checkpoint))
     llm = LLMScorer(replace(settings, backend="llm"))
-    pairs, fallbacks = asyncio.run(score_all(examples, trained, llm, args.concurrency))
+    try:
+        pairs, fallbacks = asyncio.run(score_all(examples, trained, llm, args.concurrency))
+    except Exception:  # noqa: BLE001 - a crash is "could not evaluate" (2), never a gate verdict (1)
+        traceback.print_exc()
+        print("eval_vs_llm: scoring failed; the gate was not evaluated", file=sys.stderr)
+        return 2
 
     out = Path(args.out) if args.out else Path(args.checkpoint) / "eval_vs_llm.jsonl"
     write_pairs(out, pairs)
