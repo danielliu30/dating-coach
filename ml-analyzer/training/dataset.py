@@ -55,7 +55,9 @@ class TrainingExample:
             conversation_id=payload["conversation_id"],
             platform=payload.get("platform", "unknown"),
             messages=[LabeledMessage(**m) for m in payload["messages"]],
-            segments=[LabeledSegment(**s) for s in payload.get("segments", [])],
+            # Rows labelled before the backend normalised segment_labels hold
+            # jsonb null, which exports as "segments": null.
+            segments=[LabeledSegment(**s) for s in payload.get("segments") or []],
             reply_received=payload.get("reply_received"),
             outcome=payload.get("outcome"),
             consented=bool(payload.get("consented", False)),
