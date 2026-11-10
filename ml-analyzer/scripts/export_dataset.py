@@ -82,7 +82,7 @@ _SOCIAL_HANDLE = re.compile(
     r"(\s*(?::|=|-|\bis\b)\s*)(?!\[)([A-Za-z0-9_.]{2,30})",
     re.IGNORECASE,
 )
-_PHONE = re.compile(r"(?<![\w+:])\+?\d[\d\s().-]{5,}\d(?!\w|:\d)")
+_PHONE = re.compile(r"(?<![\w+])\+?\d[\d\s().-]{5,}\d(?!\w|:\d)")
 _DATE = re.compile(r"\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}")
 _TRAILING = ".,;:!?)]}'\""
 
