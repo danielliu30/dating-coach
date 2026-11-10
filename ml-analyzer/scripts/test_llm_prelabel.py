@@ -106,10 +106,16 @@ def test_llm_failure_is_flagged_as_fallback(tmp_path, skip_fallback):
 def test_invalid_conversation_is_skipped(tmp_path):
     bad = _conversation("bad")
     bad["messages"][1]["body"] = ""
-    with respx.mock(assert_all_called=False) as mock:
+    no_position = _conversation("no-position")
+    del no_position["messages"][0]["position"]
+    shuffled = _conversation("shuffled")
+    shuffled["messages"].reverse()
+    out = tmp_path / "out.jsonl"
+    with respx.mock(assert_all_called=True) as mock:
         route = mock.post(URL).mock(return_value=_llm_reply())
-        stats = asyncio.run(prelabel([bad], LLMScorer(_settings()), tmp_path / "out.jsonl"))
-    assert stats["invalid"] == 1 and stats["written"] == 0 and not route.called
+        stats = asyncio.run(prelabel([bad, no_position, shuffled], LLMScorer(_settings()), out))
+    assert stats["invalid"] == 2 and stats["written"] == 1 and route.call_count == 1
+    assert [r["conversation_id"] for r in _rows(out)] == ["shuffled"]
 
 
 def test_main_resumes_without_rescoring(tmp_path, monkeypatch):

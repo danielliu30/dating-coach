@@ -73,13 +73,15 @@ def conversations(rows: Iterable[Dict], include_labeled: bool = False) -> List[D
 
 
 def build_request(conversation: Dict) -> AnalyzeRequest:
-    return AnalyzeRequest(
+    request = AnalyzeRequest(
         conversation_id=conversation["conversation_id"],
         platform=conversation.get("platform") or "unknown",
         # The export replaced the match's name with this placeholder.
         match_name="[MATCH]",
-        messages=sorted(conversation["messages"], key=lambda m: m["position"]),
+        messages=conversation.get("messages") or [],
     )
+    request.messages.sort(key=lambda m: m.position)
+    return request
 
 
 def review_row(conversation: Dict, response: AnalyzeResponse, llm_version: Optional[str]) -> Dict:
