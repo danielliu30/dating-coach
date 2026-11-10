@@ -190,6 +190,8 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     trainer.save_model(str(out_dir))
     tokenizer.save_pretrained(str(out_dir))
+    # Never leave a previous checkpoint's predictions next to this one.
+    (out_dir / "eval_predictions.jsonl").unlink(missing_ok=True)
     if eval_dataset is not None:
         preds = served_scores(trainer.predict(eval_dataset).predictions)
         labels = [score for _, score in eval_rows]
