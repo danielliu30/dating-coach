@@ -8,9 +8,17 @@ from typing import Any, Dict, List, Optional, Sequence
 
 import httpx
 
-from ..coaching import AGENCY_VERSION, BRAIN_VERSION, enforce_agency, render_pillars
+from ..coaching import (
+    AGENCY_VERSION,
+    BRAIN_VERSION,
+    enforce_agency,
+    pillar_by_key,
+    pillars_by_keys,
+    render_pillar,
+    render_pillars,
+)
 from ..config import Settings
-from ..schemas import AnalyzeRequest, AnalyzeResponse, Message, Overall, Segment
+from ..schemas import AnalyzeRequest, AnalyzeResponse, GoalScore, Message, Overall, Segment
 from .base import Scorer, align_segments, chunk, clamp, transcript
 from .heuristic import HeuristicScorer, review_self_messages
 
@@ -38,7 +46,9 @@ Return STRICT JSON only, no prose, with this shape:
   ],
   "overall": {"engagement_score": float 0-1, "summary": "2 sentences",
               "strengths": ["..."], "improvements": ["..."],
-              "reflection_questions": ["..."], "patterns": ["..."]}
+              "reflection_questions": ["..."], "patterns": ["..."],
+              "goal_scores": [{"goal": "focus area key", "score": float 0-1,
+                               "comment": "one sentence"}]}
 }
 
 Rules:
@@ -83,6 +93,14 @@ This applies to "reflection_questions" and "patterns" exactly as it does to \
 "improvements" and "summary".
 - When the customer's stated preferences are given, relate the hints to them \
 (e.g. whether their messages surface what they are actually looking for).
+- "goal_scores": when the request lists focus areas the customer chose to \
+improve on, return exactly one entry per listed focus area, with "goal" set to \
+its key. score: 1.0 = the customer's own messages in this conversation fully \
+live up to that pillar's principles; 0.0 = they work against them. The \
+comment says, citing the customer's words as above, what in their messages \
+earned the score. Every rule here applies to it: describe, never draft, never \
+say why the match replied the way they did. When no focus areas are listed, \
+return "goal_scores": [].
 - Judge concrete behaviour, not grammar. Never moralise, never mention that \
 you are an AI.
 """
@@ -106,7 +124,9 @@ class LLMScorer(Scorer):
 
         try:
             raw = await self._complete(prompt)
-            return self._parse(raw, boundaries, citation_sources(request.messages), request.match_name)
+            return self._parse(
+                raw, boundaries, citation_sources(request.messages), request.match_name, request.focus_areas
+            )
         except Exception:  # noqa: BLE001 - degrade instead of failing the job
             logger.exception("llm scoring failed, falling back to heuristic scorer")
             response = await self._fallback.analyze(request)
@@ -120,6 +140,7 @@ class LLMScorer(Scorer):
         return (
             f"Platform: {request.platform}. The match is called {match_name}.\n"
             f"What the customer is looking for: {preferences}\n"
+            f"{focus_area_spec(request.focus_areas)}"
             f"Use exactly these segment boundaries (start-end message positions): {segment_spec}\n\n"
             f"Transcript (context only, review just the self lines):\n{transcript(request.messages)}\n\n"
             f"Customer messages to review, with the reply each one drew:\n{self_message_digest(request.messages)}"
@@ -168,6 +189,7 @@ class LLMScorer(Scorer):
         boundaries: List[tuple[int, int]],
         sources: Sequence[str] = (),
         match_name: Optional[str] = None,
+        focus_areas: Sequence[str] = (),
     ) -> AnalyzeResponse:
         payload: Dict[str, Any] = json.loads(_strip_fences(raw))
         by_boundary: Dict[tuple[int, int], Segment] = {}
@@ -196,8 +218,10 @@ class LLMScorer(Scorer):
         improvements = _string_list(overall, "improvements")
         reflection_questions = _string_list(overall, "reflection_questions")
         patterns = _string_list(overall, "patterns")
+        goal_scores = _goal_scores(overall, focus_areas)
         prose = [s.comment for s in segments] + [str(overall.get("summary", ""))]
         prose += strengths + improvements + reflection_questions + patterns
+        prose += [g.comment for g in goal_scores]
         enforce_agency(prose, sources, match_name)
         scores = [s.engagement_score for s in segments]
         return AnalyzeResponse(
@@ -212,8 +236,63 @@ class LLMScorer(Scorer):
                 improvements=improvements,
                 reflection_questions=reflection_questions,
                 patterns=patterns,
+                goal_scores=goal_scores,
             ),
         )
+
+
+def focus_area_spec(focus_areas: Sequence[str]) -> str:
+    """Prompt block naming the focus areas the customer chose, each with its pillar's principles.
+
+    Each area is listed by its key (what ``goal_scores[].goal`` must echo)
+    followed by the rendered pillar, so the model scores against the brain's
+    own wording. Returns ``""`` when no focus areas were requested, leaving the
+    prompt as it was before focus areas existed apart from the system prompt's
+    ``goal_scores: []`` rule.
+    """
+    pillars = pillars_by_keys(focus_areas)
+    if not pillars:
+        return ""
+    blocks = "\n".join(f'- "{p.key}": ' + render_pillar(p).replace("\n", "\n  ") for p in pillars)
+    keys = ", ".join(f'"{p.key}"' for p in pillars)
+    return (
+        f"Focus areas the customer chose to improve on (return one overall.goal_scores entry for each of {keys}):\n"
+        f"{blocks}\n"
+    )
+
+
+def _goal_scores(overall: Dict[str, Any], focus_areas: Sequence[str]) -> List[GoalScore]:
+    """Validate ``overall["goal_scores"]`` against the requested ``focus_areas``.
+
+    With no focus areas requested the key is ignored (the contract asks for
+    ``[]``) and ``[]`` is returned. Otherwise the value must be a JSON array of
+    objects with exactly one entry per requested area: a missing, duplicate or
+    unrequested ``goal``, a non-numeric ``score`` or a non-string ``comment``
+    raises ``ValueError`` so the caller falls back to the heuristic scorer, as
+    it does for missing segments. Scores are clamped to 0-1, comments cut to
+    300 characters, and the result follows ``focus_areas`` order.
+    """
+    wanted = [p.key for p in pillars_by_keys(focus_areas)]
+    if not wanted:
+        return []
+    value = overall.get("goal_scores", [])
+    if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
+        raise ValueError(f"llm returned overall.goal_scores that is not a list of objects: {str(value)[:80]!r}")
+    by_goal: Dict[str, GoalScore] = {}
+    for item in value:
+        pillar = pillar_by_key(item["goal"]) if isinstance(item.get("goal"), str) else None
+        if pillar is None or pillar.key not in wanted:
+            raise ValueError(f"llm returned a goal score for unrequested goal {item.get('goal')!r}")
+        if pillar.key in by_goal:
+            raise ValueError(f"llm returned duplicate goal score {pillar.key!r}")
+        score, comment = item.get("score"), item.get("comment", "")
+        if isinstance(score, bool) or not isinstance(score, (int, float)) or not isinstance(comment, str):
+            raise ValueError(f"llm returned a malformed goal score for {pillar.key!r}: {str(item)[:80]!r}")
+        by_goal[pillar.key] = GoalScore(goal=pillar.key, score=clamp(score), comment=comment[:300])
+    missing = [goal for goal in wanted if goal not in by_goal]
+    if missing:
+        raise ValueError(f"llm did not score goals {missing}")
+    return [by_goal[goal] for goal in wanted]
 
 
 def _string_list(overall: Dict[str, Any], key: str, limit: int = 5, max_chars: int = 300) -> List[str]:

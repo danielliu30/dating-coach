@@ -13,6 +13,7 @@ from .brain import (
     Pillar,
     pillar_by_key,
     pillars_by_keys,
+    render_pillar,
     render_pillars,
 )
 
@@ -27,6 +28,7 @@ __all__ = [
     "Pillar",
     "pillar_by_key",
     "pillars_by_keys",
+    "render_pillar",
     "render_pillars",
     "AgencyRule",
     "RULES",
