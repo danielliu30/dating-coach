@@ -109,8 +109,12 @@ def deduplicate(examples: Sequence[TrainingExample]) -> List[TrainingExample]:
     whole dataset. Near-duplicates (word-shingle Jaccard >= NEAR_DUPLICATE_JACCARD)
     are only searched within the same ``user_id``, which keeps the check cheap and
     targets the common case: one user re-submitting a slightly longer or edited
-    copy of the same thread. When a duplicate carries human ``segments`` and the
-    kept copy does not, the human-labeled copy replaces it in place.
+    copy of the same thread.
+
+    Duplicates form clusters with one kept representative: a conversation that
+    matches any earlier copy (kept or dropped) joins that copy's cluster. The
+    first copy represents the cluster unless a later copy carries human
+    ``segments`` and the representative does not; then it takes its place.
     """
     kept: List[TrainingExample] = []
     by_hash: Dict[str, int] = {}
@@ -131,15 +135,17 @@ def deduplicate(examples: Sequence[TrainingExample]) -> List[TrainingExample]:
                 ),
                 None,
             )
-        if match is not None:
-            by_hash.setdefault(digest, match)
-            if example.segments and not kept[match].segments:
-                kept[match] = example
-            continue
+        if match is None:
+            index = len(kept)
+            kept.append(example)
+        else:
+            index = match
+            if example.segments and not kept[index].segments:
+                kept[index] = example
 
-        index = len(kept)
-        kept.append(example)
-        by_hash[digest] = index
+        # Every copy, kept or dropped, joins its group's cluster so later copies
+        # are matched against all of them, not only the representative.
+        by_hash.setdefault(digest, index)
         if example.user_id is not None:
             by_user.setdefault(example.user_id, []).append((index, shingles))
     return kept
