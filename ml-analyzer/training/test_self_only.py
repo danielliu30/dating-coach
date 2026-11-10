@@ -46,6 +46,18 @@ def test_split_applies_self_only_to_both_sides() -> None:
     assert (len(train_rows), len(eval_rows)) == (2, 2)
 
 
+def test_split_does_not_spend_eval_slots_on_filtered_groups() -> None:
+    """Match-only groups are dropped before splitting, so usable groups fill both sides.
+
+    ``m1``/``m2`` hash ahead of ``u18``/``u19``, so splitting before filtering would
+    hand both eval slots to the match-only groups and leave eval empty.
+    """
+    match_only = [_example(key, MESSAGES[:2], outcome="ghosted") for key in ("m1", "m2")]
+    usable = [_example(key, MESSAGES, outcome="kept_talking") for key in ("u18", "u19")]
+    train_rows, eval_rows = split(match_only + usable, eval_fraction=0.5)
+    assert (len(train_rows), len(eval_rows)) == (1, 1)
+
+
 @pytest.mark.parametrize(("flag", "expected"), [([], True), (["--self-only"], True), (["--no-self-only"], False)])
 def test_train_self_only_flag_defaults_on(monkeypatch: pytest.MonkeyPatch, flag: list[str], expected: bool) -> None:
     monkeypatch.setattr(sys, "argv", ["train.py", "--data", "x.jsonl", *flag])

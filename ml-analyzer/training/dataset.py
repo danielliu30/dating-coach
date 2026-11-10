@@ -134,12 +134,15 @@ def split(
     Grouping is by ``group_key`` (user when known, otherwise conversation), so no
     segment of an evaluated conversation is ever seen during training. The group
     hash keeps the assignment stable as the dataset grows. ``self_only`` is
-    passed to ``to_segment_rows`` for both sides.
+    passed to ``to_segment_rows``; only groups left with at least one row are
+    split, so filtered-out groups never take an eval slot.
     """
     eval_fraction = max(0.0, min(1.0, eval_fraction))
-    buckets: Dict[str, List[TrainingExample]] = {}
+    buckets: Dict[str, List[Tuple[str, float]]] = {}
     for example in examples:
-        buckets.setdefault(example.group_key(), []).append(example)
+        rows = list(to_segment_rows([example], self_only))
+        if rows:
+            buckets.setdefault(example.group_key(), []).extend(rows)
 
     keys = sorted(buckets)
     keys.sort(key=lambda k: hashlib.sha256(k.encode("utf-8")).hexdigest())
@@ -148,6 +151,6 @@ def split(
         eval_count = 1
     eval_keys = set(keys[:eval_count])
 
-    train_examples = [e for k in keys if k not in eval_keys for e in buckets[k]]
-    eval_examples = [e for k in keys if k in eval_keys for e in buckets[k]]
-    return list(to_segment_rows(train_examples, self_only)), list(to_segment_rows(eval_examples, self_only))
+    train_rows = [row for k in keys if k not in eval_keys for row in buckets[k]]
+    eval_rows = [row for k in keys if k in eval_keys for row in buckets[k]]
+    return train_rows, eval_rows
