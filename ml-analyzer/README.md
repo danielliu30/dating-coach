@@ -270,7 +270,9 @@ Export a dataset:
 Ground rules: only export `consented` rows, pseudonymise names/handles/links
 before they leave the database, and keep an opt-out path that deletes a user's
 training rows. `outcome`/`reply_received` are weak labels — cheap and plentiful;
-human `segments` labels are scarce and authoritative. Aim for a few thousand
+human `segments` labels are scarce and authoritative. Weak labels are applied
+per segment window, at full weight only on the final window (see "Label
+precedence" in `training/data_schema.md`). Aim for a few thousand
 weak-labeled conversations plus a few hundred hand-labeled ones as the eval set,
 and keep the eval set user-disjoint from training.
 

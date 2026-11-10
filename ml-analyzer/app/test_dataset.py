@@ -1,12 +1,16 @@
 import json
 
+from app.schemas import Message
+from app.scoring.base import chunk
 from training.dataset import (
+    OUTCOME_SCORE,
     TrainingExample,
     deduplicate,
     load_jsonl,
     normalize_body,
     split,
     to_segment_rows,
+    windows,
 )
 
 
@@ -159,3 +163,78 @@ def test_near_copy_of_a_replaced_representative_stays_in_its_cluster():
     ]
 
     assert [e.conversation_id for e in deduplicate(examples)] == ["human", "other"]
+
+
+LONG_BODIES = BODIES + ["deal. saturday?", "saturday works", "bring the starter", "obviously"]
+
+
+def _lines(positions):
+    return "\n".join(f"[{i}] {'self' if i % 2 == 0 else 'match'}: {LONG_BODIES[i]}" for i in positions)
+
+
+def test_weak_label_rows_are_windowed_with_full_weight_only_on_the_final_window():
+    example = TrainingExample.from_json(_payload("a", LONG_BODIES, outcome="date_set"))
+
+    rows = list(to_segment_rows([example], window_size=4))
+
+    assert rows == [
+        (_lines(range(0, 4)), OUTCOME_SCORE["date_set"], 0.5),
+        (_lines(range(4, 8)), OUTCOME_SCORE["date_set"], 0.5),
+        (_lines(range(8, 10)), OUTCOME_SCORE["date_set"], 1.0),
+    ]
+
+
+def test_weak_label_only_on_final_window_when_earlier_weight_is_zero():
+    example = TrainingExample.from_json(_payload("a", LONG_BODIES, outcome="ghosted"))
+
+    rows = list(to_segment_rows([example], window_size=4, earlier_window_weight=0.0))
+
+    assert rows == [(_lines(range(8, 10)), OUTCOME_SCORE["ghosted"], 1.0)]
+
+
+def test_reply_received_fallback_is_windowed_like_outcome():
+    payload = _payload("a", LONG_BODIES[:6], outcome=None)
+    payload["reply_received"] = False
+    example = TrainingExample.from_json(payload)
+
+    rows = list(to_segment_rows([example], window_size=4))
+
+    assert [(score, weight) for _, score, weight in rows] == [(0.2, 0.5), (0.2, 1.0)]
+
+
+def test_short_weak_labeled_conversation_is_one_full_weight_row():
+    example = TrainingExample.from_json(_payload("a", BODIES[:3], outcome="kept_talking"))
+
+    assert list(to_segment_rows([example])) == [(_lines(range(3)), OUTCOME_SCORE["kept_talking"], 1.0)]
+
+
+def test_human_segments_ignore_window_settings():
+    segments = [{"start_position": 0, "end_position": 9, "engagement_score": 0.3}]
+    example = TrainingExample.from_json(_payload("a", LONG_BODIES, segments=segments, outcome="date_set"))
+
+    rows = list(to_segment_rows([example], window_size=2, earlier_window_weight=0.0))
+
+    assert rows == [(_lines(range(10)), 0.3, 1.0)]
+
+
+def test_split_passes_window_settings_through_to_rows():
+    examples = [
+        TrainingExample.from_json(_payload(f"c{i}", LONG_BODIES, user_id=f"u{i}", outcome="date_set"))
+        for i in range(5)
+    ]
+
+    train_rows, eval_rows = split(examples, eval_fraction=0.2, window_size=5, earlier_window_weight=0.25)
+
+    assert len(train_rows) == 8 and len(eval_rows) == 2
+    assert [weight for _, _, weight in eval_rows] == [0.25, 1.0]
+
+
+def test_windows_match_serving_segment_boundaries():
+    example = TrainingExample.from_json(_payload("a", LONG_BODIES))
+    served = [
+        Message(position=m.position, sender=m.sender, body=m.body) for m in example.messages
+    ]
+
+    for size in (1, 3, 4, 7):
+        ours = [(w[0].position, w[-1].position) for w in windows(example.messages, size)]
+        assert ours == [(start, end) for start, end, _ in chunk(served, size)]

@@ -38,13 +38,33 @@ reads, and it mirrors the `training_examples` table in the Go backend.
 
 ## Label precedence
 
-1. `segments[].engagement_score` — human labels, used directly.
+1. `segments[].engagement_score` — human labels, used directly: one row per
+   segment, score clamped to 0–1, weight 1.0. If a conversation has any
+   `segments`, its weak labels are ignored.
 2. `outcome` — mapped to a conversation-level weak score
-   (`ghosted` 0.05, `kept_talking` 0.55, `number_exchanged` 0.8, `date_set` 0.95)
-   and applied to the whole conversation.
+   (`ghosted` 0.05, `kept_talking` 0.55, `number_exchanged` 0.8, `date_set` 0.95).
 3. `reply_received` — coarsest fallback (0.6 / 0.2).
 
 Rows with none of the three are skipped.
+
+### Weak-label weighting
+
+An outcome describes how a conversation ended, so it says the most about the
+messages just before it. Weak scores (2 and 3) are therefore not stamped on the
+whole transcript. Instead, the conversation is cut into windows of
+`--segment-size` messages (default 4), starting at position 0. These are the
+same boundaries the served model scores (`ML_SEGMENT_SIZE`), so the last window
+can be shorter. Each window becomes one row with the same weak score:
+
+| Window | Weight |
+| --- | --- |
+| final (holds the last message) | 1.0 |
+| every earlier window | `--weak-earlier-weight` (default 0.5; `0` keeps only the final window) |
+
+A conversation that fits in one window gives one row at weight 1.0. `train.py`
+passes each row's weight to `binary_cross_entropy_with_logits(..., weight=...)`,
+so a 0.5 row counts half as much in the loss as a human-labeled or final-window
+row.
 
 ## De-duplication
 
