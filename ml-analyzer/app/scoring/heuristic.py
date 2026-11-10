@@ -286,10 +286,13 @@ def _agency_goal(messages: Sequence[Message]) -> Optional[GoalScore]:
     if ratio is None:
         return None
     score = clamp(1.0 / ratio) if ratio > 1.0 else 1.0
-    if score >= 1.0 / RECIPROCITY_RATIO:
-        comment = "The effort in this conversation looks roughly even between you and them."
-    else:
+    # Same threshold as ``reciprocity_patterns``, so the comment never contradicts a named pattern.
+    if ratio >= RECIPROCITY_RATIO:
         comment = "You are putting in more of this conversation than they are; is that a trade you want to keep making?"
+    elif ratio * RECIPROCITY_RATIO <= 1.0:
+        comment = "They wrote more of this conversation than you did; your share of the effort was the smaller one."
+    else:
+        comment = "The effort in this conversation looks roughly even between you and them."
     return GoalScore(goal="agency", score=score, comment=comment)
 
 

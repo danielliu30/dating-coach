@@ -530,6 +530,21 @@ def test_heuristic_goal_scores_cover_requested_areas_with_a_signal() -> None:
     assert "putting in more of this conversation than they are" in agency.comment
     enforce_agency([agency.comment])
 
+    # At exactly RECIPROCITY_RATIO (7 to 4 equal-length messages) reciprocity_patterns names an
+    # imbalance, so the agency comment must too; a match-heavy exchange is not called even.
+    seven_to_four = [Message(position=i, sender="self" if i < 7 else "match", body="Sounds good to me") for i in range(11)]
+    assert reciprocity_patterns(seven_to_four)
+    request = AnalyzeRequest(conversation_id="g2b", messages=seven_to_four, focus_areas=["agency"])
+    (agency,) = asyncio.run(scorer.analyze(request)).overall.goal_scores
+    assert "putting in more of this conversation" in agency.comment
+    match_heavy = [
+        Message(position=i, sender="match" if i % 3 else "self", body="Sounds good to me") for i in range(9)
+    ]
+    request = AnalyzeRequest(conversation_id="g2c", messages=match_heavy, focus_areas=["agency"])
+    (agency,) = asyncio.run(scorer.analyze(request)).overall.goal_scores
+    assert agency.score == 1.0 and "They wrote more of this conversation than you did" in agency.comment
+    enforce_agency([agency.comment])
+
     silent = [Message(position=i, sender="self", body="Hello again") for i in range(3)]
     request = AnalyzeRequest(conversation_id="g3", messages=silent, focus_areas=["agency"])
     assert [g.score for g in asyncio.run(scorer.analyze(request)).overall.goal_scores] == [0.0]
