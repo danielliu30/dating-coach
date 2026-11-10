@@ -2,6 +2,9 @@ import json
 
 from app.schemas import Message
 from app.scoring.base import chunk
+
+
+import training.dataset as dataset_module
 from training.dataset import (
     OUTCOME_SCORE,
     TrainingExample,
@@ -260,3 +263,16 @@ def test_copy_bridging_two_clusters_merges_them_and_keeps_a_human_label():
 
     assert [e.conversation_id for e in deduplicate([human_a, weak_b, human_c])] == ["human_a"]
     assert [e.conversation_id for e in deduplicate([weak_b, human_a, human_c])] == ["human_a"]
+
+
+def test_repeated_copies_of_one_user_skip_the_shingle_scan(monkeypatch):
+    calls = []
+    real_jaccard = dataset_module._jaccard
+    monkeypatch.setattr(dataset_module, "_jaccard", lambda a, b: calls.append(1) or real_jaccard(a, b))
+    copies = [TrainingExample.from_json(_payload(f"c{i}", BODIES, user_id="u1")) for i in range(200)]
+    other = TrainingExample.from_json(_payload("other", ["hey", "hi"], user_id="u1"))
+
+    kept = deduplicate(copies + [other])
+
+    assert [e.conversation_id for e in kept] == ["c0", "other"]
+    assert len(calls) == 1
