@@ -9,7 +9,7 @@ from pydantic import ValidationError
 
 from app.config import Settings
 from app.main import app
-from app.schemas import AnalyzeRequest, ImageAnalyzeRequest, ImageRef, Message, Overall, ReviewComment, ReviewSummaryRequest, Segment
+from app.schemas import AnalyzeRequest, GoalScore, ImageAnalyzeRequest, ImageRef, Message, Overall, ReviewComment, ReviewSummaryRequest, Segment
 from app.scoring.base import message_range
 from app.scoring.heuristic import HeuristicScorer, reciprocity_patterns, reflection_questions, review_self_messages
 from app.scoring.image import HeuristicImageScorer, build_image_scorer, image_dimensions
@@ -457,6 +457,38 @@ def test_pillars_are_looked_up_by_stable_key() -> None:
     assert pillars_by_keys([]) == ()
     with pytest.raises(ValueError, match="unknown pillar key 'confidence'"):
         pillars_by_keys(["feedback", "confidence"])
+
+
+def test_analyze_request_focus_areas_are_normalised_pillar_keys() -> None:
+    """focus_areas defaults to empty, is normalised to PILLARS order, and rejects anything but pillar keys."""
+    messages = [Message(position=0, sender="self", body="Hi")]
+    assert AnalyzeRequest(conversation_id="c", messages=messages).focus_areas == []
+
+    request = AnalyzeRequest(conversation_id="c", messages=messages, focus_areas=["Support", "agency", "support"])
+    assert request.focus_areas == ["agency", "support"]
+    # Free-text preferences stay a separate field.
+    assert request.preferences is None
+
+    with pytest.raises(ValidationError, match="unknown pillar key 'confidence'"):
+        AnalyzeRequest(conversation_id="c", messages=messages, focus_areas=["confidence"])
+    with pytest.raises(ValidationError):
+        AnalyzeRequest(conversation_id="c", messages=messages, focus_areas=["agency"] * 4)
+
+    response = client.post(
+        "/analyze",
+        json={"conversation_id": "c", "messages": [m.model_dump() for m in messages], "focus_areas": ["confidence"]},
+    )
+    assert response.status_code == 422
+
+
+def test_goal_score_is_bounded_and_keyed_by_pillar() -> None:
+    """GoalScore keeps score in [0, 1], normalises goal to a pillar key and defaults goal_scores to []."""
+    assert GoalScore(goal="FEEDBACK", score=0.25, comment="c").goal == "feedback"
+    with pytest.raises(ValidationError):
+        GoalScore(goal="feedback", score=1.5)
+    with pytest.raises(ValidationError):
+        GoalScore(goal="confidence", score=0.5)
+    assert Overall(engagement_score=0.5).goal_scores == []
 
 
 def test_llm_prompt_reviews_only_self_messages_and_never_drafts() -> None:

@@ -145,6 +145,7 @@ Request:
 | `match_name` | string | Optional. Used in the prompt, and by the agency gate so that claims or advice naming the match ("Sam isn't into you") are caught like pronoun forms. |
 | `messages[]` | array | `position` (0-based), `sender` (`self`\|`match`), `body`, optional `sent_at`. Only `self` messages are scored. |
 | `preferences` | string | Optional, ≤2000 chars. What the customer is looking for; feedback is tailored to it. |
+| `focus_areas[]` | array | Optional, defaults to `[]`. Coaching-brain pillar keys (`agency`, `feedback`, `support`) the customer wants to improve on; normalised to lowercase, deduplicated and put in pillar order. Unknown keys are a 422. |
 
 Response:
 
@@ -152,7 +153,7 @@ Response:
 | --- | --- | --- |
 | `model_version` | string | Which backend/model produced the scores. Stored with the result. |
 | `segments[]` | array | `start_position`, `end_position`, `engagement_score` (0–1), `label` (`engaging`\|`neutral`\|`flat`), `comment`. |
-| `overall` | object | `engagement_score`, `summary`, `strengths[]`, `improvements[]`, `reflection_questions[]`, `patterns[]`. |
+| `overall` | object | `engagement_score`, `summary`, `strengths[]`, `improvements[]`, `reflection_questions[]`, `patterns[]`, `goal_scores[]`. |
 
 `overall.reflection_questions[]` are open, non-directive questions that turn the
 analysis inward ("did you actually enjoy this conversation?"); the heuristic
@@ -161,6 +162,9 @@ always emits at least one when the customer wrote anything.
 the whole conversation — e.g. "You sent about twice as many messages as they
 did in this conversation (5 to 2)." — and are empty when nothing recurs. Both
 default to `[]`, so clients that predate them are unaffected.
+`overall.goal_scores[]` holds `{goal, score (0–1), comment}` entries, at most
+one per requested focus area (`goal` is the pillar key); it is `[]` when no
+focus areas were requested.
 
 `label` is always derived from the score (≥0.66 engaging, ≥0.4 neutral, else
 flat), so it is consistent across backends. `comment`, `summary` and
