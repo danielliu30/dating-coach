@@ -135,3 +135,29 @@ def test_split_rows_carry_text_score_and_weight():
         assert text.startswith("[0] self:")
         assert score == 0.95
         assert weight == 1.0
+||||||| fceb094
+
+
+
+def test_near_copy_of_a_cross_user_exact_copy_is_dropped():
+    examples = [
+        TrainingExample.from_json(_payload("a", BODIES, user_id="u1")),
+        TrainingExample.from_json(_payload("b", BODIES, user_id="u2")),
+        TrainingExample.from_json(_payload("c", BODIES + ["deal. saturday?"], user_id="u2")),
+    ]
+
+    assert [e.conversation_id for e in deduplicate(examples)] == ["a"]
+
+
+def test_near_copy_of_a_replaced_representative_stays_in_its_cluster():
+    segments = [{"start_position": 0, "end_position": 3, "engagement_score": 0.82}]
+    examples = [
+        TrainingExample.from_json(_payload("weak", BODIES, user_id="u1")),
+        TrainingExample.from_json(
+            _payload("human", BODIES + ["deal. saturday?"], user_id="u1", segments=segments)
+        ),
+        TrainingExample.from_json(_payload("again", BODIES, user_id="u1")),
+        TrainingExample.from_json(_payload("other", ["hey", "hi"], user_id="u1")),
+    ]
+
+    assert [e.conversation_id for e in deduplicate(examples)] == ["human", "other"]

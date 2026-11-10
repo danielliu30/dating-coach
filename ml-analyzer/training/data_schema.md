@@ -59,8 +59,10 @@ Rows with none of the three are skipped.
    re-submitted with one more message). Rows without `user_id` get only the exact
    check.
 
-The first occurrence is kept, unless a later duplicate has human `segments` and
-the kept copy does not; then the human-labeled copy takes its place.
+Duplicates form clusters: a conversation that matches any earlier copy, kept or
+dropped, joins that copy's cluster, and each cluster keeps one row. That row is
+the first occurrence, unless a later copy has human `segments` and the first
+does not; then the human-labeled copy takes its place.
 
 ## Annotation guidance
 
