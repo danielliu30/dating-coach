@@ -107,6 +107,31 @@ describe('AnalysisResultScreen', () => {
     expect(screen.getByText('Messages 1–3')).toBeTruthy();
     expect(screen.queryByText('A pattern we noticed')).toBeNull();
     expect(screen.queryByText('Worth asking yourself')).toBeNull();
+    expect(screen.queryByText('Your goals')).toBeNull();
+  });
+
+  it('renders a score and comment for each coaching goal the analyzer scored', async () => {
+    mocked.analysisResult.mockResolvedValue(
+      resultFixture({
+        overall: {
+          ...resultFixture().overall!,
+          goal_scores: [
+            { goal: 'agency', score: 0.4, comment: 'You sent most of the messages here.' },
+            { goal: 'feedback', score: 0.81, comment: 'Message 2 drew a long reply.' },
+          ],
+        },
+      }),
+    );
+    render(<AnalysisResultScreen {...props} />);
+    await flush();
+
+    expect(screen.getByText('Your goals')).toBeTruthy();
+    expect(screen.getByText('Agency')).toBeTruthy();
+    expect(screen.getByText('40%')).toBeTruthy();
+    expect(screen.getByText('You sent most of the messages here.')).toBeTruthy();
+    expect(screen.getByText('Reading feedback')).toBeTruthy();
+    expect(screen.getByText('81%')).toBeTruthy();
+    expect(screen.getByText('Message 2 drew a long reply.')).toBeTruthy();
   });
 
   it('renders patterns and reflection questions when the analyzer sends them', async () => {
