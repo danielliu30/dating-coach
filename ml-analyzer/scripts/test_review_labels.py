@@ -123,3 +123,10 @@ def test_main_round_trip_produces_a_trainable_dataset(files, tmp_path):
     c1 = next(e for e in examples if e.conversation_id == "c1")
     assert [s.engagement_score for s in c1.segments] == [0.75, 0.45]
     assert [score for _, score in to_segment_rows([c1])] == [0.75, 0.45]
+
+
+def test_base_merge_drops_conversations_no_longer_in_the_export(files, tmp_path):
+    base = _write(tmp_path / "labeled.jsonl", [{**_row("c3", []), "label_source": "user", "segments": []}])
+    final = tmp_path / "train.jsonl"
+    review_labels.main([*map(str, files), "--final-out", str(final), "--base", str(base)])
+    assert [e.conversation_id for e in load_jsonl(final)] == ["c3"]
