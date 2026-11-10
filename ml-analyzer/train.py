@@ -20,7 +20,13 @@ import argparse
 import json
 from pathlib import Path
 
-from training.dataset import Row, load_jsonl, split
+from training.dataset import (
+    DEFAULT_WINDOW_SIZE,
+    WEAK_EARLIER_WINDOW_WEIGHT,
+    Row,
+    load_jsonl,
+    split,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -32,6 +38,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--learning-rate", type=float, default=2e-5)
     parser.add_argument("--max-length", type=int, default=512)
+    parser.add_argument(
+        "--segment-size",
+        type=int,
+        default=DEFAULT_WINDOW_SIZE,
+        help="Messages per weak-label window; keep equal to serving's ML_SEGMENT_SIZE",
+    )
+    parser.add_argument(
+        "--weak-earlier-weight",
+        type=float,
+        default=WEAK_EARLIER_WINDOW_WEIGHT,
+        help="Loss weight of weak-label windows before the final one (0 = final window only)",
+    )
     parser.add_argument("--include-unconsented", action="store_true")
     parser.add_argument("--dry-run", action="store_true", help="Report dataset stats and exit")
     return parser.parse_args()
@@ -41,7 +59,9 @@ def main() -> None:
     args = parse_args()
 
     examples = load_jsonl(args.data, require_consent=not args.include_unconsented)
-    train_rows, eval_rows = split(examples)
+    train_rows, eval_rows = split(
+        examples, window_size=args.segment_size, earlier_window_weight=args.weak_earlier_weight
+    )
     if not train_rows:
         raise SystemExit(f"no usable labeled segments in {args.data}")
     segments = len(train_rows) + len(eval_rows)
@@ -95,12 +115,20 @@ def main() -> None:
             remove_columns=["text"],
         )
 
+    # The eval loader is sequential, so predictions line up with eval_rows.
+    eval_weights = np.asarray([weight for _, _, weight in eval_rows], dtype=float)
+
     def metrics(prediction) -> dict[str, float]:  # noqa: ANN001 - transformers EvalPrediction
         preds = torch.sigmoid(torch.tensor(prediction.predictions)).squeeze(-1).numpy()
         labels = np.asarray(prediction.label_ids).squeeze()
+        errors = preds - labels
         return {
-            "mae": float(np.mean(np.abs(preds - labels))),
-            "rmse": float(np.sqrt(np.mean((preds - labels) ** 2))),
+            "mae": float(np.mean(np.abs(errors))),
+            "rmse": float(np.sqrt(np.mean(errors**2))),
+            # Same per-row weights as the loss, so many down-weighted early
+            # windows of long conversations do not dominate the score.
+            "weighted_mae": float(np.average(np.abs(errors), weights=eval_weights)),
+            "weighted_rmse": float(np.sqrt(np.average(errors**2, weights=eval_weights))),
         }
 
     out_dir = Path(args.out)

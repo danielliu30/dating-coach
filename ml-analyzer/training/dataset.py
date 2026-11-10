@@ -69,6 +69,14 @@ Row = Tuple[str, float, float]
 
 HUMAN_LABEL_WEIGHT = 1.0
 
+# Weak (conversation-level) labels are spread over fixed-size windows. The final
+# window — the messages leading up to the outcome — gets full weight; earlier
+# windows are down-weighted because the outcome says little about them.
+# DEFAULT_WINDOW_SIZE matches serving's default ML_SEGMENT_SIZE.
+DEFAULT_WINDOW_SIZE = 4
+WEAK_FINAL_WINDOW_WEIGHT = 1.0
+WEAK_EARLIER_WINDOW_WEIGHT = 0.5
+
 OUTCOME_SCORE = {
     "ghosted": 0.05,
     "kept_talking": 0.55,
@@ -195,12 +203,29 @@ def transcript(messages: Sequence[LabeledMessage]) -> str:
     return "\n".join(f"[{m.position}] {m.sender}: {m.body}" for m in sorted(messages, key=lambda m: m.position))
 
 
-def to_segment_rows(examples: Sequence[TrainingExample]) -> Iterator[Row]:
+def windows(messages: Sequence[LabeledMessage], size: int) -> List[List[LabeledMessage]]:
+    """Contiguous windows of at most ``size`` messages, aligned from position 0.
+
+    Same boundaries as ``app.scoring.base.chunk``, so training rows look like the
+    segments the served model scores.
+    """
+    ordered = sorted(messages, key=lambda m: m.position)
+    step = max(size, 1)
+    return [ordered[start : start + step] for start in range(0, len(ordered), step)]
+
+
+def to_segment_rows(
+    examples: Sequence[TrainingExample],
+    window_size: int = DEFAULT_WINDOW_SIZE,
+    earlier_window_weight: float = WEAK_EARLIER_WINDOW_WEIGHT,
+) -> Iterator[Row]:
     """Flatten examples into (segment transcript, target score, weight) rows.
 
-    Human per-segment labels win. When they are absent, the conversation outcome
-    is used as a weak label for every segment — noisy, but it is what makes
-    passively collected data usable.
+    Human per-segment labels win and are used as-is at ``HUMAN_LABEL_WEIGHT``.
+    When they are absent, the conversation outcome (else ``reply_received``) is a
+    weak label: one row per ``window_size`` window, the final window at
+    ``WEAK_FINAL_WINDOW_WEIGHT`` and every earlier one at ``earlier_window_weight``.
+    ``earlier_window_weight <= 0`` keeps only the final window.
     """
     for example in examples:
         by_position = {m.position: m for m in example.messages}
@@ -224,11 +249,18 @@ def to_segment_rows(examples: Sequence[TrainingExample]) -> Iterator[Row]:
             weak = 0.6 if example.reply_received else 0.2 if example.reply_received is False else None
         if weak is None:
             continue
-        yield transcript(example.messages), weak, 1.0
+        chunks = windows(example.messages, window_size)
+        for index, window in enumerate(chunks):
+            weight = WEAK_FINAL_WINDOW_WEIGHT if index == len(chunks) - 1 else earlier_window_weight
+            if weight > 0:
+                yield transcript(window), weak, weight
 
 
 def split(
-    examples: Sequence[TrainingExample], eval_fraction: float = 0.1
+    examples: Sequence[TrainingExample],
+    eval_fraction: float = 0.1,
+    window_size: int = DEFAULT_WINDOW_SIZE,
+    earlier_window_weight: float = WEAK_EARLIER_WINDOW_WEIGHT,
 ) -> Tuple[List[Row], List[Row]]:
     """Flatten examples into rows with a group-disjoint train/eval split.
 
@@ -250,4 +282,7 @@ def split(
 
     train_examples = [e for k in keys if k not in eval_keys for e in buckets[k]]
     eval_examples = [e for k in keys if k in eval_keys for e in buckets[k]]
-    return list(to_segment_rows(train_examples)), list(to_segment_rows(eval_examples))
+    def rows(group: Sequence[TrainingExample]) -> List[Row]:
+        return list(to_segment_rows(group, window_size, earlier_window_weight))
+
+    return rows(train_examples), rows(eval_examples)
