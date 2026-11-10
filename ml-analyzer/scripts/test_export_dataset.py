@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from scripts.export_dataset import Pseudonymiser, main, pseudonymise_row
+from scripts.export_dataset import Pseudonymiser, main, psql_command, pseudonymise_row
 
 
 @pytest.mark.parametrize(
@@ -79,3 +79,11 @@ def test_segment_free_text_is_dropped() -> None:
         "messages": [],
     }
     assert pseudonymise_row(row)["segments"] == [{"start_position": 0, "end_position": 1, "engagement_score": 0.8}]
+
+
+def test_database_url_env_only_applies_to_plain_psql(monkeypatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgres://host/db")
+    assert psql_command(None, None) == (["psql"], "postgres://host/db")
+    docker = "docker compose exec -T postgres psql -U u -d d"
+    assert psql_command(docker, None) == (docker.split(), None)
+    assert psql_command(docker, "postgres://x/y") == (docker.split(), "postgres://x/y")

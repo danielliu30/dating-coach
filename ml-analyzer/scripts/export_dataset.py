@@ -32,7 +32,7 @@ import subprocess
 import sys
 from collections import Counter
 from pathlib import Path
-from typing import Dict, Iterable, Iterator, List, Optional
+from typing import Dict, Iterable, Iterator, List, Optional, Tuple
 
 # psql's unaligned, tuples-only output prints one json value per line; json
 # escapes newlines inside strings, so a line is always one complete row. COPY's
@@ -169,6 +169,17 @@ def pseudonymise_row(row: Dict, counts: Optional[Counter] = None) -> Dict:
     return out
 
 
+def psql_command(psql: Optional[str], database_url: Optional[str]) -> Tuple[List[str], Optional[str]]:
+    """Resolve the psql argv and URL; $DATABASE_URL only applies to plain ``psql``.
+
+    A custom ``--psql`` (e.g. ``docker compose exec ... psql -d db``) names its
+    own database, and an inherited host URL would be appended after it.
+    """
+    if psql is None:
+        return ["psql"], database_url or os.getenv("DATABASE_URL")
+    return shlex.split(psql), database_url
+
+
 def psql_rows(psql: List[str], database_url: Optional[str]) -> Iterator[Dict]:
     """Stream the export query's rows as dicts."""
     cmd = [*psql, "-X", "-A", "-t", "-q", "-v", "ON_ERROR_STOP=1", "-c", EXPORT_SQL]
@@ -210,12 +221,10 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--out", type=Path, default=Path("data/labeled.jsonl"))
     parser.add_argument(
         "--database-url",
-        default=os.getenv("DATABASE_URL"),
-        help="Postgres URL passed to psql (default: $DATABASE_URL)",
+        help="Postgres URL passed to psql (default: $DATABASE_URL, unless --psql is given)",
     )
     parser.add_argument(
         "--psql",
-        default="psql",
         help='psql command, e.g. "docker compose exec -T postgres psql -U datingcoach -d datingcoach"',
     )
     parser.add_argument(
@@ -232,7 +241,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     if args.print_sql:
         print(EXPORT_SQL.strip())
         return
-    rows = jsonl_rows(args.from_raw) if args.from_raw else psql_rows(shlex.split(args.psql), args.database_url)
+    rows = jsonl_rows(args.from_raw) if args.from_raw else psql_rows(*psql_command(args.psql, args.database_url))
     counts = write_dataset(rows, args.out)
     replaced = ", ".join(f"{k}={v}" for k, v in sorted(counts.items()) if k != "rows") or "none"
     print(f"wrote {counts['rows']} consented rows to {args.out} (replacements: {replaced})", file=sys.stderr)
