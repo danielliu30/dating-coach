@@ -9,6 +9,8 @@ from training.dataset import (
     deduplicate,
     load_jsonl,
     normalize_body,
+    split,
+    to_segment_rows,
 )
 
 
@@ -103,6 +105,40 @@ def test_human_labeled_duplicate_replaces_weak_labeled_copy():
 
     assert [e.conversation_id for e in kept] == ["human", "other"]
     assert kept[0].segments[0].engagement_score == 0.82
+
+
+def test_human_segments_are_scored_directly_at_full_weight():
+    segments = [
+        {"start_position": 0, "end_position": 1, "engagement_score": 0.82},
+        {"start_position": 2, "end_position": 5, "engagement_score": 1.4},
+    ]
+    example = TrainingExample.from_json(_payload("a", BODIES, segments=segments, outcome="ghosted"))
+
+    rows = list(to_segment_rows([example]))
+
+    assert rows == [
+        (f"[0] self: {BODIES[0]}\n[1] match: {BODIES[1]}", 0.82, 1.0),
+        (
+            "\n".join(f"[{i}] {'self' if i % 2 == 0 else 'match'}: {BODIES[i]}" for i in range(2, 6)),
+            1.0,
+            1.0,
+        ),
+    ]
+
+
+def test_split_rows_carry_text_score_and_weight():
+    examples = [
+        TrainingExample.from_json(_payload(f"c{i}", BODIES[:2], user_id=f"u{i}", outcome="date_set"))
+        for i in range(10)
+    ]
+
+    train_rows, eval_rows = split(examples, eval_fraction=0.2)
+
+    assert len(train_rows) == 8 and len(eval_rows) == 2
+    for text, score, weight in train_rows + eval_rows:
+        assert text.startswith("[0] self:")
+        assert score == 0.95
+        assert weight == 1.0
 
 
 def test_near_copy_of_a_cross_user_exact_copy_is_dropped():

@@ -20,7 +20,7 @@ import argparse
 import json
 from pathlib import Path
 
-from training.dataset import load_jsonl, split
+from training.dataset import Row, load_jsonl, split
 
 
 def parse_args() -> argparse.Namespace:
@@ -63,23 +63,29 @@ def main() -> None:
     model = AutoModelForSequenceClassification.from_pretrained(args.base_model, num_labels=1)
 
     class BCETrainer(Trainer):
-        """Soft-target BCE on the raw logit.
+        """Per-row weighted soft-target BCE on the raw logit.
 
         Plain MSE against labels in [0, 1] fits the logit itself, and the sigmoid
         that serving applies would then squash every prediction into [0.5, 0.73].
-        BCE keeps training and inference on the same scale.
+        BCE keeps training and inference on the same scale. The row weight from
+        ``training.dataset`` down-weights noisy weak labels.
         """
 
         def compute_loss(self, model, inputs, return_outputs=False, **kwargs):  # noqa: ANN001, ANN201
             labels = inputs.pop("labels").float()
+            weights = inputs.pop("weight").float()
             outputs = model(**inputs)
             logits = outputs.logits.squeeze(-1)
-            loss = torch.nn.functional.binary_cross_entropy_with_logits(logits, labels)
+            loss = torch.nn.functional.binary_cross_entropy_with_logits(logits, labels, weight=weights)
             return (loss, outputs) if return_outputs else loss
 
-    def build(rows: list[tuple[str, float]]) -> Dataset:
+    def build(rows: list[Row]) -> Dataset:
         dataset = Dataset.from_dict(
-            {"text": [text for text, _ in rows], "labels": [float(score) for _, score in rows]}
+            {
+                "text": [text for text, _, _ in rows],
+                "labels": [float(score) for _, score, _ in rows],
+                "weight": [float(weight) for _, _, weight in rows],
+            }
         )
         return dataset.map(
             lambda batch: tokenizer(
@@ -110,6 +116,9 @@ def main() -> None:
             save_strategy="epoch",
             logging_steps=25,
             report_to=[],
+            # Keep the "weight" column: the model's forward() does not accept it,
+            # so the default would drop it before compute_loss sees it.
+            remove_unused_columns=False,
         ),
         train_dataset=build(train_rows),
         eval_dataset=build(eval_rows) if eval_rows else None,
@@ -126,7 +135,7 @@ def main() -> None:
                 "base_model": args.base_model,
                 "segments": segments,
                 "epochs": args.epochs,
-                "objective": "soft-target BCE; serve sigmoid(logit) as engagement_score in [0,1]",
+                "objective": "per-row weighted soft-target BCE; serve sigmoid(logit) as engagement_score in [0,1]",
             },
             indent=2,
         ),
