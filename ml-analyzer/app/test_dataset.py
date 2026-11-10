@@ -1,6 +1,14 @@
 import json
 
-from training.dataset import TrainingExample, deduplicate, load_jsonl, normalize_body
+from training.dataset import (
+    TrainingExample,
+    _jaccard,
+    _normalized_transcript,
+    _shingles,
+    deduplicate,
+    load_jsonl,
+    normalize_body,
+)
 
 
 def _payload(conversation_id, bodies, user_id=None, segments=None, outcome="kept_talking"):
@@ -118,3 +126,22 @@ def test_near_copy_of_a_replaced_representative_stays_in_its_cluster():
     ]
 
     assert [e.conversation_id for e in deduplicate(examples)] == ["human", "other"]
+
+
+def test_copy_bridging_two_clusters_merges_them_and_keeps_a_human_label():
+    base = [" ".join(f"w{i}x{j}" for j in range(12)) for i in range(9)]
+    extra_a = ["alpha beta gamma delta epsilon zeta eta theta"]
+    extra_b = ["one two three four five six seven eight"]
+    segments = [{"start_position": 0, "end_position": 3, "engagement_score": 0.7}]
+    human_a = TrainingExample.from_json(_payload("human_a", base + extra_a, user_id="u1", segments=segments))
+    weak_b = TrainingExample.from_json(_payload("weak_b", base + extra_b, user_id="u1"))
+    human_c = TrainingExample.from_json(_payload("human_c", base, user_id="u1", segments=segments))
+
+    def similarity(x, y):
+        return _jaccard(_shingles(_normalized_transcript(x)), _shingles(_normalized_transcript(y)))
+
+    assert similarity(human_a, weak_b) < 0.9
+    assert similarity(human_c, human_a) >= 0.9 and similarity(human_c, weak_b) >= 0.9
+
+    assert [e.conversation_id for e in deduplicate([human_a, weak_b, human_c])] == ["human_a"]
+    assert [e.conversation_id for e in deduplicate([weak_b, human_a, human_c])] == ["human_a"]
