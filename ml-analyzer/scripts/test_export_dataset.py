@@ -17,6 +17,8 @@ from scripts.export_dataset import Pseudonymiser, main, pseudonymise_row
         ("IG: jane.doe", "IG: [HANDLE]"),
         ("text me 415-555-0134 or +44 7700 900123", "text me [PHONE] or [PHONE]"),
         ("met on 2026-03-01 at 18:02, 3 times", "met on 2026-03-01 at 18:02, 3 times"),
+        ("sent 2026-03-01 18:02", "sent 2026-03-01 18:02"),
+        ("text 415-555-0134: thanks", "text [PHONE]: thanks"),
     ],
 )
 def test_contact_details_are_replaced(text, expected):
