@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -536,5 +537,67 @@ func TestSignInRefusesAccountWithoutPassword(t *testing.T) {
 		if _, err := svc.SignIn(ctx, email, password); !errors.Is(err, ErrInvalidCredentials) {
 			t.Fatalf("sign in with password %q = %v, want %v", password, err, ErrInvalidCredentials)
 		}
+	}
+}
+
+// TestUpdateDatingProfileRejectsUnknownCoachingGoal pins that coaching goals
+// come from the coaching-brain pillar keys the ML analyzer accepts; anything
+// else is refused before any query runs.
+func TestUpdateDatingProfileRejectsUnknownCoachingGoal(t *testing.T) {
+	svc := &Service{}
+	_, err := svc.UpdateDatingProfile(context.Background(), Principal{}, DatingProfileInput{
+		CoachingGoals: []string{"agency", "confidence"},
+	})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("got %v, want ErrInvalidInput", err)
+	}
+}
+
+// TestUpdateDatingProfileStoresCoachingGoals round-trips coaching goals through
+// the real query: they come back normalised to pillar order, GET /auth/me's
+// row carries them, and an omitted list clears them like every other list.
+func TestUpdateDatingProfileStoresCoachingGoals(t *testing.T) {
+	svc, _, pool := newTestService(t)
+	ctx := context.Background()
+
+	email := "coaching-goals-test-" + uuid.NewString() + "@example.com"
+	t.Cleanup(func() {
+		if _, err := pool.Exec(context.Background(), "DELETE FROM users WHERE email = $1", email); err != nil {
+			t.Errorf("delete test user: %v", err)
+		}
+	})
+	signUp, err := svc.SignUp(ctx, SignUpInput{Email: email, Password: "correct-horse", DisplayName: "Goals Test"})
+	if err != nil {
+		t.Fatalf("sign up: %v", err)
+	}
+	if got := signUp.User.CoachingGoals; got == nil || len(got) != 0 {
+		t.Fatalf("new account coaching_goals = %#v, want []", got)
+	}
+	principal := Principal{UserID: uuid.MustParse(signUp.User.ID)}
+
+	profile, err := svc.UpdateDatingProfile(ctx, principal, DatingProfileInput{
+		CoachingGoals:     []string{" Support", "agency", "support"},
+		DatingPreferences: "Someone kind",
+	})
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if want := []string{"agency", "support"}; !slices.Equal(profile.CoachingGoals, want) {
+		t.Fatalf("coaching_goals = %v, want %v", profile.CoachingGoals, want)
+	}
+	row, err := db.New(pool).GetUserByID(ctx, principal.UserID)
+	if err != nil {
+		t.Fatalf("get user: %v", err)
+	}
+	if want := []string{"agency", "support"}; !slices.Equal(row.CoachingGoals, want) {
+		t.Fatalf("stored coaching_goals = %v, want %v", row.CoachingGoals, want)
+	}
+
+	profile, err = svc.UpdateDatingProfile(ctx, principal, DatingProfileInput{DatingPreferences: "Someone kind"})
+	if err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	if len(profile.CoachingGoals) != 0 || profile.CoachingGoals == nil {
+		t.Fatalf("cleared coaching_goals = %#v, want []", profile.CoachingGoals)
 	}
 }
