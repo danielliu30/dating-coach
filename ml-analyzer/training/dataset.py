@@ -121,6 +121,7 @@ def deduplicate(examples: Sequence[TrainingExample]) -> List[TrainingExample]:
     parent: List[int] = []
     by_hash: Dict[str, int] = {}
     by_user: Dict[str, List[Tuple[int, FrozenSet[Tuple[str, ...]]]]] = {}
+    seen_in_user: set[Tuple[str, str]] = set()
 
     def root(index: int) -> int:
         while parent[index] != index:
@@ -133,10 +134,13 @@ def deduplicate(examples: Sequence[TrainingExample]) -> List[TrainingExample]:
         digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
         shingles = _shingles(normalized)
 
+        # A transcript this user already submitted has identical shingles, which
+        # were scanned and registered then: the hash alone finds its cluster.
+        repeat = example.user_id is not None and (example.user_id, digest) in seen_in_user
         matches = set()
         if digest in by_hash:
             matches.add(root(by_hash[digest]))
-        if example.user_id is not None:
+        if example.user_id is not None and not repeat:
             matches.update(
                 root(index)
                 for index, other in by_user.get(example.user_id, [])
@@ -160,7 +164,8 @@ def deduplicate(examples: Sequence[TrainingExample]) -> List[TrainingExample]:
         # Every copy, kept or dropped, joins its cluster so later copies are
         # matched against all of them, not only the representative.
         by_hash.setdefault(digest, index)
-        if example.user_id is not None:
+        if example.user_id is not None and not repeat:
+            seen_in_user.add((example.user_id, digest))
             by_user.setdefault(example.user_id, []).append((index, shingles))
     return [example for example in slots if example is not None]
 
