@@ -316,7 +316,44 @@ backend returns)` pairs — add `peft` from `requirements-train.txt`, and have
 `TrainedScorer.analyze` parse the generated JSON with the same
 `LLMScorer._parse` logic.
 
-### 4. Switch backends
+### 4. Pass the serving gate
+
+MAE/RMSE against held-out labels says how close the model is to annotators;
+it does not say whether swapping `ML_BACKEND=llm` for `trained` changes what
+users see. The serving gate measures that directly, on the frozen holdout:
+
+```bash
+pip install -r requirements-train.txt
+LLM_API_KEY=... make eval    # = python scripts/eval_vs_llm.py --checkpoint artifacts/segment-scorer --data data/eval_holdout.jsonl
+```
+
+`scripts/eval_vs_llm.py` runs `TrainedScorer` (the checkpoint) and `LLMScorer`
+(the current `LLM_*` configuration) over every holdout conversation, pairs their
+segments by boundary and reports segment-level MAE, Pearson and Spearman
+correlation, Cohen's kappa on the served `label_for` buckets
+(engaging/neutral/flat), each backend's score distribution, and both backends'
+MAE/kappa against the holdout's human labels for context. Conversations where
+the LLM fell back to the heuristic are excluded and listed. Per-segment pairs
+are written to `<checkpoint>/eval_vs_llm.jsonl`.
+
+**The trained backend may serve only when, on `data/eval_holdout.jsonl`:**
+
+| Check | Threshold |
+| --- | --- |
+| Segment-level MAE, trained vs LLM | `< 0.1` |
+| Cohen's kappa on `label_for` buckets, trained vs LLM | `> 0.6` |
+| Holdout conversations the LLM scored without fallback | `>= 90%` |
+
+The script exits `0` when the gate passes, `1` when it fails and `2` when it
+could not evaluate (no `LLM_API_KEY`, checkpoint or eval data, or scoring
+crashed). Undefined metrics,
+for example a collapsed model whose scores are all identical, count as
+failures. The thresholds live in `scripts/eval_vs_llm.py`
+(`GATE_MAX_MAE`, `GATE_MIN_KAPPA`, `GATE_MIN_COVERAGE`). Re-run the gate
+whenever the checkpoint, the LLM model or `BRAIN_VERSION`/`AGENCY_VERSION`
+change, since the reference moves with them.
+
+### 5. Switch backends
 
 ```bash
 pip install -r requirements-train.txt   # torch/transformers are not in the serving image
