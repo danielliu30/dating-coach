@@ -40,13 +40,15 @@ def pearson(a: Sequence[float], b: Sequence[float]) -> float:
     n = _paired(a, b)
     if n < 2:
         return math.nan
+    # Checked on the values: a float mean of identical scores can be off by
+    # one ulp, which would leave a tiny nonzero variance and a spurious +-1.
+    if min(a) == max(a) or min(b) == max(b):
+        return math.nan
     mean_a = sum(a) / n
     mean_b = sum(b) / n
     cov = sum((x - mean_a) * (y - mean_b) for x, y in zip(a, b))
     var_a = sum((x - mean_a) ** 2 for x in a)
     var_b = sum((y - mean_b) ** 2 for y in b)
-    if var_a == 0 or var_b == 0:
-        return math.nan
     return cov / math.sqrt(var_a * var_b)
 
 
