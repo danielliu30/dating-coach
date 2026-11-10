@@ -37,6 +37,7 @@ SET dating_styles = $2,
     phases_strong = $3,
     phases_working_on = $4,
     dating_preferences = $5,
+    coaching_goals = $6,
     updated_at = now()
 WHERE id = $1 AND deleted_at IS NULL
 RETURNING *;
