@@ -46,6 +46,13 @@ reads, and it mirrors the `training_examples` table in the Go backend.
 
 Rows with none of the three are skipped.
 
+## Frozen eval holdout
+
+`data/eval_holdout.jsonl` uses this schema too, with human `segments` labels on
+the served segment boundaries (`ML_SEGMENT_SIZE`, default 4: `[0-3]`, `[4-7]`,
+...). It is never trained on: `train.py` removes any `--data` row sharing a
+`conversation_id` or `user_id` with it.
+
 ## Annotation guidance
 
 Rate a segment on how easy and appealing it is to reply to, not on writing

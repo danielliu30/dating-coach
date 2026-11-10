@@ -13,6 +13,9 @@ __pycache__/
 *.py[cod]
 .venv/
 ml-analyzer/models/
+# Exported training data stays local; only the frozen eval holdout is committed.
+ml-analyzer/data/*
+!ml-analyzer/data/eval_holdout.jsonl
 
 # Editors / OS
 .DS_Store
