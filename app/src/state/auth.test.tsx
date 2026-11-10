@@ -40,6 +40,7 @@ const user: Profile = {
   phases_strong: [],
   phases_working_on: [],
   dating_preferences: '',
+  coaching_goals: [],
 };
 
 const inOneHour = () => new Date(Date.now() + 3600_000).toISOString();
@@ -386,7 +387,7 @@ describe('AuthProvider profile', () => {
 
   it('updateDatingProfile persists the returned profile', async () => {
     await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(session()));
-    const input = { dating_styles: ['hinge' as const], phases_strong: [], phases_working_on: [], dating_preferences: 'x' };
+    const input = { dating_styles: ['hinge' as const], phases_strong: [], phases_working_on: [], dating_preferences: 'x', coaching_goals: [] };
     mocked.updateDatingProfile.mockResolvedValue({ ...user, dating_styles: ['hinge'] });
     const { result } = await renderAuth();
 
