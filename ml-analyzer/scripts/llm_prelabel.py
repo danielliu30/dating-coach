@@ -171,6 +171,8 @@ def main(argv: Optional[List[str]] = None) -> None:
     if not settings.llm_configured and not args.allow_heuristic:
         raise SystemExit("LLM_API_KEY is not set; set it or pass --allow-heuristic")
 
+    if args.out.resolve() == args.data.resolve():
+        raise SystemExit("--out must not be the --data export")
     if args.overwrite and args.out.exists():
         args.out.unlink()
     done = done_ids(args.out)

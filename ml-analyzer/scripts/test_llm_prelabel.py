@@ -130,3 +130,12 @@ def test_main_requires_an_api_key(tmp_path, monkeypatch):
     monkeypatch.setattr(llm_prelabel, "get_settings", lambda: _settings(api_key=""))
     with pytest.raises(SystemExit, match="LLM_API_KEY"):
         llm_prelabel.main(["--data", str(tmp_path / "missing.jsonl")])
+
+
+def test_main_refuses_to_overwrite_its_input(tmp_path, monkeypatch):
+    data = tmp_path / "labeled.jsonl"
+    data.write_text(json.dumps(_conversation()) + "\n")
+    monkeypatch.setattr(llm_prelabel, "get_settings", _settings)
+    with pytest.raises(SystemExit, match="must not be"):
+        llm_prelabel.main(["--data", str(data), "--out", str(tmp_path / "." / "labeled.jsonl"), "--overwrite"])
+    assert data.exists()
