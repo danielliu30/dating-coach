@@ -16,7 +16,7 @@ import statistics
 from dataclasses import dataclass
 from typing import Dict, List, Literal, Optional, Sequence
 
-from ..schemas import AnalyzeRequest, AnalyzeResponse, Message, Overall, Segment
+from ..schemas import AnalyzeRequest, AnalyzeResponse, GoalScore, Message, Overall, Segment
 from .base import Scorer, align_segments, chunk, clamp, label_for
 
 OPEN_QUESTION = re.compile(r"\b(what|why|how|where|when|which|who)\b", re.IGNORECASE)
@@ -239,8 +239,80 @@ def reflection_questions(
     return questions
 
 
+def _investment_ratio(messages: Sequence[Message]) -> Optional[float]:
+    """How much more the customer put in than the match, or ``None`` when there is too little to say.
+
+    The larger of the customer-to-match message-count and word-count ratios
+    (the two volume signals ``reciprocity_patterns`` compares); ``inf`` when
+    the match wrote nothing. ``None`` below ``MIN_SELF_FOR_RECIPROCITY``
+    customer messages, the same threshold that keeps ``reciprocity_patterns``
+    silent on short conversations.
+    """
+    own = [m for m in messages if m.sender == "self"]
+    theirs = [m for m in messages if m.sender == "match"]
+    if len(own) < MIN_SELF_FOR_RECIPROCITY:
+        return None
+    if not theirs:
+        return float("inf")
+    count_ratio = len(own) / len(theirs)
+    their_words = sum(_word_count(m) for m in theirs)
+    word_ratio = sum(_word_count(m) for m in own) / their_words if their_words else float("inf")
+    return max(count_ratio, word_ratio)
+
+
+def _feedback_goal(reviews: Sequence[SelfMessageReview]) -> Optional[GoalScore]:
+    """FEEDBACK: how the customer's own messages fared, judged by what came back; ``None`` with no messages."""
+    if not reviews:
+        return None
+    counts = _outcome_counts(reviews)
+    return GoalScore(
+        goal="feedback",
+        score=clamp(statistics.fmean(r.score for r in reviews)),
+        comment=(
+            f"Judged by what came back: {counts['good_reply']} of your {len(reviews)} messages drew a detailed reply, "
+            f"{counts['reply']} a plain one, {counts['short_reply']} a short one and {counts['no_reply']} none."
+        ),
+    )
+
+
+def _agency_goal(messages: Sequence[Message]) -> Optional[GoalScore]:
+    """AGENCY: whether the customer's share of the effort is something they chose, scored by its balance.
+
+    1.0 when the customer put in no more than the match; ``1 / ratio`` above
+    that (twice the messages or words scores 0.5), 0.0 when nothing came back
+    at all. ``None`` when ``_investment_ratio`` has too little to go on.
+    """
+    ratio = _investment_ratio(messages)
+    if ratio is None:
+        return None
+    score = clamp(1.0 / ratio) if ratio > 1.0 else 1.0
+    if score >= 1.0 / RECIPROCITY_RATIO:
+        comment = "The effort in this conversation looks roughly even between you and them."
+    else:
+        comment = "You are putting in more of this conversation than they are; is that a trade you want to keep making?"
+    return GoalScore(goal="agency", score=score, comment=comment)
+
+
+def goal_scores(
+    reviews: Sequence[SelfMessageReview], messages: Sequence[Message], focus_areas: Sequence[str]
+) -> List[GoalScore]:
+    """Score the requested focus areas that the heuristic has a signal for, in ``focus_areas`` order.
+
+    ``feedback`` is the mean outcome score of the customer's messages (the
+    overall engagement score) and ``agency`` is the balance of effort from
+    ``_investment_ratio``. ``support`` is about the coach's stance, not
+    anything visible in the customer's messages, so it is never scored here;
+    neither is a goal whose signal is missing (no customer messages, or too
+    few for a balance). Comments describe outcomes only: no drafted wording,
+    no reasons for the match's behaviour.
+    """
+    scorers = {"feedback": lambda: _feedback_goal(reviews), "agency": lambda: _agency_goal(messages)}
+    scores = [scorers[goal]() for goal in focus_areas if goal in scorers]
+    return [score for score in scores if score is not None]
+
+
 class HeuristicScorer(Scorer):
-    version = "heuristic-v3"
+    version = "heuristic-v4"
 
     def __init__(self, segment_size: int = 4) -> None:
         self.segment_size = segment_size
@@ -279,6 +351,7 @@ class HeuristicScorer(Scorer):
                 improvements=_improvements(reviews),
                 reflection_questions=reflection_questions(reviews, patterns, request.preferences),
                 patterns=patterns,
+                goal_scores=goal_scores(reviews, request.messages, request.focus_areas),
             ),
         )
 
