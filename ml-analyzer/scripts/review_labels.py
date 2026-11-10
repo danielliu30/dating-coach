@@ -251,6 +251,8 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     args = parser.parse_args(argv)
     if args.base and not args.final_out:
         parser.error("--base needs --final-out")
+    if args.adjudication_out and args.adjudicated and args.adjudication_out.resolve() == args.adjudicated.resolve():
+        parser.error("--adjudication-out would overwrite the filled --adjudicated file")
     return args
 
 

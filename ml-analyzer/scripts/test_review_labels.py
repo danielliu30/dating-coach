@@ -130,3 +130,9 @@ def test_base_merge_drops_conversations_no_longer_in_the_export(files, tmp_path)
     final = tmp_path / "train.jsonl"
     review_labels.main([*map(str, files), "--final-out", str(final), "--base", str(base)])
     assert [e.conversation_id for e in load_jsonl(final)] == ["c3"]
+
+
+def test_adjudication_out_cannot_overwrite_the_adjudicated_file(files, tmp_path):
+    adjudicated = _write(tmp_path / "adjudicate.jsonl", [])
+    with pytest.raises(SystemExit):
+        review_labels.main([*map(str, files), "--adjudication-out", str(adjudicated), "--adjudicated", str(adjudicated)])
