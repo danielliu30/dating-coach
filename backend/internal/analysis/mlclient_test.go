@@ -39,18 +39,19 @@ func TestMLClientAnalyzePostsJSONAndDecodes(t *testing.T) {
 }
 
 // TestMLOverallRoundTripsReflectionFields pins that the analyzer's
-// reflection_questions and patterns survive decode -> re-encode, which is the
+// reflection_questions, patterns and goal_scores survive decode -> re-encode, which is the
 // path the worker uses to persist analysis_results.overall.
 func TestMLOverallRoundTripsReflectionFields(t *testing.T) {
 	wire := `{"engagement_score":0.4,"summary":"s","strengths":[],"improvements":["Message 2 got no reply."],` +
 		`"reflection_questions":["Did you actually enjoy this conversation?"],` +
-		`"patterns":["You sent about twice as many messages as they did in this conversation (4 to 2)."]}`
+		`"patterns":["You sent about twice as many messages as they did in this conversation (4 to 2)."],` +
+		`"goal_scores":[{"goal":"feedback","score":0.75,"comment":"Message 1 drew a long reply."}]}`
 	var overall MLOverall
 	if err := json.Unmarshal([]byte(wire), &overall); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if len(overall.ReflectionQuestions) != 1 || len(overall.Patterns) != 1 {
-		t.Fatalf("decoded %+v, want one reflection question and one pattern", overall)
+	if len(overall.ReflectionQuestions) != 1 || len(overall.Patterns) != 1 || len(overall.GoalScores) != 1 {
+		t.Fatalf("decoded %+v, want one reflection question, one pattern and one goal score", overall)
 	}
 	stored, err := json.Marshal(overall)
 	if err != nil {
@@ -59,6 +60,7 @@ func TestMLOverallRoundTripsReflectionFields(t *testing.T) {
 	for _, want := range []string{
 		`"reflection_questions":["Did you actually enjoy this conversation?"]`,
 		`"patterns":["You sent about twice as many messages as they did in this conversation (4 to 2)."]`,
+		`"goal_scores":[{"goal":"feedback","score":0.75,"comment":"Message 1 drew a long reply."}]`,
 	} {
 		if !strings.Contains(string(stored), want) {
 			t.Fatalf("persisted overall %s is missing %s", stored, want)
@@ -95,5 +97,27 @@ func TestMLRequestPreferencesWireFormat(t *testing.T) {
 	}
 	if strings.Contains(string(without), "preferences") {
 		t.Fatalf("blank preferences should be omitted, got %s", without)
+	}
+}
+
+// TestMLRequestFocusAreasWireFormat pins the analyzer contract for coaching
+// goals: they travel as the top-level "focus_areas" list and are omitted when
+// the user has chosen none, so the analyzer returns no goal_scores.
+func TestMLRequestFocusAreasWireFormat(t *testing.T) {
+	with, err := json.Marshal(MLRequest{ConversationID: "c", Platform: "hinge", FocusAreas: []string{"agency", "feedback"}})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(with), `"focus_areas":["agency","feedback"]`) {
+		t.Fatalf("focus_areas missing from %s", with)
+	}
+	for _, areas := range [][]string{nil, {}} {
+		without, err := json.Marshal(MLRequest{ConversationID: "c", Platform: "hinge", FocusAreas: areas})
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if strings.Contains(string(without), "focus_areas") {
+			t.Fatalf("empty focus_areas should be omitted, got %s", without)
+		}
 	}
 }

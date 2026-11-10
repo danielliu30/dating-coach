@@ -21,8 +21,11 @@ type MLRequest struct {
 	MatchName      string `json:"match_name,omitempty"`
 	// Preferences is the owner's users.dating_preferences text; omitted when blank
 	// so the analyzer's default (untailored) path is taken.
-	Preferences string      `json:"preferences,omitempty"`
-	Messages    []MLMessage `json:"messages"`
+	Preferences string `json:"preferences,omitempty"`
+	// FocusAreas is the owner's users.coaching_goals: coaching-brain pillar keys
+	// the analyzer scores in Overall.GoalScores. Omitted when empty.
+	FocusAreas []string    `json:"focus_areas,omitempty"`
+	Messages   []MLMessage `json:"messages"`
 }
 
 // MLMessage is one transcript message as the analyzer expects it.
@@ -55,13 +58,24 @@ type MLSegment struct {
 // (open questions for the customer and recurring behaviour named as an
 // observation). Results stored before the analyzer emitted them, or from an
 // analyzer that omits them, carry null for these keys, like any absent slice.
+// GoalScores has one entry per requested focus area the analyzer could judge;
+// it must be declared here or the worker's decode -> re-encode would drop it.
 type MLOverall struct {
-	EngagementScore     float64  `json:"engagement_score"`
-	Summary             string   `json:"summary"`
-	Strengths           []string `json:"strengths"`
-	Improvements        []string `json:"improvements"`
-	ReflectionQuestions []string `json:"reflection_questions"`
-	Patterns            []string `json:"patterns"`
+	EngagementScore     float64       `json:"engagement_score"`
+	Summary             string        `json:"summary"`
+	Strengths           []string      `json:"strengths"`
+	Improvements        []string      `json:"improvements"`
+	ReflectionQuestions []string      `json:"reflection_questions"`
+	Patterns            []string      `json:"patterns"`
+	GoalScores          []MLGoalScore `json:"goal_scores"`
+}
+
+// MLGoalScore scores the conversation against one coaching-brain pillar the
+// customer chose to improve on (Goal is its key, Score is 0-1).
+type MLGoalScore struct {
+	Goal    string  `json:"goal"`
+	Score   float64 `json:"score"`
+	Comment string  `json:"comment"`
 }
 
 // SummarizeReviews asks ml-analyzer's /summarize/reviews to condense a coach's

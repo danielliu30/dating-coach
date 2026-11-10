@@ -57,28 +57,12 @@ func (w *Worker) Handle(ctx context.Context, job Job, lastAttempt bool) error {
 	if err != nil {
 		return w.fail(ctx, analysisID, lastAttempt, fmt.Errorf("load messages: %w", err))
 	}
-	preferences, err := w.datingPreferences(ctx, conversation.UserID)
+	owner, err := w.ownerTailoring(ctx, conversation.UserID)
 	if err != nil {
 		return w.fail(ctx, analysisID, lastAttempt, fmt.Errorf("load preferences: %w", err))
 	}
 
-	req := MLRequest{
-		ConversationID: conversationID.String(),
-		Platform:       conversation.Platform,
-		MatchName:      conversation.MatchName,
-		Preferences:    preferences,
-		Messages:       make([]MLMessage, 0, len(messages)),
-	}
-	for _, m := range messages {
-		req.Messages = append(req.Messages, MLMessage{
-			Position: m.Position,
-			Sender:   m.Sender,
-			Body:     m.Body,
-			SentAt:   m.SentAt.UTC().Format("2006-01-02T15:04:05Z07:00"),
-		})
-	}
-
-	resp, err := w.ml.Analyze(ctx, req)
+	resp, err := w.ml.Analyze(ctx, newMLRequest(conversation, messages, owner))
 	if err != nil {
 		return w.fail(ctx, analysisID, lastAttempt, err)
 	}
@@ -105,19 +89,50 @@ func (w *Worker) Handle(ctx context.Context, job Job, lastAttempt bool) error {
 	return nil
 }
 
-// datingPreferences returns what the conversation's owner said they are looking
-// for, so the analyzer can tailor its hints. A user that no longer exists (or is
-// soft-deleted) yields "" rather than an error: the analysis still runs, just
-// untailored, and the owner's absence is dealt with when the result is delivered.
-func (w *Worker) datingPreferences(ctx context.Context, userID uuid.UUID) (string, error) {
+// tailoring is what the conversation's owner told us about themselves that the
+// analyzer tailors to: users.dating_preferences (what they are looking for) and
+// users.coaching_goals (the coaching-brain pillars they want scored).
+type tailoring struct {
+	Preferences string
+	FocusAreas  []string
+}
+
+// ownerTailoring reads the owner's tailoring from their user row when the job
+// runs, so an edit made after the upload still applies. A user that no longer
+// exists (or is soft-deleted) yields the zero value rather than an error: the
+// analysis still runs, just untailored, and the owner's absence is dealt with
+// when the result is delivered.
+func (w *Worker) ownerTailoring(ctx context.Context, userID uuid.UUID) (tailoring, error) {
 	user, err := w.queries.GetUserByID(ctx, userID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", nil
+		return tailoring{}, nil
 	}
 	if err != nil {
-		return "", err
+		return tailoring{}, err
 	}
-	return user.DatingPreferences, nil
+	return tailoring{Preferences: user.DatingPreferences, FocusAreas: user.CoachingGoals}, nil
+}
+
+// newMLRequest builds the analyzer request for conversation and its messages,
+// tailored to owner.
+func newMLRequest(conversation db.Conversation, messages []db.Message, owner tailoring) MLRequest {
+	req := MLRequest{
+		ConversationID: conversation.ID.String(),
+		Platform:       conversation.Platform,
+		MatchName:      conversation.MatchName,
+		Preferences:    owner.Preferences,
+		FocusAreas:     owner.FocusAreas,
+		Messages:       make([]MLMessage, 0, len(messages)),
+	}
+	for _, m := range messages {
+		req.Messages = append(req.Messages, MLMessage{
+			Position: m.Position,
+			Sender:   m.Sender,
+			Body:     m.Body,
+			SentAt:   m.SentAt.UTC().Format("2006-01-02T15:04:05Z07:00"),
+		})
+	}
+	return req
 }
 
 // fail records a permanent failure on the analysis row, or returns cause so the
