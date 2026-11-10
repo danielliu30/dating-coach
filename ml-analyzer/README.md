@@ -307,7 +307,8 @@ from scratch:
 4. **Merge.** Rerun the review with the adjudicated file to get a training
    set. Each segment gets its adjudicated score, or else the mean of
    annotators who agree within 0.25. Annotated conversations replace their
-   weak-label rows from the export:
+   weak-label rows from the export. Annotated conversations that are missing
+   from a fresh export (for example because the user opted out) are dropped:
 
    ```bash
    python -m scripts.review_labels data/annotations/*.jsonl --adjudicated data/adjudicate.jsonl \
