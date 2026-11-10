@@ -65,8 +65,8 @@ def message_range(segment: Segment) -> str:
 
 
 def _parse_sent_at(value: Optional[str]) -> Optional[datetime]:
-    """RFC3339 ``sent_at`` as an aware datetime (naive values read as UTC); ``None`` when absent or unparseable."""
-    if not value:
+    """RFC3339 ``sent_at`` as an aware datetime (naive values read as UTC); ``None`` when absent, date-only or unparseable."""
+    if not value or not any(sep in value for sep in "Tt "):
         return None
     try:
         parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00").replace("z", "+00:00"))

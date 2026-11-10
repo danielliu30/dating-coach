@@ -129,6 +129,8 @@ def test_meta_line_without_timestamps_is_omitted() -> None:
     assert meta_line(messages) is None
     assert transcript(messages, meta=True) == "[0] self: m0\n[1] match: m1"
     assert meta_line([_timed(0, "self", "not a time"), _timed(1, "match", "")]) is None
+    # A date carries no time of day, so it must not read as a midnight timestamp.
+    assert meta_line([_timed(0, "self", "2026-03-01"), _timed(1, "match", "2026-03-02")]) is None
 
 
 def test_meta_line_skips_pairs_missing_or_reversing_time() -> None:
