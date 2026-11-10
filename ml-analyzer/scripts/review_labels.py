@@ -233,8 +233,9 @@ def merge_into_base(base: Iterable[Dict], annotated: List[Dict]) -> Iterator[Dic
     """Swap annotated rows into ``base``; conversations no longer consented there are dropped."""
     base = list(base)
     current = {row["conversation_id"] for row in base if row.get("consented")}
+    replaced = {row["conversation_id"] for row in annotated}
     for row in base:
-        if not any(a["conversation_id"] == row["conversation_id"] for a in annotated):
+        if row["conversation_id"] not in replaced:
             yield row
     # An annotation outlives a user's opt-out; the fresh export is the authority.
     yield from (row for row in annotated if row["conversation_id"] in current)
