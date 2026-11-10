@@ -64,6 +64,10 @@ def message_range(segment: Segment) -> str:
     return f"Messages {segment.start_position + 1}-{segment.end_position + 1}"
 
 
+# Model-input format of ``transcript(..., meta=True)``; bump whenever ``meta_line`` or the line layout changes.
+TRANSCRIPT_VERSION = "transcript-v2"
+
+
 def _parse_sent_at(value: Optional[str]) -> Optional[datetime]:
     """RFC3339 ``sent_at`` as an aware datetime (naive values read as UTC); ``None`` when absent, date-only or unparseable."""
     if not value or not any(sep in value for sep in "Tt "):
