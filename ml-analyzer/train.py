@@ -18,9 +18,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 
-from training.agreement import distribution, label_counts
+from app.scoring.base import label_for
+from training.agreement import distribution, label_counts, mae
 from training.dataset import TrainingExample, exclude_holdout, load_jsonl, split, to_segment_rows
 
 # Frozen eval set for the serving gate (scripts/eval_vs_llm.py). Never trained
@@ -64,6 +66,43 @@ def report_holdout(
         f"label_mean={stats['mean']:.3f} label_std={stats['std']:.3f} excluded_from_training={dropped}"
     )
     return kept
+
+
+def prediction_metrics(preds: list[float], labels: list[float]) -> dict[str, float]:
+    """MAE/RMSE plus the spread of predictions next to labels.
+
+    A collapsed or squashed head (e.g. every prediction in [0.5, 0.73]) can
+    still post a modest MAE; ``pred_std`` far below ``label_std`` exposes it.
+    """
+    pred_stats, label_stats = distribution(preds), distribution(labels)
+    squared = [(p - y) ** 2 for p, y in zip(preds, labels)]
+    return {
+        "mae": mae(preds, labels),
+        "rmse": math.sqrt(sum(squared) / len(squared)) if squared else math.nan,
+        "pred_mean": pred_stats["mean"],
+        "pred_std": pred_stats["std"],
+        "pred_min": pred_stats["min"],
+        "pred_max": pred_stats["max"],
+        "label_mean": label_stats["mean"],
+        "label_std": label_stats["std"],
+    }
+
+
+def write_eval_predictions(path: Path, rows: list[tuple[str, float]], preds: list[float]) -> None:
+    """One JSON line per eval segment: transcript, label, prediction and both buckets."""
+    if len(rows) != len(preds):
+        raise ValueError(f"{len(rows)} eval rows but {len(preds)} predictions")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        for (text, label), pred in zip(rows, preds):
+            record = {
+                "text": text,
+                "label": label,
+                "prediction": pred,
+                "label_bucket": label_for(label),
+                "prediction_bucket": label_for(pred),
+            }
+            handle.write(json.dumps(record) + "\n")
 
 
 def main() -> None:
@@ -120,15 +159,15 @@ def main() -> None:
             remove_columns=["text"],
         )
 
+    def served_scores(logits) -> list[float]:  # noqa: ANN001 - numpy array from Trainer
+        return torch.sigmoid(torch.tensor(logits)).reshape(-1).tolist()
+
     def metrics(prediction) -> dict[str, float]:  # noqa: ANN001 - transformers EvalPrediction
-        preds = torch.sigmoid(torch.tensor(prediction.predictions)).squeeze(-1).numpy()
-        labels = np.asarray(prediction.label_ids).squeeze()
-        return {
-            "mae": float(np.mean(np.abs(preds - labels))),
-            "rmse": float(np.sqrt(np.mean((preds - labels) ** 2))),
-        }
+        labels = np.asarray(prediction.label_ids, dtype=float).reshape(-1).tolist()
+        return prediction_metrics(served_scores(prediction.predictions), labels)
 
     out_dir = Path(args.out)
+    eval_dataset = build(eval_rows) if eval_rows else None
     trainer = BCETrainer(
         model=model,
         args=TrainingArguments(
@@ -143,7 +182,7 @@ def main() -> None:
             report_to=[],
         ),
         train_dataset=build(train_rows),
-        eval_dataset=build(eval_rows) if eval_rows else None,
+        eval_dataset=eval_dataset,
         compute_metrics=metrics if eval_rows else None,
     )
     trainer.train()
@@ -151,6 +190,12 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     trainer.save_model(str(out_dir))
     tokenizer.save_pretrained(str(out_dir))
+    if eval_dataset is not None:
+        preds = served_scores(trainer.predict(eval_dataset).predictions)
+        labels = [score for _, score in eval_rows]
+        print("eval " + " ".join(f"{k}={v:.3f}" for k, v in prediction_metrics(preds, labels).items()))
+        write_eval_predictions(out_dir / "eval_predictions.jsonl", eval_rows, preds)
+        print(f"wrote {len(preds)} eval predictions to {out_dir / 'eval_predictions.jsonl'}")
     (out_dir / "training_meta.json").write_text(
         json.dumps(
             {
