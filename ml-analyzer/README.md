@@ -290,7 +290,8 @@ python train.py --data data/labeled.jsonl --out artifacts/segment-scorer
 
 Default recipe: DistilBERT with a single-logit head over segment transcripts,
 soft-target BCE against the 0–1 score (so serving's `sigmoid(logit)` is on the
-same scale as the labels), `mae`/`rmse` on the eval split.
+same scale as the labels), weighted per row by `training.dataset` (human
+segments 1.0; see `training/data_schema.md`), `mae`/`rmse` on the eval split.
 
 For a generative model that also writes the `comment`/`summary` text, LoRA
 fine-tune a small instruct model on `(transcript → the exact JSON the prompt

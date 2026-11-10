@@ -64,6 +64,11 @@ class TrainingExample:
         )
 
 
+# One training row: (segment transcript, target score in [0, 1], loss weight).
+Row = Tuple[str, float, float]
+
+HUMAN_LABEL_WEIGHT = 1.0
+
 OUTCOME_SCORE = {
     "ghosted": 0.05,
     "kept_talking": 0.55,
@@ -165,8 +170,8 @@ def transcript(messages: Sequence[LabeledMessage]) -> str:
     return "\n".join(f"[{m.position}] {m.sender}: {m.body}" for m in sorted(messages, key=lambda m: m.position))
 
 
-def to_segment_rows(examples: Sequence[TrainingExample]) -> Iterator[Tuple[str, float]]:
-    """Flatten examples into (segment transcript, target score) pairs.
+def to_segment_rows(examples: Sequence[TrainingExample]) -> Iterator[Row]:
+    """Flatten examples into (segment transcript, target score, weight) rows.
 
     Human per-segment labels win. When they are absent, the conversation outcome
     is used as a weak label for every segment — noisy, but it is what makes
@@ -182,7 +187,11 @@ def to_segment_rows(examples: Sequence[TrainingExample]) -> Iterator[Tuple[str, 
                     if p in by_position
                 ]
                 if window:
-                    yield transcript(window), max(0.0, min(1.0, segment.engagement_score))
+                    yield (
+                        transcript(window),
+                        max(0.0, min(1.0, segment.engagement_score)),
+                        HUMAN_LABEL_WEIGHT,
+                    )
             continue
 
         weak = OUTCOME_SCORE.get(example.outcome or "", None)
@@ -190,12 +199,12 @@ def to_segment_rows(examples: Sequence[TrainingExample]) -> Iterator[Tuple[str, 
             weak = 0.6 if example.reply_received else 0.2 if example.reply_received is False else None
         if weak is None:
             continue
-        yield transcript(example.messages), weak
+        yield transcript(example.messages), weak, 1.0
 
 
 def split(
     examples: Sequence[TrainingExample], eval_fraction: float = 0.1
-) -> Tuple[List[Tuple[str, float]], List[Tuple[str, float]]]:
+) -> Tuple[List[Row], List[Row]]:
     """Flatten examples into rows with a group-disjoint train/eval split.
 
     Grouping is by ``group_key`` (user when known, otherwise conversation), so no
