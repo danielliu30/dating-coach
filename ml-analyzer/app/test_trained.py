@@ -7,6 +7,7 @@ import pytest
 from app.config import Settings
 from app.schemas import AnalyzeRequest, Message
 from app.scoring.trained import TrainedScorer
+from training.dataset import LabeledMessage, transcript as training_transcript
 
 
 def _settings(model_dir: str, segment_size: int = 2) -> Settings:
@@ -34,8 +35,10 @@ def _request(count: int = 6) -> AnalyzeRequest:
     )
 
 
-def _install_fake_libraries(monkeypatch: pytest.MonkeyPatch, scores: object, load_counts: dict[str, int]) -> None:
-    """Install fake torch and transformers modules that expose deterministic model logits."""
+def _install_fake_libraries(
+    monkeypatch: pytest.MonkeyPatch, scores: object, load_counts: dict[str, int], seen_texts: list[str] | None = None
+) -> None:
+    """Install fake torch and transformers modules that expose deterministic model logits; record tokenized texts into ``seen_texts``."""
 
     class FakeTensor:
         """Provide the tensor methods used by TrainedScorer."""
@@ -78,6 +81,8 @@ def _install_fake_libraries(monkeypatch: pytest.MonkeyPatch, scores: object, loa
 
         def tokenize(texts: list[str], **_kwargs: object) -> dict[str, int]:
             """Return a batch marker containing the number of segment texts."""
+            if seen_texts is not None:
+                seen_texts.extend(texts)
             return {"n": len(texts)}
 
         return tokenize
@@ -133,3 +138,23 @@ def test_single_segment_float_score_is_supported(tmp_path, monkeypatch: pytest.M
     assert len(result.segments) == 1
     assert result.segments[0].engagement_score == 0.75
     assert result.overall.engagement_score == 0.75
+
+
+def test_inference_text_matches_training_rows(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The model sees the same [meta]-prefixed text at inference that training rows were built from."""
+    checkpoint = tmp_path / "ckpt"
+    checkpoint.mkdir()
+    seen: list[str] = []
+    _install_fake_libraries(monkeypatch, 0.5, {"tokenizer": 0, "model": 0}, seen)
+    rows = [
+        ("self", "what did you bake?", "2026-03-01T18:00:00Z"),
+        ("match", "sourdough", "2026-03-01T18:12:00Z"),
+    ]
+    request = AnalyzeRequest(
+        conversation_id="trained-meta",
+        messages=[Message(position=i, sender=sender, body=body, sent_at=at) for i, (sender, body, at) in enumerate(rows)],
+    )
+    asyncio.run(TrainedScorer(_settings(str(checkpoint), segment_size=4)).analyze(request))
+    expected = training_transcript([LabeledMessage(i, sender, body, at) for i, (sender, body, at) in enumerate(rows)])
+    assert seen == [expected]
+    assert expected.startswith("[meta] match_latency_min=12 self_latency_min=na self_msgs=1 match_msgs=1\n")

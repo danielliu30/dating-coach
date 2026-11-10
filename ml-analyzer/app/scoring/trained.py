@@ -57,7 +57,7 @@ class TrainedScorer(Scorer):
         import torch  # noqa: PLC0415  (installed alongside transformers)
 
         windows = chunk(request.messages, self.settings.segment_size)
-        texts = [transcript(window) for _, _, window in windows]
+        texts = [transcript(window, meta=True) for _, _, window in windows]
 
         assert self._tokenizer is not None and self._model is not None
         batch = self._tokenizer(texts, truncation=True, padding=True, max_length=512, return_tensors="pt")
