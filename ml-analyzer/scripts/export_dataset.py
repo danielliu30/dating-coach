@@ -67,6 +67,7 @@ ORDER BY c.created_at, t.label_source
 
 # Name columns read only to pseudonymise; never written out.
 NAME_FIELDS = ("match_name", "display_name")
+SEGMENT_FIELDS = ("start_position", "end_position", "engagement_score")
 
 _EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 _TLDS = r"com|net|org|io|me|co|app|ly|gg|link|tv|be|us|uk|de|fr|ca|au|info|xyz|page|bio"
@@ -160,8 +161,9 @@ def pseudonymise_row(row: Dict, counts: Optional[Counter] = None) -> Dict:
     pseudonymiser = Pseudonymiser({row.get("match_name") or "": "[MATCH]", row.get("display_name") or "": "[SELF]"})
     out = {k: v for k, v in row.items() if k not in NAME_FIELDS}
     out["messages"] = [{**m, "body": pseudonymiser(m.get("body") or "")} for m in row.get("messages") or []]
-    if out.get("segments") is None:
-        out["segments"] = []
+    # Keep only the schema's fields: free-text keys (e.g. a coach's comment)
+    # would bypass pseudonymisation and break the training loader.
+    out["segments"] = [{k: seg[k] for k in SEGMENT_FIELDS if k in seg} for seg in row.get("segments") or []]
     if counts is not None:
         counts.update(pseudonymiser.counts)
     return out

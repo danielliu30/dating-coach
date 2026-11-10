@@ -68,3 +68,12 @@ def test_from_raw_writes_only_consented_pseudonymised_rows(tmp_path):
     written = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
     assert [r["conversation_id"] for r in written] == ["c1"]
     assert written[0]["messages"][0]["body"] == "[MATCH], call [PHONE]"
+
+
+def test_segment_free_text_is_dropped() -> None:
+    row = {
+        "consented": True,
+        "segments": [{"start_position": 0, "end_position": 1, "engagement_score": 0.8, "comment": "Jane gave her number"}],
+        "messages": [],
+    }
+    assert pseudonymise_row(row)["segments"] == [{"start_position": 0, "end_position": 1, "engagement_score": 0.8}]
