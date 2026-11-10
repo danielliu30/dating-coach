@@ -95,10 +95,13 @@ def test_annotator_field_overrides_file_name(tmp_path):
     assert _annotations(path).annotators == ["carol"]
 
 
-def test_out_of_range_score_is_rejected(tmp_path):
-    path = _write(tmp_path / "a.jsonl", [_row("c1", [1.5])])
+@pytest.mark.parametrize("score", [1.5, -0.1, float("nan")])
+def test_out_of_range_score_is_rejected(tmp_path, score):
+    path = _write(tmp_path / "a.jsonl", [_row("c1", [score])])
     with pytest.raises(SystemExit, match="outside 0-1"):
         _annotations(path)
+    with pytest.raises(SystemExit, match="outside 0-1"):
+        review_labels.read_adjudicated(path)
 
 
 def test_main_round_trip_produces_a_trainable_dataset(files, tmp_path):

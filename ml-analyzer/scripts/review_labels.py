@@ -56,6 +56,13 @@ def jsonl_rows(path: Path) -> Iterator[Dict]:
                 yield json.loads(line)
 
 
+def parse_score(value, where: str) -> float:
+    score = float(value)
+    if not (math.isfinite(score) and 0.0 <= score <= 1.0):
+        raise SystemExit(f"{where}: engagement_score {value!r} is outside 0-1")
+    return score
+
+
 def disagrees(a: float, b: float) -> bool:
     return abs(a - b) > THRESHOLD + EPSILON
 
@@ -81,10 +88,7 @@ class Annotations:
                 if seg.get("suggested_score") is not None:
                     self.suggested.setdefault(key, float(seg["suggested_score"]))
                 if seg.get("engagement_score") is not None:
-                    score = float(seg["engagement_score"])
-                    if not 0.0 <= score <= 1.0:
-                        raise SystemExit(f"{path}: {key} engagement_score {score} is outside 0-1")
-                    self.scores[key][annotator] = score
+                    self.scores[key][annotator] = parse_score(seg["engagement_score"], f"{path}: {key}")
 
     def keys(self) -> List[Key]:
         return sorted(set(self.scores) | set(self.suggested))
@@ -188,9 +192,8 @@ def read_adjudicated(path: Path) -> Dict[Key, float]:
     for row in jsonl_rows(path):
         for seg in row.get("segments") or []:
             if seg.get("engagement_score") is not None:
-                resolved[(row["conversation_id"], int(seg["start_position"]), int(seg["end_position"]))] = float(
-                    seg["engagement_score"]
-                )
+                key = (row["conversation_id"], int(seg["start_position"]), int(seg["end_position"]))
+                resolved[key] = parse_score(seg["engagement_score"], f"{path}: {key}")
     return resolved
 
 
