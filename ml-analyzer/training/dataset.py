@@ -5,17 +5,18 @@ The on-disk format is JSONL, one ``TrainingExample`` per line — see
 ``training_examples`` table stores exactly these fields, so exporting a dataset
 is a single SQL query (documented in the README).
 
-Consent filtering and a group-disjoint (user, else conversation) train/eval split
-are implemented here; de-duplication of near-identical conversations is not.
+Consent filtering, de-duplication of repeated / near-identical conversations, and
+a group-disjoint (user, else conversation) train/eval split are implemented here.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Sequence, Tuple
+from typing import Any, Dict, FrozenSet, Iterator, List, Sequence, Tuple
 
 
 @dataclass
@@ -71,7 +72,82 @@ OUTCOME_SCORE = {
 }
 
 
-def load_jsonl(path: str | Path, require_consent: bool = True) -> List[TrainingExample]:
+# Word n-gram size and Jaccard threshold for the within-user near-duplicate check.
+SHINGLE_SIZE = 3
+NEAR_DUPLICATE_JACCARD = 0.9
+
+_PUNCTUATION = re.compile(r"[^\w\s]+")
+_WHITESPACE = re.compile(r"\s+")
+
+
+def normalize_body(body: str) -> str:
+    """Lowercase, drop punctuation and collapse whitespace."""
+    return _WHITESPACE.sub(" ", _PUNCTUATION.sub(" ", body.lower())).strip()
+
+
+def _normalized_transcript(example: TrainingExample) -> str:
+    ordered = sorted(example.messages, key=lambda m: m.position)
+    return "\n".join(f"{m.sender}: {normalize_body(m.body)}" for m in ordered)
+
+
+def _shingles(text: str) -> FrozenSet[Tuple[str, ...]]:
+    tokens = text.split()
+    if len(tokens) < SHINGLE_SIZE:
+        return frozenset({tuple(tokens)})
+    return frozenset(tuple(tokens[i : i + SHINGLE_SIZE]) for i in range(len(tokens) - SHINGLE_SIZE + 1))
+
+
+def _jaccard(a: FrozenSet[Tuple[str, ...]], b: FrozenSet[Tuple[str, ...]]) -> float:
+    union = len(a | b)
+    return len(a & b) / union if union else 1.0
+
+
+def deduplicate(examples: Sequence[TrainingExample]) -> List[TrainingExample]:
+    """Drop repeated and near-identical conversations, keeping input order.
+
+    Exact duplicates (same normalized transcript hash) are dropped across the
+    whole dataset. Near-duplicates (word-shingle Jaccard >= NEAR_DUPLICATE_JACCARD)
+    are only searched within the same ``user_id``, which keeps the check cheap and
+    targets the common case: one user re-submitting a slightly longer or edited
+    copy of the same thread. When a duplicate carries human ``segments`` and the
+    kept copy does not, the human-labeled copy replaces it in place.
+    """
+    kept: List[TrainingExample] = []
+    by_hash: Dict[str, int] = {}
+    by_user: Dict[str, List[Tuple[int, FrozenSet[Tuple[str, ...]]]]] = {}
+
+    for example in examples:
+        normalized = _normalized_transcript(example)
+        digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+        shingles = _shingles(normalized)
+
+        match = by_hash.get(digest)
+        if match is None and example.user_id is not None:
+            match = next(
+                (
+                    index
+                    for index, other in by_user.get(example.user_id, [])
+                    if _jaccard(shingles, other) >= NEAR_DUPLICATE_JACCARD
+                ),
+                None,
+            )
+        if match is not None:
+            by_hash.setdefault(digest, match)
+            if example.segments and not kept[match].segments:
+                kept[match] = example
+            continue
+
+        index = len(kept)
+        kept.append(example)
+        by_hash[digest] = index
+        if example.user_id is not None:
+            by_user.setdefault(example.user_id, []).append((index, shingles))
+    return kept
+
+
+def load_jsonl(
+    path: str | Path, require_consent: bool = True, dedupe: bool = True
+) -> List[TrainingExample]:
     examples: List[TrainingExample] = []
     with Path(path).open(encoding="utf-8") as handle:
         for line in handle:
@@ -82,8 +158,7 @@ def load_jsonl(path: str | Path, require_consent: bool = True) -> List[TrainingE
             if require_consent and not example.consented:
                 continue
             examples.append(example)
-    # TODO: de-duplicate near-identical conversations before training.
-    return examples
+    return deduplicate(examples) if dedupe else examples
 
 
 def transcript(messages: Sequence[LabeledMessage]) -> str:
