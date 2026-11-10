@@ -38,6 +38,8 @@ from pydantic import ValidationError
 
 from app.config import get_settings
 from app.schemas import AnalyzeRequest, AnalyzeResponse
+from app.scoring.base import Scorer
+from app.scoring.heuristic import HeuristicScorer
 from app.scoring.llm import LLMScorer
 
 CONVERSATION_FIELDS = ("conversation_id", "user_id", "platform", "consented", "outcome", "reply_received", "messages")
@@ -80,13 +82,13 @@ def build_request(conversation: Dict) -> AnalyzeRequest:
     )
 
 
-def review_row(conversation: Dict, response: AnalyzeResponse, scorer_version: str) -> Dict:
+def review_row(conversation: Dict, response: AnalyzeResponse, llm_version: Optional[str]) -> Dict:
     return {
         **conversation,
         "label_source": "annotator",
         "prelabel": {
             "model_version": response.model_version,
-            "fallback": response.model_version != scorer_version,
+            "fallback": response.model_version != llm_version,
             "overall_score": response.overall.engagement_score,
         },
         "segments": [
@@ -108,12 +110,13 @@ def done_ids(out: Path) -> Set[str]:
 
 async def prelabel(
     pending: List[Dict],
-    scorer: LLMScorer,
+    scorer: Scorer,
     out: Path,
     concurrency: int = 4,
     skip_fallback: bool = False,
 ) -> Dict[str, int]:
     """Score ``pending`` conversations and append review rows to ``out`` as they finish."""
+    llm_version = scorer.version if isinstance(scorer, LLMScorer) else None
     stats = {"written": 0, "fallback": 0, "invalid": 0, "skipped_fallback": 0}
     requests = []
     for conversation in pending:
@@ -133,7 +136,7 @@ async def prelabel(
     with out.open("a", encoding="utf-8") as handle:
         for task in asyncio.as_completed([score(c, r) for c, r in requests]):
             conversation, response = await task
-            row = review_row(conversation, response, scorer.version)
+            row = review_row(conversation, response, llm_version)
             if row["prelabel"]["fallback"]:
                 if skip_fallback:
                     stats["skipped_fallback"] += 1
@@ -180,9 +183,9 @@ def main(argv: Optional[List[str]] = None) -> None:
     if args.limit is not None:
         pending = pending[: args.limit]
 
-    stats = asyncio.run(
-        prelabel(pending, LLMScorer(settings), args.out, args.concurrency, args.skip_fallback)
-    )
+    # Without a key every LLM call would fail into the fallback anyway.
+    scorer = LLMScorer(settings) if settings.llm_configured else HeuristicScorer(settings.segment_size)
+    stats = asyncio.run(prelabel(pending, scorer, args.out, args.concurrency, args.skip_fallback))
     print(
         f"wrote {stats['written']} conversations to {args.out} "
         f"(already done: {len(done)}, heuristic fallback: {stats['fallback']}, "

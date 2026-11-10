@@ -139,3 +139,15 @@ def test_main_refuses_to_overwrite_its_input(tmp_path, monkeypatch):
     with pytest.raises(SystemExit, match="must not be"):
         llm_prelabel.main(["--data", str(data), "--out", str(tmp_path / "." / "labeled.jsonl"), "--overwrite"])
     assert data.exists()
+
+
+def test_allow_heuristic_without_a_key_makes_no_llm_calls(tmp_path, monkeypatch):
+    data, out = tmp_path / "labeled.jsonl", tmp_path / "prelabeled.jsonl"
+    data.write_text(json.dumps(_conversation()) + "\n")
+    monkeypatch.setattr(llm_prelabel, "get_settings", lambda: _settings(api_key=""))
+    with respx.mock(assert_all_called=False) as mock:
+        route = mock.post(URL).mock(return_value=_llm_reply())
+        llm_prelabel.main(["--data", str(data), "--out", str(out), "--allow-heuristic"])
+    assert not route.called
+    [row] = _rows(out)
+    assert row["prelabel"]["fallback"] is True and row["prelabel"]["model_version"].startswith("heuristic")
