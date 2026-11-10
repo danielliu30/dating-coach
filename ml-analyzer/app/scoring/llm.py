@@ -269,7 +269,8 @@ def _goal_scores(overall: Dict[str, Any], focus_areas: Sequence[str]) -> List[Go
     With no focus areas requested the key is ignored (the contract asks for
     ``[]``) and ``[]`` is returned. Otherwise the value must be a JSON array of
     objects with at most one entry per requested area; an area the model had no
-    evidence for is left out, as the heuristic scorer does. A duplicate or
+    evidence for is left out, as the heuristic scorer does, but the key itself
+    must be present: leaving it out ignores the contract. A duplicate or
     unrequested ``goal``, a non-numeric ``score`` or a missing or blank
     ``comment`` raises ``ValueError`` so the caller falls back to the heuristic scorer, as
     it does for missing segments. Scores are clamped to 0-1, comments cut to
@@ -278,7 +279,9 @@ def _goal_scores(overall: Dict[str, Any], focus_areas: Sequence[str]) -> List[Go
     wanted = [p.key for p in pillars_by_keys(focus_areas)]
     if not wanted:
         return []
-    value = overall.get("goal_scores", [])
+    if "goal_scores" not in overall:
+        raise ValueError("llm returned no overall.goal_scores although focus areas were requested")
+    value = overall["goal_scores"]
     if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
         raise ValueError(f"llm returned overall.goal_scores that is not a list of objects: {str(value)[:80]!r}")
     by_goal: Dict[str, GoalScore] = {}

@@ -678,10 +678,13 @@ def test_llm_parse_validates_goal_scores_against_focus_areas() -> None:
     boundaries = [(0, 1)]
 
     def completion(goal_scores):
+        overall = {"engagement_score": 0.6, "summary": "Okay."}
+        if goal_scores is not None:
+            overall["goal_scores"] = goal_scores
         return json.dumps(
             {
                 "segments": [{"start_position": 0, "end_position": 1, "engagement_score": 0.6, "comment": "Fine."}],
-                "overall": {"engagement_score": 0.6, "summary": "Okay.", "goal_scores": goal_scores},
+                "overall": overall,
             }
         )
 
@@ -699,11 +702,13 @@ def test_llm_parse_validates_goal_scores_against_focus_areas() -> None:
 
     # Without focus areas the key is ignored, whatever the model put there.
     assert scorer._parse(completion("junk"), boundaries).overall.goal_scores == []
+    assert scorer._parse(completion(None), boundaries).overall.goal_scores == []
 
     bad_cases = {
         "unrequested": good + [{"goal": "support", "score": 0.5, "comment": "c"}],
         "unknown": [good[1], {"goal": "confidence", "score": 0.5, "comment": "c"}],
         "duplicate": good + [good[0]],
+        "key left out": None,
         "not a list": {"feedback": 0.5},
         "not objects": ["feedback"],
         "string score": [good[1], {"goal": "feedback", "score": "high", "comment": "c"}],
