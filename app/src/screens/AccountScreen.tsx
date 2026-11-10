@@ -4,14 +4,17 @@ import { StyleSheet, Text, View } from 'react-native';
 
 import { ApiError } from '../api/client';
 import {
+  COACHING_GOALS,
   DATING_PHASES,
   DATING_STYLES,
   MAX_DATING_PREFERENCES_LEN,
+  type CoachingGoal,
   type DatingPhase,
   type DatingStyle,
 } from '../api/types';
 import { Avatar, Divider, GradientCard, SectionHeader, StatusPill } from '../components/kit';
 import { Badge, Button, Chip, Field, Screen } from '../components/ui';
+import { COACHING_GOAL_LABELS } from '../lib/coachingGoals';
 import { PHASE_LABELS, toggle } from '../lib/phases';
 import { useAuth } from '../state/auth';
 import { colors, fonts, radii, shared, type } from '../theme';
@@ -55,11 +58,13 @@ export default function AccountScreen(): React.ReactElement {
   const savedStrong = user?.phases_strong ?? [];
   const savedWorking = user?.phases_working_on ?? [];
   const savedPreferences = user?.dating_preferences ?? '';
-  // A snapshot from before dating_preferences existed does not say what the
-  // server holds, and the save below PATCHes every field, so saving from it
-  // would blank the server's value. Re-fetch the profile first and keep Save
-  // off until it lands.
-  const preferencesUnknown = user !== null && user.dating_preferences === undefined;
+  const savedGoals = user?.coaching_goals ?? [];
+  // A snapshot from before dating_preferences or coaching_goals existed does
+  // not say what the server holds, and the save below PATCHes every field, so
+  // saving from it would blank the server's value. Re-fetch the profile first
+  // and keep Save off until it lands.
+  const preferencesUnknown =
+    user !== null && (user.dating_preferences === undefined || user.coaching_goals === undefined);
   const [bootstrapFailed, setBootstrapFailed] = useState(false);
   const bootstrap = useCallback(() => {
     setBootstrapFailed(false);
@@ -73,6 +78,7 @@ export default function AccountScreen(): React.ReactElement {
   const [strong, setStrong] = useState<DatingPhase[]>(savedStrong);
   const [working, setWorking] = useState<DatingPhase[]>(savedWorking);
   const [preferences, setPreferences] = useState(savedPreferences);
+  const [goals, setGoals] = useState<CoachingGoal[]>(savedGoals);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<number | null>(null);
@@ -83,25 +89,28 @@ export default function AccountScreen(): React.ReactElement {
   // Drafts follow the saved profile only when its lists actually change (a
   // save, or an edit made elsewhere); a refresh that returns the same lists
   // leaves unsaved choices alone.
-  const savedKey = JSON.stringify([savedStyles, savedStrong, savedWorking, savedPreferences]);
+  const savedKey = JSON.stringify([savedStyles, savedStrong, savedWorking, savedPreferences, savedGoals]);
   useEffect(() => {
-    const [nextStyles, nextStrong, nextWorking, nextPreferences] = JSON.parse(savedKey) as [
+    const [nextStyles, nextStrong, nextWorking, nextPreferences, nextGoals] = JSON.parse(savedKey) as [
       DatingStyle[],
       DatingPhase[],
       DatingPhase[],
       string,
+      CoachingGoal[],
     ];
     setStyles(nextStyles);
     setStrong(nextStrong);
     setWorking(nextWorking);
     setPreferences(nextPreferences);
+    setGoals(nextGoals);
   }, [savedKey]);
 
   const dirty =
     !sameSet(styles, savedStyles) ||
     !sameSet(strong, savedStrong) ||
     !sameSet(working, savedWorking) ||
-    preferences.trim() !== savedPreferences;
+    preferences.trim() !== savedPreferences ||
+    !sameSet(goals, savedGoals);
 
   const standingOf = (phase: DatingPhase): PhaseStanding =>
     strong.includes(phase) ? 'strong' : working.includes(phase) ? 'working_on' : null;
@@ -128,6 +137,7 @@ export default function AccountScreen(): React.ReactElement {
         phases_strong: strong,
         phases_working_on: working,
         dating_preferences: preferences.trim(),
+        coaching_goals: goals,
       });
       setSavedAt(Date.now());
     } catch (err) {
@@ -274,6 +284,29 @@ export default function AccountScreen(): React.ReactElement {
 
       <View style={shared.card}>
         <SectionHeader
+          title="What you want to improve"
+          caption="Pick the parts of the coaching approach you want to work on. Each message analysis scores you on them."
+          icon="trending-up-outline"
+          hue="sage"
+        />
+        {COACHING_GOALS.map((goal) => (
+          <View key={goal} style={local.goalRow}>
+            <Chip
+              label={COACHING_GOAL_LABELS[goal].title}
+              selected={goals.includes(goal)}
+              disabled={locked}
+              onPress={() => {
+                setSavedAt(null);
+                setGoals((prev) => toggle(prev, goal, COACHING_GOALS));
+              }}
+            />
+            <Text style={[type.caption, local.goalCaption]}>{COACHING_GOAL_LABELS[goal].caption}</Text>
+          </View>
+        ))}
+      </View>
+
+      <View style={shared.card}>
+        <SectionHeader
           title="What you are looking for"
           caption="In your own words. Your analyses use this to judge whether your messages and photos surface it."
           icon="heart-outline"
@@ -381,6 +414,8 @@ const local = StyleSheet.create({
   legend: { flexDirection: 'row', gap: 8 },
   phaseRow: { gap: 8, paddingVertical: 10, borderTopWidth: 1, borderTopColor: colors.border },
   phaseDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.border },
+  goalRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 4 },
+  goalCaption: { flex: 1 },
   phaseLabel: { fontFamily: fonts.sansSemi, fontSize: 15, color: colors.text },
   phaseChoices: { flexDirection: 'row', gap: 8 },
   actions: { flexDirection: 'row', gap: 8 },
