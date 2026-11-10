@@ -20,7 +20,12 @@ import argparse
 import json
 from pathlib import Path
 
-from training.dataset import load_jsonl, split
+from training.agreement import distribution, label_counts
+from training.dataset import TrainingExample, exclude_holdout, load_jsonl, split, to_segment_rows
+
+# Frozen eval set for the serving gate (scripts/eval_vs_llm.py). Never trained
+# on: its conversations and users are removed from --data before the split.
+DEFAULT_EVAL_FILE = Path(__file__).resolve().parent / "data" / "eval_holdout.jsonl"
 
 
 def parse_args() -> argparse.Namespace:
@@ -32,15 +37,41 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--learning-rate", type=float, default=2e-5)
     parser.add_argument("--max-length", type=int, default=512)
+    parser.add_argument(
+        "--eval-file",
+        default=str(DEFAULT_EVAL_FILE),
+        help="Frozen holdout JSONL: reported on and excluded from training, never trained on ('' to disable)",
+    )
     parser.add_argument("--include-unconsented", action="store_true")
     parser.add_argument("--dry-run", action="store_true", help="Report dataset stats and exit")
     return parser.parse_args()
+
+
+def report_holdout(
+    path: Path, examples: list[TrainingExample], include_unconsented: bool = False
+) -> list[TrainingExample]:
+    """Print frozen-holdout stats and return ``examples`` without any holdout overlap."""
+    if not path.exists():
+        print(f"holdout: no frozen eval file at {path}; nothing excluded")
+        return examples
+    holdout = load_jsonl(path, require_consent=not include_unconsented)
+    kept, dropped = exclude_holdout(examples, holdout)
+    scores = [score for _, score in to_segment_rows(holdout)]
+    counts = " ".join(f"{label}={count}" for label, count in label_counts(scores).items())
+    stats = distribution(scores)
+    print(
+        f"holdout={path} conversations={len(holdout)} segments={len(scores)} {counts} "
+        f"label_mean={stats['mean']:.3f} label_std={stats['std']:.3f} excluded_from_training={dropped}"
+    )
+    return kept
 
 
 def main() -> None:
     args = parse_args()
 
     examples = load_jsonl(args.data, require_consent=not args.include_unconsented)
+    if args.eval_file:
+        examples = report_holdout(Path(args.eval_file), examples, args.include_unconsented)
     train_rows, eval_rows = split(examples)
     if not train_rows:
         raise SystemExit(f"no usable labeled segments in {args.data}")

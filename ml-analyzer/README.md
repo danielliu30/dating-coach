@@ -274,6 +274,17 @@ human `segments` labels are scarce and authoritative. Aim for a few thousand
 weak-labeled conversations plus a few hundred hand-labeled ones as the eval set,
 and keep the eval set user-disjoint from training.
 
+**Frozen eval holdout.** `data/eval_holdout.jsonl` (same schema) is the fixed
+eval set the serving gate is measured on. It is **never trained on**: `train.py`
+loads it (`--eval-file`, default `data/eval_holdout.jsonl`) and drops every
+`--data` row that shares a `conversation_id` or `user_id` with it before the
+train/eval split, reporting the count as `excluded_from_training`. Do not
+change it between runs you want to compare. The committed file is a small seed
+of synthetic, rubric-labeled conversations whose `segments` sit on the default
+`ML_SEGMENT_SIZE=4` boundaries; replace it with a few hundred real hand-labeled,
+user-disjoint conversations before relying on the gate. Everything else under
+`data/` (e.g. `labeled.jsonl`) is gitignored.
+
 ### 2. Label
 
 See [`training/data_schema.md`](training/data_schema.md) for the schema and the
@@ -284,7 +295,7 @@ have annotators *correct* the scores rather than produce them from scratch.
 
 ```bash
 pip install -r requirements-train.txt
-python train.py --data data/labeled.jsonl --dry-run   # dataset stats only
+python train.py --data data/labeled.jsonl --dry-run   # dataset + holdout stats only
 python train.py --data data/labeled.jsonl --out artifacts/segment-scorer
 ```
 
