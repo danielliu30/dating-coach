@@ -13,6 +13,7 @@ from app.schemas import AnalyzeRequest, ImageAnalyzeRequest, ImageRef, Message, 
 from app.scoring.base import message_range
 from app.scoring.heuristic import HeuristicScorer, reciprocity_patterns, reflection_questions, review_self_messages
 from app.scoring.image import HeuristicImageScorer, build_image_scorer, image_dimensions
+from app.scoring.trained import TrainedScorer
 
 client = TestClient(app)
 
@@ -242,6 +243,102 @@ def test_heuristic_match_only_stretch_is_neutral() -> None:
     assert response.segments[0].engagement_score == 0.5
     assert response.segments[0].comment == "No messages from you in this stretch; the match was carrying it."
     assert response.overall.strengths == [] and response.overall.improvements == []
+
+
+def _stub_trained_scorer(monkeypatch: pytest.MonkeyPatch, scores: list[float], tmp_path) -> tuple[TrainedScorer, list[list[str]]]:
+    """A TrainedScorer whose checkpoint load is skipped and whose model returns ``scores`` in order."""
+    settings = Settings(
+        backend="trained", llm_provider="openai", llm_api_key="", llm_model="unused", llm_base_url="http://x",
+        llm_timeout=1.0, model_dir=str(tmp_path / "ckpt"), segment_size=2,
+    )
+    scorer = TrainedScorer(settings)
+    calls: list[list[str]] = []
+
+    def predict(texts):
+        calls.append(list(texts))
+        return scores[: len(texts)]
+
+    monkeypatch.setattr(scorer, "_load", lambda: None)
+    monkeypatch.setattr(scorer, "_predict", predict)
+    return scorer, calls
+
+
+def test_trained_scores_only_windows_with_self_messages(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """The trained model only sees windows holding the customer's messages; match-only windows stay neutral."""
+    scorer, calls = _stub_trained_scorer(monkeypatch, [0.9, 0.2], tmp_path)
+    request = AnalyzeRequest(
+        conversation_id="trained-1",
+        messages=[
+            Message(position=0, sender="self", body="How was the climbing trip?"),
+            Message(position=1, sender="match", body="Amazing, we did a multi-pitch route on the last day, want to hear about it?"),
+            Message(position=2, sender="match", body="Also I got a new rope"),
+            Message(position=3, sender="match", body="It is bright orange"),
+            Message(position=4, sender="self", body="nice"),
+        ],
+    )
+    response = asyncio.run(scorer.analyze(request))
+
+    assert len(calls) == 1 and len(calls[0]) == 2
+    assert all("self:" in text for text in calls[0])
+    assert [s.engagement_score for s in response.segments] == [0.9, 0.5, 0.2]
+    assert response.segments[1].comment == "No messages from you in this stretch; the match was carrying it."
+    assert all(s.comment for s in response.segments)
+    assert response.overall.engagement_score == pytest.approx(0.55)
+    assert response.model_version == "trained-v2-ckpt+agency-v3"
+    assert response.overall.strengths and response.overall.improvements
+    assert response.overall.summary != "Scored by the fine-tuned engagement model."
+
+
+def test_trained_skips_the_model_when_none_of_the_messages_are_yours(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """A match-only conversation is neutral throughout and never reaches the model."""
+    scorer, calls = _stub_trained_scorer(monkeypatch, [], tmp_path)
+    request = AnalyzeRequest(
+        conversation_id="trained-2",
+        messages=[Message(position=0, sender="match", body="Hey there"), Message(position=1, sender="match", body="Hello?")],
+    )
+    response = asyncio.run(scorer.analyze(request))
+
+    assert calls == []
+    assert [s.engagement_score for s in response.segments] == [0.5]
+    assert response.segments[0].comment == "No messages from you in this stretch; the match was carrying it."
+    assert response.overall.engagement_score == 0.5
+    assert response.overall.summary == "None of these messages are yours, so there is nothing to review yet."
+
+
+def test_trained_honors_preferences(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """The customer's stated preferences reach the summary and the reflection questions."""
+    scorer, _ = _stub_trained_scorer(monkeypatch, [0.7], tmp_path)
+    request = AnalyzeRequest(
+        conversation_id="trained-3",
+        preferences="  a fellow climber  ",
+        messages=[
+            Message(position=0, sender="self", body="What got you into bouldering?"),
+            Message(position=1, sender="match", body="A friend dragged me along and I got hooked, how about you?"),
+        ],
+    )
+    response = asyncio.run(scorer.analyze(request))
+
+    assert "You said you are looking for: a fellow climber" in response.overall.summary
+    assert any("a fellow climber" in q for q in response.overall.reflection_questions)
+
+
+def test_trained_falls_back_to_heuristic_when_prose_breaks_agency(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """An agency violation in the generated prose degrades to the heuristic scorer, as LLMScorer does."""
+    import app.scoring.trained as trained
+
+    def reject(*_args, **_kwargs):
+        raise ValueError("llm drafted a reply: 'x'")
+
+    monkeypatch.setattr(trained, "enforce_agency", reject)
+    scorer, _ = _stub_trained_scorer(monkeypatch, [0.9], tmp_path)
+    request = AnalyzeRequest(
+        conversation_id="trained-4",
+        messages=[Message(position=0, sender="self", body="Hi"), Message(position=1, sender="match", body="hey")],
+    )
+    response = asyncio.run(scorer.analyze(request))
+
+    assert response.model_version == f"{scorer.version}+fallback:{HeuristicScorer.version}"
+    assert response.segments[0].engagement_score != 0.9
 
 
 def test_reciprocity_patterns_name_over_investment_descriptively() -> None:

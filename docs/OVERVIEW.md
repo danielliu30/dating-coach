@@ -130,8 +130,6 @@ The AI backend today is prompt-based: a general-purpose LLM instructed by the sy
 
 The result is a flywheel: usage produces consented, outcome-labelled conversations; those train a better model; the better model produces more useful feedback; and the moat is a dataset that generic chatbots do not have.
 
-One honest caveat, straight from the repository: the current `trained` backend predates the message-track rules — it scores every segment regardless of who wrote it and ignores preferences — so the self-only and no-drafting guarantees described in Section 2 hold for the `llm` and `heuristic` backends today. Bringing the trained path in line is part of the training work, not a change to the product's rules.
-
 ---
 
 ## 6. Trust, privacy and safety
