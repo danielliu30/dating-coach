@@ -73,6 +73,7 @@ class Annotations:
     def __init__(self) -> None:
         self.scores: Dict[Key, Dict[str, float]] = defaultdict(dict)
         self.suggested: Dict[Key, float] = {}
+        self.segments: set = set()
         self.rows: Dict[str, Dict] = {}
         self.annotators: List[str] = []
 
@@ -85,13 +86,14 @@ class Annotations:
             self.rows.setdefault(cid, {k: row.get(k) for k in ROW_FIELDS})
             for seg in row.get("segments") or []:
                 key = (cid, int(seg["start_position"]), int(seg["end_position"]))
+                self.segments.add(key)
                 if seg.get("suggested_score") is not None:
                     self.suggested.setdefault(key, float(seg["suggested_score"]))
                 if seg.get("engagement_score") is not None:
                     self.scores[key][annotator] = parse_score(seg["engagement_score"], f"{path}: {key}")
 
     def keys(self) -> List[Key]:
-        return sorted(set(self.scores) | set(self.suggested))
+        return sorted(self.segments)
 
     def needs_adjudication(self, key: Key) -> bool:
         values = list(self.scores.get(key, {}).values())

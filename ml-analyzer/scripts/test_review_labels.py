@@ -139,3 +139,9 @@ def test_adjudication_out_cannot_overwrite_the_adjudicated_file(files, tmp_path)
     adjudicated = _write(tmp_path / "adjudicate.jsonl", [])
     with pytest.raises(SystemExit):
         review_labels.main([*map(str, files), "--adjudication-out", str(adjudicated), "--adjudicated", str(adjudicated)])
+
+
+def test_unscored_segment_without_a_suggestion_still_needs_annotators(tmp_path):
+    path = _write(tmp_path / "a.jsonl", [_row("c1", [None], suggested=(None,))])
+    text = "\n".join(report(_annotations(path)))
+    assert "segments: 1" in text and "needs a second annotator: 1 segment(s)" in text
