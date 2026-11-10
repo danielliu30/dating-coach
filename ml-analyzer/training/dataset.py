@@ -117,43 +117,57 @@ def deduplicate(examples: Sequence[TrainingExample]) -> List[TrainingExample]:
     copy of the same thread.
 
     Duplicates form clusters with one kept representative: a conversation that
-    matches any earlier copy (kept or dropped) joins that copy's cluster. The
-    first copy represents the cluster unless a later copy carries human
-    ``segments`` and the representative does not; then it takes its place.
+    matches any earlier copy (kept or dropped) joins that copy's cluster, and one
+    that matches several clusters merges them. The representative is the first
+    copy with human ``segments``, else the first copy; it keeps the position of
+    the cluster's first copy in the output.
     """
-    kept: List[TrainingExample] = []
+    slots: List[TrainingExample | None] = []
+    parent: List[int] = []
     by_hash: Dict[str, int] = {}
     by_user: Dict[str, List[Tuple[int, FrozenSet[Tuple[str, ...]]]]] = {}
+
+    def root(index: int) -> int:
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
 
     for example in examples:
         normalized = _normalized_transcript(example)
         digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
         shingles = _shingles(normalized)
 
-        match = by_hash.get(digest)
-        if match is None and example.user_id is not None:
-            match = next(
-                (
-                    index
-                    for index, other in by_user.get(example.user_id, [])
-                    if _jaccard(shingles, other) >= NEAR_DUPLICATE_JACCARD
-                ),
-                None,
+        matches = set()
+        if digest in by_hash:
+            matches.add(root(by_hash[digest]))
+        if example.user_id is not None:
+            matches.update(
+                root(index)
+                for index, other in by_user.get(example.user_id, [])
+                if _jaccard(shingles, other) >= NEAR_DUPLICATE_JACCARD
             )
-        if match is None:
-            index = len(kept)
-            kept.append(example)
-        else:
-            index = match
-            if example.segments and not kept[index].segments:
-                kept[index] = example
 
-        # Every copy, kept or dropped, joins its group's cluster so later copies
-        # are matched against all of them, not only the representative.
+        if not matches:
+            index = len(slots)
+            slots.append(example)
+            parent.append(index)
+        else:
+            # A copy matching several clusters bridges them: merge into the
+            # earliest, keeping the first human-labeled representative if any.
+            index = min(matches)
+            candidates = [slots[r] for r in sorted(matches)] + [example]
+            slots[index] = next((c for c in candidates if c is not None and c.segments), slots[index])
+            for other_root in matches - {index}:
+                parent[other_root] = index
+                slots[other_root] = None
+
+        # Every copy, kept or dropped, joins its cluster so later copies are
+        # matched against all of them, not only the representative.
         by_hash.setdefault(digest, index)
         if example.user_id is not None:
             by_user.setdefault(example.user_id, []).append((index, shingles))
-    return kept
+    return [example for example in slots if example is not None]
 
 
 def load_jsonl(
