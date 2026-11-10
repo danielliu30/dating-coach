@@ -104,7 +104,7 @@ def _install_fake_libraries(
 def test_missing_checkpoint_explains_llm_fallback(tmp_path) -> None:
     """A missing trained checkpoint reports its path and the ML_BACKEND=llm escape hatch."""
     scorer = TrainedScorer(_settings(str(tmp_path / "missing")))
-    assert scorer.version == "trained-missing"
+    assert scorer.version == "trained-missing+transcript-v2"
     with pytest.raises(RuntimeError, match=r"no checkpoint at .*ML_BACKEND=llm"):
         asyncio.run(scorer.analyze(_request()))
 
@@ -117,7 +117,7 @@ def test_fake_checkpoint_inference_is_clamped_and_loaded_once(tmp_path, monkeypa
     _install_fake_libraries(monkeypatch, [1.7, -0.4, 0.5], load_counts)
     scorer = TrainedScorer(_settings(str(checkpoint)))
     result = asyncio.run(scorer.analyze(_request()))
-    assert result.model_version == "trained-ckpt"
+    assert result.model_version == "trained-ckpt+transcript-v2"
     assert len(result.segments) == 3
     assert [segment.engagement_score for segment in result.segments] == [1.0, 0.0, 0.5]
     assert result.overall.engagement_score == 0.5

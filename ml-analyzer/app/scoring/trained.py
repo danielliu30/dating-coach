@@ -16,7 +16,7 @@ from typing import Any, List
 
 from ..config import Settings
 from ..schemas import AnalyzeRequest, AnalyzeResponse, Overall, Segment
-from .base import Scorer, align_segments, chunk, clamp, message_range, transcript
+from .base import TRANSCRIPT_VERSION, Scorer, align_segments, chunk, clamp, message_range, transcript
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +27,7 @@ class TrainedScorer(Scorer):
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.model_dir = Path(settings.model_dir)
-        self.version = f"trained-{self.model_dir.name}"
+        self.version = f"trained-{self.model_dir.name}+{TRANSCRIPT_VERSION}"
         self._model: Any | None = None
         self._tokenizer: Any | None = None
 
