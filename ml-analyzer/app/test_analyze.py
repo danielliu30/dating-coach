@@ -10,7 +10,7 @@ from pydantic import ValidationError
 from app.config import Settings
 from app.main import app
 from app.schemas import AnalyzeRequest, ImageAnalyzeRequest, ImageRef, Message, Overall, ReviewComment, ReviewSummaryRequest, Segment
-from app.scoring.base import message_range
+from app.scoring.base import message_range, meta_line, transcript
 from app.scoring.heuristic import HeuristicScorer, reciprocity_patterns, reflection_questions, review_self_messages
 from app.scoring.image import HeuristicImageScorer, build_image_scorer, image_dimensions
 
@@ -96,6 +96,50 @@ def test_message_range_shifts_only_the_prose() -> None:
     segment = Segment(start_position=0, end_position=5, engagement_score=0.5, comment="")
     assert message_range(segment) == "Messages 1-6"
     assert (segment.start_position, segment.end_position) == (0, 5)
+
+
+def _timed(position: int, sender: str, sent_at: str | None) -> Message:
+    return Message(position=position, sender=sender, body=f"m{position}", sent_at=sent_at)
+
+
+def test_meta_line_renders_median_latencies_and_counts() -> None:
+    """Latency is measured at each change of sender; same-sender bubbles only add to the counts."""
+    messages = [
+        _timed(0, "self", "2026-03-01T18:00:00Z"),
+        _timed(1, "match", "2026-03-01T18:10:00Z"),  # match answers in 10 min
+        _timed(2, "self", "2026-03-01T18:12:00Z"),  # self answers in 2 min
+        _timed(3, "self", "2026-03-01T18:13:00Z"),
+        _timed(4, "match", "2026-03-01T18:33:00+00:00"),  # match answers in 20 min
+        _timed(5, "self", "2026-03-01T18:37:00"),  # naive reads as UTC: 4 min
+    ]
+    assert meta_line(messages) == "[meta] match_latency_min=15 self_latency_min=3 self_msgs=4 match_msgs=2"
+
+
+def test_transcript_meta_prefix_is_opt_in() -> None:
+    """The LLM prompt's plain transcript is unchanged; ``meta=True`` prepends the feature line."""
+    messages = [_timed(1, "match", "2026-03-01T18:05:00Z"), _timed(0, "self", "2026-03-01T18:00:00Z")]
+    plain = "[0] self: m0\n[1] match: m1"
+    assert transcript(messages) == plain
+    assert transcript(messages, meta=True) == "[meta] match_latency_min=5 self_latency_min=na self_msgs=1 match_msgs=1\n" + plain
+
+
+def test_meta_line_without_timestamps_is_omitted() -> None:
+    """Old exports and requests without ``sent_at`` keep the plain transcript."""
+    messages = [_timed(0, "self", None), _timed(1, "match", None)]
+    assert meta_line(messages) is None
+    assert transcript(messages, meta=True) == "[0] self: m0\n[1] match: m1"
+    assert meta_line([_timed(0, "self", "not a time"), _timed(1, "match", "")]) is None
+
+
+def test_meta_line_skips_pairs_missing_or_reversing_time() -> None:
+    """A pair with a missing or backwards timestamp contributes no latency; counts still cover the window."""
+    messages = [
+        _timed(0, "self", "2026-03-01T18:00:00Z"),
+        _timed(1, "match", None),
+        _timed(2, "self", "2026-03-01T18:30:00Z"),
+        _timed(3, "match", "2026-03-01T18:20:00Z"),
+    ]
+    assert meta_line(messages) == "[meta] match_latency_min=na self_latency_min=na self_msgs=2 match_msgs=2"
 
 
 def test_heuristic_feedback_numbers_messages_from_one() -> None:
