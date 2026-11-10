@@ -30,7 +30,7 @@ reads, and it mirrors the `training_examples` table in the Go backend.
 | `messages[].position` | int | yes | 0-based, contiguous, ordered. |
 | `messages[].sender` | enum | yes | `self` (the coached user) or `match`. |
 | `messages[].body` | string | yes | Pseudonymised text (see README on PII). |
-| `messages[].sent_at` | RFC3339 | no | Enables response-latency features later. |
+| `messages[].sent_at` | RFC3339 | no | Feeds the `[meta]` line (see below); rows without it still train. |
 | `segments` | array | no | Human per-segment labels. When present they are the training target. |
 | `segments[].engagement_score` | float 0–1 | yes if segment given | 1 = clearly hooked, 0 = dead thread. |
 | `reply_received` | bool | no | Weak label: did the match reply to the last `self` message? |
@@ -45,6 +45,23 @@ reads, and it mirrors the `training_examples` table in the Go backend.
 3. `reply_received` — coarsest fallback (0.6 / 0.2).
 
 Rows with none of the three are skipped.
+
+## Model input
+
+Each training row's text is the segment transcript, one `[position] sender: body`
+line per message, prefixed with a structured feature line when any message in
+the window has a parseable `sent_at`:
+
+```
+[meta] match_latency_min=12 self_latency_min=3 self_msgs=4 match_msgs=5
+[0] self: ...
+```
+
+Latencies are the median whole minutes a side took to answer the other (measured
+at each change of sender; pairs missing a timestamp or going backwards are
+skipped, `na` when none remain). The same line is built by
+`app/scoring/base.py` (`meta_line`) at inference, so train and serve inputs
+match.
 
 ## Annotation guidance
 
