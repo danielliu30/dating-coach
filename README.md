@@ -112,6 +112,8 @@ Then in the production `.env`:
 - `PUBLIC_APP_URL=https://<domain>` and `CORS_ORIGINS=https://<domain>` so verification/payment links and the CORS allow-list use the public origin.
 - GitHub variable `DEPLOY_HEALTHCHECK_URL=https://<domain>/healthz` so the deploy job probes through TLS.
 
+Cloudflare in front of the VM: the 443 server forwards `CF-Connecting-IP` as `X-Real-IP`/`X-Forwarded-For` (the API's auth rate limiter keys on it). That header is only trustworthy if the VM firewall allows 80/443 solely from Cloudflare's ranges ([IPv4](https://www.cloudflare.com/ips-v4), [IPv6](https://www.cloudflare.com/ips-v6)); set Cloudflare SSL/TLS mode to **Full (strict)**.
+
 The chat WebSocket same-origin check is unaffected by TLS: nginx forwards `Host: <domain>` and the browser sends `Origin: https://<domain>`, and the API compares only the host part, so `Origin` and `Host` still match (and `https://<domain>` in `CORS_ORIGINS` matches explicitly as well).
 
 ## Deployment flow (CI/CD)
