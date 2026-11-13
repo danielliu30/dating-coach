@@ -99,26 +99,26 @@ def _install_fake_libraries(monkeypatch: pytest.MonkeyPatch, scores: object, loa
 def test_missing_checkpoint_explains_llm_fallback(tmp_path) -> None:
     """A missing trained checkpoint reports its path and the ML_BACKEND=llm escape hatch."""
     scorer = TrainedScorer(_settings(str(tmp_path / "missing")))
-    assert scorer.version == "trained-missing"
+    assert scorer.version == "trained-v2-missing+agency-v3"
     with pytest.raises(RuntimeError, match=r"no checkpoint at .*ML_BACKEND=llm"):
         asyncio.run(scorer.analyze(_request()))
 
 
 def test_fake_checkpoint_inference_is_clamped_and_loaded_once(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Fake checkpoint inference clamps scores, builds aggregate feedback, and loads dependencies only once."""
+    """Fake checkpoint inference clamps scores, builds heuristic feedback, and loads dependencies only once."""
     checkpoint = tmp_path / "ckpt"
     checkpoint.mkdir()
     load_counts = {"tokenizer": 0, "model": 0}
     _install_fake_libraries(monkeypatch, [1.7, -0.4, 0.5], load_counts)
     scorer = TrainedScorer(_settings(str(checkpoint)))
     result = asyncio.run(scorer.analyze(_request()))
-    assert result.model_version == "trained-ckpt"
+    assert result.model_version == "trained-v2-ckpt+agency-v3"
     assert len(result.segments) == 3
     assert [segment.engagement_score for segment in result.segments] == [1.0, 0.0, 0.5]
     assert result.overall.engagement_score == 0.5
-    assert result.overall.summary == "Scored by the fine-tuned engagement model."
-    assert len(result.overall.strengths) == 2
-    assert len(result.overall.improvements) == 2
+    assert result.overall.summary.startswith("Your messages are not getting traction")
+    assert result.overall.strengths == []
+    assert len(result.overall.improvements) == 3
     asyncio.run(scorer.analyze(_request()))
     assert load_counts == {"tokenizer": 1, "model": 1}
 
