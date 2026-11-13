@@ -23,7 +23,7 @@ reads, and it mirrors the `training_examples` table in the Go backend.
 
 | Field | Type | Required | Notes |
 | --- | --- | --- | --- |
-| `conversation_id` | string | yes | Stable id; used for de-duplication and as the split group when `user_id` is absent. |
+| `conversation_id` | string | yes | Stable id; used as the split group when `user_id` is absent. |
 | `user_id` | string | no | Split group: every conversation of a user lands entirely in train or eval. |
 | `platform` | string | no | `hinge`, `tinder`, `bumble`, `unknown`. Useful as a slice for evaluation. |
 | `consented` | bool | yes | `dataset.load_jsonl` drops rows without it unless `--include-unconsented`. |
@@ -45,6 +45,24 @@ reads, and it mirrors the `training_examples` table in the Go backend.
 3. `reply_received` — coarsest fallback (0.6 / 0.2).
 
 Rows with none of the three are skipped.
+
+## De-duplication
+
+`dataset.load_jsonl` drops repeated conversations before the split (pass
+`dedupe=False` to keep them):
+
+1. Exact duplicates: message bodies are lowercased with punctuation removed and
+   whitespace collapsed, joined with their `sender` in `position` order, and
+   hashed (SHA-256). Equal hashes are duplicates across the whole file.
+2. Near-duplicates: within one `user_id`, conversations whose word 3-gram
+   shingles have Jaccard similarity >= 0.9 are duplicates (e.g. the same thread
+   re-submitted with one more message). Rows without `user_id` get only the exact
+   check.
+
+Duplicates form clusters: a conversation that matches any earlier copy, kept or
+dropped, joins that copy's cluster, and each cluster keeps one row. That row is
+the first occurrence, unless a later copy has human `segments` and the first
+does not; then the human-labeled copy takes its place.
 
 ## Annotation guidance
 
