@@ -290,6 +290,35 @@ describe('ChatSocket', () => {
     expect(FakeSocket.instances).toHaveLength(1);
   });
 
+  it('rejects queued and later messages once the thread is gone', async () => {
+    threadMessages.mockRejectedValue(new ApiError(404, 'not found'));
+    const onEvent = jest.fn();
+    const socket = new ChatSocket('t1', () => 'tok', { onEvent });
+    socket.connect();
+    socket.send('queued', 'c1');
+
+    latest().serverClose();
+    await flush();
+    socket.send('after', 'c2');
+
+    expect(onEvent.mock.calls.map(([event]) => event)).toEqual([
+      { type: 'error', body: 'chat is no longer available', client_id: 'c1' },
+      { type: 'error', body: 'chat is no longer available', client_id: 'c2' },
+    ]);
+  });
+
+  it('close() by the caller drops queued messages without rejecting them', async () => {
+    const onEvent = jest.fn();
+    const socket = new ChatSocket('t1', () => 'tok', { onEvent });
+    socket.connect();
+    socket.send('queued', 'c1');
+
+    socket.close();
+    socket.send('after', 'c2');
+
+    expect(onEvent).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['a 500', new ApiError(500, 'boom')],
     ['a 403', new ApiError(403, 'not allowed')],

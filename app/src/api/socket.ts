@@ -44,6 +44,8 @@ export class ChatSocket {
   private socket: WebSocket | null = null;
   private attempts = 0;
   private closed = false;
+  /** Set when the retries gave up rather than the caller closing the socket. */
+  private ended = false;
   private opened = false;
   private retry: ReturnType<typeof setTimeout> | null = null;
   private failures = 0;
@@ -145,9 +147,21 @@ export class ChatSocket {
     }
   }
 
+  /**
+   * Gives up on the thread. Queued messages, and any sent afterwards, are
+   * rejected like a server-refused send so the caller does not keep them
+   * pending for a reconnect that will never come.
+   */
   private end(): void {
+    const pending = this.outbox;
     this.close();
+    this.ended = true;
     this.handlers.onStatus?.('closed');
+    for (const event of pending) this.reject(event);
+  }
+
+  private reject(event: ChatEvent): void {
+    this.handlers.onEvent({ type: 'error', body: 'chat is no longer available', client_id: event.client_id });
   }
 
   /**
@@ -172,7 +186,9 @@ export class ChatSocket {
       this.socket.send(JSON.stringify(event));
       return;
     }
-    if (event.type === 'message') this.outbox.push(event);
+    if (event.type !== 'message') return;
+    if (this.ended) this.reject(event);
+    else this.outbox.push(event);
   }
 
   private flush(): void {
