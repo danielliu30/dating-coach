@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -81,5 +82,55 @@ func TestRequireAdmin(t *testing.T) {
 	// in whether coaches pass.
 	if got := roleRequest(t, RequireCoach, RoleAdmin); got != http.StatusNoContent {
 		t.Errorf("RequireCoach with admin = %d, want 204", got)
+	}
+}
+
+// TestMiddlewareQueryTokenOnlyOnWebSocketUpgrade checks that ?token= is
+// accepted only on WebSocket upgrade requests, while the Authorization header
+// works for any request.
+func TestMiddlewareQueryTokenOnlyOnWebSocketUpgrade(t *testing.T) {
+	issuer := NewTokenIssuer("test-secret")
+	token, _, err := issuer.Issue(uuid.New(), "a@example.com", RoleUser, ScopeSession, time.Minute)
+	if err != nil {
+		t.Fatalf("issue token: %v", err)
+	}
+	tests := []struct {
+		name    string
+		query   bool
+		header  bool
+		upgrade string
+		want    int
+	}{
+		{"query token on plain HTTP is rejected", true, false, "", http.StatusUnauthorized},
+		{"query token on non-websocket upgrade is rejected", true, false, "h2c", http.StatusUnauthorized},
+		{"query token on websocket upgrade is accepted", true, false, "websocket", http.StatusNoContent},
+		{"upgrade header is matched case-insensitively", true, false, "WebSocket", http.StatusNoContent},
+		{"upgrade header list containing websocket is accepted", true, false, "foo, websocket", http.StatusNoContent},
+		{"authorization header on plain HTTP is accepted", false, true, "", http.StatusNoContent},
+		{"no token on websocket upgrade is rejected", false, false, "websocket", http.StatusUnauthorized},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusNoContent)
+			})
+			target := "/chat/threads/t1/ws"
+			if tc.query {
+				target += "?token=" + token
+			}
+			req := httptest.NewRequest(http.MethodGet, target, nil)
+			if tc.header {
+				req.Header.Set("Authorization", "Bearer "+token)
+			}
+			if tc.upgrade != "" {
+				req.Header.Set("Connection", "Upgrade")
+				req.Header.Set("Upgrade", tc.upgrade)
+			}
+			rec := httptest.NewRecorder()
+			Middleware(issuer)(next).ServeHTTP(rec, req)
+			if rec.Code != tc.want {
+				t.Fatalf("status = %d, want %d", rec.Code, tc.want)
+			}
+		})
 	}
 }
