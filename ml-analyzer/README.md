@@ -31,6 +31,11 @@ review tracks have their own prompts and are not yet wired to the brain):
   honest and direct but non-directive; point to a human coach when that is the
   better help.
 
+Each pillar carries a stable lowercase `key` (`agency`, `feedback`,
+`support`; `PILLAR_KEYS`) that clients use to name it; look pillars up with
+`pillar_by_key` / `pillars_by_keys`. Keys never change once published, even if
+a pillar's name or principles are reworded.
+
 The LLM `SYSTEM_PROMPT` is composed from the rendered pillars
 (`render_pillars()`), not written by hand, and `BRAIN_VERSION` is appended to
 `model_version` together with `AGENCY_VERSION` (e.g.
