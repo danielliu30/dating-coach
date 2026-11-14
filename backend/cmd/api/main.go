@@ -74,11 +74,9 @@ func run() error {
 	notifier := notify.New(cfg)
 	issuer := auth.NewTokenIssuer(cfg.JWTSecret)
 	limiter := auth.NewRateLimiter(rdb, cfg.AuthRateLimit, cfg.AuthRateWindow)
-	// Nothing reads the denylist any more: requests are answered from the
-	// token's signature alone, and open sockets re-read the account row. It is
-	// kept for the revocation it announces, which closes those sockets at once
-	// rather than at their next re-check.
-	denylist := auth.NewDenylist(rdb, cfg.JWTTTL)
+	// The middleware checks every request against the denylist and fails
+	// closed when Redis is down; its announcements close open sockets at once.
+	denylist := auth.NewDenylist(rdb, max(cfg.JWTTTL, cfg.VerifyTokenTTL))
 	verificationCodes := auth.NewVerificationCache(rdb, auth.VerificationCodeTTL)
 
 	authSvc := auth.NewService(pg.Pool, pg.Queries, issuer, notifier, cfg.BcryptCost, cfg.PublicAppURL, verificationCodes, denylist, deletions, cfg.JWTTTL, cfg.VerifyTokenTTL, cfg.RefreshTokenTTL)
@@ -102,7 +100,7 @@ func run() error {
 	chatHandler := chat.NewHandler(chat.NewService(pg.Queries, hub), hub, pg.Queries, cfg.CORSOrigins)
 	analysisHandler := analysis.NewHandler(analysis.NewService(pg.Pool, pg.Queries, queue))
 
-	router := newRouter(cfg, auth.Middleware(issuer, wsTickets), handlers{
+	router := newRouter(cfg, auth.Middleware(issuer, wsTickets, denylist), handlers{
 		auth:     authHandler,
 		coaching: coachingHandler,
 		chat:     chatHandler,
