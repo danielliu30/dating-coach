@@ -638,6 +638,129 @@ def test_llm_prompt_is_composed_from_the_brain() -> None:
     assert scorer._parse(json.dumps(good), [(0, 1)]).model_version.endswith(f"+{BRAIN_VERSION}+{AGENCY_VERSION}")
 
 
+def _focus_scorer():
+    from app.scoring.llm import LLMScorer
+
+    settings = Settings(
+        backend="llm", llm_provider="openai", llm_api_key="k", llm_model="m", llm_base_url="http://x",
+        llm_timeout=1.0, model_dir="", segment_size=2,
+    )
+    return LLMScorer(settings)
+
+
+def test_llm_prompt_lists_chosen_focus_areas_with_their_principles() -> None:
+    """Focus areas add their pillars (key, stance, principles) to the user prompt; none leaves it unchanged."""
+    from app.coaching import AGENCY, FEEDBACK
+    from app.scoring.llm import SYSTEM_PROMPT
+
+    messages = [Message(position=0, sender="self", body="What made you pick that trail?")]
+    scorer = _focus_scorer()
+    plain = scorer._user_prompt(AnalyzeRequest(conversation_id="f0", messages=messages), [(0, 0)])
+    assert "Focus areas" not in plain
+
+    request = AnalyzeRequest(conversation_id="f1", messages=messages, focus_areas=["feedback", "agency"])
+    prompt = scorer._user_prompt(request, [(0, 0)])
+    assert 'return at most one overall.goal_scores entry for each of "agency", "feedback"' in prompt
+    assert f'- "agency": AGENCY: {AGENCY.stance}' in prompt
+    assert prompt.index('"agency":') < prompt.index('"feedback":')
+    for principle in AGENCY.principles + FEEDBACK.principles:
+        assert f"  - {principle}" in prompt
+    assert "SUPPORT:" not in prompt
+    assert prompt.replace(prompt[prompt.index("Focus areas"):prompt.index("Use exactly")], "") == plain.replace("f0", "f1")
+
+    assert '"goal_scores": [{"goal": "focus area key"' in SYSTEM_PROMPT
+    assert 'return "goal_scores": [].' in SYSTEM_PROMPT
+
+
+def test_llm_parse_validates_goal_scores_against_focus_areas() -> None:
+    """_parse keeps at most one clamped goal score per requested area and rejects extra or malformed entries."""
+    scorer = _focus_scorer()
+    boundaries = [(0, 1)]
+
+    def completion(goal_scores):
+        overall = {"engagement_score": 0.6, "summary": "Okay."}
+        if goal_scores is not None:
+            overall["goal_scores"] = goal_scores
+        return json.dumps(
+            {
+                "segments": [{"start_position": 0, "end_position": 1, "engagement_score": 0.6, "comment": "Fine."}],
+                "overall": overall,
+            }
+        )
+
+    good = [
+        {"goal": "feedback", "score": 1.4, "comment": "Message 1 asked about their weekend and drew a long reply."},
+        {"goal": "Agency", "score": 0.3, "comment": "Most of the questions in this conversation were yours."},
+    ]
+    parsed = scorer._parse(completion(good), boundaries, focus_areas=["agency", "feedback"]).overall.goal_scores
+    assert [(g.goal, g.score) for g in parsed] == [("agency", 0.3), ("feedback", 1.0)]
+
+    # An area the model had no evidence for is left out, as the heuristic scorer does.
+    partial = scorer._parse(completion([good[0]]), boundaries, focus_areas=["agency", "feedback"]).overall
+    assert [g.goal for g in partial.goal_scores] == ["feedback"]
+    assert scorer._parse(completion([]), boundaries, focus_areas=["support"]).overall.goal_scores == []
+
+    # Without focus areas the key is ignored, whatever the model put there.
+    assert scorer._parse(completion("junk"), boundaries).overall.goal_scores == []
+    assert scorer._parse(completion(None), boundaries).overall.goal_scores == []
+
+    bad_cases = {
+        "unrequested": good + [{"goal": "support", "score": 0.5, "comment": "c"}],
+        "unknown": [good[1], {"goal": "confidence", "score": 0.5, "comment": "c"}],
+        "duplicate": good + [good[0]],
+        "key left out": None,
+        "not a list": {"feedback": 0.5},
+        "not objects": ["feedback"],
+        "string score": [good[1], {"goal": "feedback", "score": "high", "comment": "c"}],
+        "bool score": [good[1], {"goal": "feedback", "score": True, "comment": "c"}],
+        "no score": [good[1], {"goal": "feedback", "comment": "c"}],
+        "comment not a string": [good[1], {"goal": "feedback", "score": 0.5, "comment": ["c"]}],
+        "no comment": [good[1], {"goal": "feedback", "score": 0.5}],
+        "blank comment": [good[1], {"goal": "feedback", "score": 0.5, "comment": "  "}],
+    }
+    for name, goal_scores in bad_cases.items():
+        with pytest.raises(ValueError, match="goal"):
+            scorer._parse(completion(goal_scores), boundaries, focus_areas=["agency", "feedback"])
+
+
+def test_llm_goal_score_comments_pass_the_agency_gate() -> None:
+    """A goal-score comment that drafts a reply or mind-reads the match fails the whole completion."""
+    scorer = _focus_scorer()
+    boundaries = [(0, 1)]
+    for comment in ("Next time, ask her about her dog.", "She isn't really into you, so this score is low."):
+        raw = json.dumps(
+            {
+                "segments": [{"start_position": 0, "end_position": 1, "engagement_score": 0.6, "comment": "Fine."}],
+                "overall": {"engagement_score": 0.6, "goal_scores": [{"goal": "agency", "score": 0.4, "comment": comment}]},
+            }
+        )
+        with pytest.raises(ValueError):
+            scorer._parse(raw, boundaries, focus_areas=["agency"])
+
+
+def test_llm_goal_score_failure_falls_back_to_heuristic_goal_scores(monkeypatch) -> None:
+    """When a goal score is malformed (here: no comment), the fallback still answers with heuristic goal_scores."""
+    scorer = _focus_scorer()
+    messages = [
+        Message(position=0, sender="self", body="How was your weekend?"),
+        Message(position=1, sender="match", body="Great, we hiked the ridge trail and found a lake. You?"),
+    ]
+
+    async def complete(prompt: str) -> str:
+        return json.dumps(
+            {
+                "segments": [{"start_position": 0, "end_position": 1, "engagement_score": 0.8, "comment": "Fine."}],
+                "overall": {"engagement_score": 0.8, "goal_scores": [{"goal": "feedback", "score": 0.9, "comment": ""}]},
+            }
+        )
+
+    monkeypatch.setattr(scorer, "_complete", complete)
+    request = AnalyzeRequest(conversation_id="f2", messages=messages, focus_areas=["feedback", "support"])
+    response = asyncio.run(scorer.analyze(request))
+    assert response.model_version.endswith("+fallback:heuristic-v4")
+    assert [g.goal for g in response.overall.goal_scores] == ["feedback"]
+
+
 def test_enforce_agency_is_the_shared_drafting_gate() -> None:
     """``enforce_agency`` rejects drafting, exempts provable citations, and is the check ``LLMScorer`` uses."""
     from app.coaching import RULES, enforce_agency
