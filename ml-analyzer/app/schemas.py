@@ -9,7 +9,9 @@ from __future__ import annotations
 
 from typing import List, Literal, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from .coaching import PILLAR_KEYS, pillars_by_keys
 
 Sender = Literal["self", "match"]
 SegmentLabel = Literal["engaging", "neutral", "flat"]
@@ -32,6 +34,20 @@ class AnalyzeRequest(BaseModel):
         max_length=2000,
         description="Free text: what the customer is looking for, so feedback can be tailored to it",
     )
+    focus_areas: List[str] = Field(
+        default_factory=list,
+        max_length=len(PILLAR_KEYS),
+        description=(
+            "Coaching-brain pillar keys the customer wants to improve on (see PILLAR_KEYS); "
+            "the response carries one overall.goal_scores entry per area. Distinct from preferences."
+        ),
+    )
+
+    @field_validator("focus_areas")
+    @classmethod
+    def _known_pillars(cls, value: List[str]) -> List[str]:
+        """Normalise to lowercase pillar keys in ``PILLARS`` order, deduplicated; unknown keys are rejected."""
+        return [p.key for p in pillars_by_keys(value)]
 
 
 class Segment(BaseModel):
@@ -42,6 +58,25 @@ class Segment(BaseModel):
     comment: str = ""
 
 
+class GoalScore(BaseModel):
+    """How the customer's own messages did on one focus area they chose to work on.
+
+    ``goal`` is a coaching-brain pillar key from ``AnalyzeRequest.focus_areas``.
+    ``comment`` is held to the same agency rules as the rest of the feedback:
+    it describes, it never drafts a reply or reads the match's mind.
+    """
+
+    goal: str
+    score: float = Field(ge=0.0, le=1.0)
+    comment: str = Field(default="", max_length=500)
+
+    @field_validator("goal")
+    @classmethod
+    def _known_pillar(cls, value: str) -> str:
+        """Normalise ``goal`` to its pillar key; anything that is not a pillar key is rejected."""
+        return pillars_by_keys([value])[0].key
+
+
 class Overall(BaseModel):
     """Conversation-level verdict on the customer's own messages.
 
@@ -49,7 +84,9 @@ class Overall(BaseModel):
     non-directive questions the customer can sit with ("did I like them?") and
     recurring behaviour named as an observation to reflect on. Neither ever
     contains a drafted reply. Both default to empty so existing clients are
-    unaffected.
+    unaffected. ``goal_scores`` holds at most one entry per requested focus
+    area and is empty when none were requested (or a scorer has no signal for
+    them).
     """
 
     engagement_score: float = Field(ge=0.0, le=1.0)
@@ -63,6 +100,10 @@ class Overall(BaseModel):
     reflection_questions: List[str] = Field(
         default_factory=list,
         description="Open questions that prompt the customer to self-diagnose; never a drafted reply",
+    )
+    goal_scores: List[GoalScore] = Field(
+        default_factory=list,
+        description="One score per requested focus area, in PILLARS order; empty when no focus areas were requested",
     )
 
 

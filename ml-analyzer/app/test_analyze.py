@@ -9,7 +9,7 @@ from pydantic import ValidationError
 
 from app.config import Settings
 from app.main import app
-from app.schemas import AnalyzeRequest, ImageAnalyzeRequest, ImageRef, Message, Overall, ReviewComment, ReviewSummaryRequest, Segment
+from app.schemas import AnalyzeRequest, GoalScore, ImageAnalyzeRequest, ImageRef, Message, Overall, ReviewComment, ReviewSummaryRequest, Segment
 from app.scoring.base import message_range
 from app.scoring.heuristic import HeuristicScorer, reciprocity_patterns, reflection_questions, review_self_messages
 from app.scoring.image import HeuristicImageScorer, build_image_scorer, image_dimensions
@@ -457,6 +457,121 @@ def test_pillars_are_looked_up_by_stable_key() -> None:
     assert pillars_by_keys([]) == ()
     with pytest.raises(ValueError, match="unknown pillar key 'confidence'"):
         pillars_by_keys(["feedback", "confidence"])
+
+
+def test_analyze_request_focus_areas_are_normalised_pillar_keys() -> None:
+    """focus_areas defaults to empty, is normalised to PILLARS order, and rejects anything but pillar keys."""
+    messages = [Message(position=0, sender="self", body="Hi")]
+    assert AnalyzeRequest(conversation_id="c", messages=messages).focus_areas == []
+
+    request = AnalyzeRequest(conversation_id="c", messages=messages, focus_areas=["Support", "agency", "support"])
+    assert request.focus_areas == ["agency", "support"]
+    # Free-text preferences stay a separate field.
+    assert request.preferences is None
+
+    with pytest.raises(ValidationError, match="unknown pillar key 'confidence'"):
+        AnalyzeRequest(conversation_id="c", messages=messages, focus_areas=["confidence"])
+    with pytest.raises(ValidationError):
+        AnalyzeRequest(conversation_id="c", messages=messages, focus_areas=["agency"] * 4)
+
+    response = client.post(
+        "/analyze",
+        json={"conversation_id": "c", "messages": [m.model_dump() for m in messages], "focus_areas": ["confidence"]},
+    )
+    assert response.status_code == 422
+
+
+def test_goal_score_is_bounded_and_keyed_by_pillar() -> None:
+    """GoalScore keeps score in [0, 1], normalises goal to a pillar key and defaults goal_scores to []."""
+    assert GoalScore(goal="FEEDBACK", score=0.25, comment="c").goal == "feedback"
+    with pytest.raises(ValidationError):
+        GoalScore(goal="feedback", score=1.5)
+    with pytest.raises(ValidationError):
+        GoalScore(goal="confidence", score=0.5)
+    assert Overall(engagement_score=0.5).goal_scores == []
+
+
+def test_heuristic_goal_scores_cover_requested_areas_with_a_signal() -> None:
+    """The heuristic scores feedback and agency when asked, never support, and stays [] when nothing is asked."""
+    from app.coaching import enforce_agency
+
+    balanced = [
+        Message(position=0, sender="self", body="What got you into climbing?"),
+        Message(position=1, sender="match", body="A friend dragged me to a gym and I was hooked, you?"),
+        Message(position=2, sender="self", body="Same story, a coworker took me bouldering"),
+        Message(position=3, sender="match", body="Ha, nice. Which gym do you go to these days?"),
+        Message(position=4, sender="self", body="The one downtown by the river"),
+        Message(position=5, sender="match", body="No way, that is my gym too"),
+    ]
+    scorer = HeuristicScorer(segment_size=2)
+
+    plain = asyncio.run(scorer.analyze(AnalyzeRequest(conversation_id="g0", messages=balanced)))
+    assert plain.overall.goal_scores == []
+
+    request = AnalyzeRequest(conversation_id="g1", messages=balanced, focus_areas=["support", "feedback", "agency"])
+    overall = asyncio.run(scorer.analyze(request)).overall
+    assert [g.goal for g in overall.goal_scores] == ["agency", "feedback"]
+    by_goal = {g.goal: g for g in overall.goal_scores}
+    assert by_goal["feedback"].score == overall.engagement_score
+    assert "of your 3 messages drew a detailed reply" in by_goal["feedback"].comment
+    assert by_goal["agency"].score == 1.0
+    assert "roughly even" in by_goal["agency"].comment
+    enforce_agency([g.comment for g in overall.goal_scores])
+
+    one_sided = [
+        Message(position=0, sender="self", body="Hey, how was the concert last night? I heard it sold out"),
+        Message(position=1, sender="match", body="good"),
+        Message(position=2, sender="self", body="Nice, I have been meaning to see them live for years now"),
+        Message(position=3, sender="self", body="What was the best song they played?"),
+    ]
+    request = AnalyzeRequest(conversation_id="g2", messages=one_sided, focus_areas=["agency"])
+    (agency,) = asyncio.run(scorer.analyze(request)).overall.goal_scores
+    assert agency.goal == "agency" and agency.score < 0.2
+    assert "putting in more of this conversation than they are" in agency.comment
+    enforce_agency([agency.comment])
+
+    # At exactly RECIPROCITY_RATIO (7 to 4 equal-length messages) reciprocity_patterns names an
+    # imbalance, so the agency comment must too; a match-heavy exchange is not called even.
+    seven_to_four = [Message(position=i, sender="self" if i < 7 else "match", body="Sounds good to me") for i in range(11)]
+    assert reciprocity_patterns(seven_to_four)
+    request = AnalyzeRequest(conversation_id="g2b", messages=seven_to_four, focus_areas=["agency"])
+    (agency,) = asyncio.run(scorer.analyze(request)).overall.goal_scores
+    assert "putting in more of this conversation" in agency.comment
+    match_heavy = [
+        Message(position=i, sender="match" if i % 3 else "self", body="Sounds good to me") for i in range(9)
+    ]
+    request = AnalyzeRequest(conversation_id="g2c", messages=match_heavy, focus_areas=["agency"])
+    (agency,) = asyncio.run(scorer.analyze(request)).overall.goal_scores
+    assert agency.score == 1.0 and "They wrote more of this conversation than you did" in agency.comment
+    enforce_agency([agency.comment])
+
+    silent = [Message(position=i, sender="self", body="Hello again") for i in range(3)]
+    request = AnalyzeRequest(conversation_id="g3", messages=silent, focus_areas=["agency"])
+    assert [g.score for g in asyncio.run(scorer.analyze(request)).overall.goal_scores] == [0.0]
+
+    # Too few customer messages to judge a balance, and none at all for feedback: nothing to score.
+    short = [Message(position=0, sender="match", body="hi"), Message(position=1, sender="self", body="Hey there")]
+    request = AnalyzeRequest(conversation_id="g4", messages=short, focus_areas=["agency", "support"])
+    assert asyncio.run(scorer.analyze(request)).overall.goal_scores == []
+    only_match = [Message(position=0, sender="match", body="hi")]
+    request = AnalyzeRequest(conversation_id="g5", messages=only_match, focus_areas=["feedback"])
+    assert asyncio.run(scorer.analyze(request)).overall.goal_scores == []
+
+
+def test_analyze_endpoint_returns_goal_scores_for_focus_areas() -> None:
+    """POST /analyze with focus_areas returns them as overall.goal_scores on the heuristic path."""
+    body = {
+        "conversation_id": "g6",
+        "focus_areas": ["Feedback"],
+        "messages": [
+            {"position": 0, "sender": "self", "body": "How was your weekend?"},
+            {"position": 1, "sender": "match", "body": "Great, we hiked the ridge trail and found a lake. You?"},
+        ],
+    }
+    response = client.post("/analyze", json=body)
+    assert response.status_code == 200
+    (goal,) = response.json()["overall"]["goal_scores"]
+    assert goal["goal"] == "feedback" and 0.0 <= goal["score"] <= 1.0 and goal["comment"]
 
 
 def test_llm_prompt_reviews_only_self_messages_and_never_drafts() -> None:
