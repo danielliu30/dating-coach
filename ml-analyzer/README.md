@@ -165,6 +165,12 @@ default to `[]`, so clients that predate them are unaffected.
 `overall.goal_scores[]` holds `{goal, score (0–1), comment}` entries, at most
 one per requested focus area (`goal` is the pillar key); it is `[]` when no
 focus areas were requested.
+The heuristic scorer (and so the LLM fallback) only scores the areas it has a
+signal for: `feedback` is the mean reply-outcome score of the customer's
+messages, `agency` the balance of effort (messages and words) between the
+customer and the match, needing at least three customer messages. `support` is
+about the coach's stance rather than anything in the messages, so the
+heuristic never scores it.
 
 `label` is always derived from the score (≥0.66 engaging, ≥0.4 neutral, else
 flat), so it is consistent across backends. `comment`, `summary` and
