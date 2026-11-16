@@ -3,6 +3,8 @@ package auth
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -170,11 +172,39 @@ func TestRefreshRotatesAndDetectsReuse(t *testing.T) {
 		t.Fatal("refresh must rotate the token, not hand the same one back")
 	}
 
+	announcements := svc.denylist.rdb.Subscribe(ctx, revokedChannel)
+	t.Cleanup(func() { _ = announcements.Close() })
+	if _, err := announcements.Receive(ctx); err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+
 	if _, err := svc.Refresh(ctx, first.RefreshToken); !errors.Is(err, ErrInvalidRefreshToken) {
 		t.Fatalf("reusing a spent token: error = %v, want %v", err, ErrInvalidRefreshToken)
 	}
 	if _, err := svc.Refresh(ctx, second.RefreshToken); !errors.Is(err, ErrInvalidRefreshToken) {
 		t.Fatalf("after detected reuse: error = %v, want %v", err, ErrInvalidRefreshToken)
+	}
+
+	// Reuse also kills the access tokens already minted and announces it, so
+	// open sockets close on every replica.
+	claims, err := issuer.Parse(first.Token)
+	if err != nil {
+		t.Fatalf("parse access token: %v", err)
+	}
+	msg, err := announcements.ReceiveMessage(ctx)
+	if err != nil || msg.Payload != claims.Subject {
+		t.Fatalf("revocation announcement = %v, %v; want %s", msg, err, claims.Subject)
+	}
+	for name, token := range map[string]string{"first": first.Token, "second": second.Token} {
+		req := httptest.NewRequest(http.MethodGet, "/me", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		Middleware(issuer, nil, svc.denylist)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		})).ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("%s access token after reuse: status = %d, want 401", name, rec.Code)
+		}
 	}
 }
 
