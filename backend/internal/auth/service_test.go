@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -631,5 +632,77 @@ func TestSignInRefusesAccountWithoutPassword(t *testing.T) {
 		if _, err := svc.SignIn(ctx, email, password); !errors.Is(err, ErrInvalidCredentials) {
 			t.Fatalf("sign in with password %q = %v, want %v", password, err, ErrInvalidCredentials)
 		}
+	}
+}
+
+// TestRevocationsSurviveARedisOutage covers sign-out and refresh-token reuse
+// while Redis is unreachable: the cutoff is still recorded in Postgres, and
+// replaying it into a Redis that never saw it (or lost it) refuses the access
+// tokens issued before it.
+func TestRevocationsSurviveARedisOutage(t *testing.T) {
+	for name, revoke := range map[string]func(svc *Service, s Session, down *Denylist) error{
+		"sign-out": func(svc *Service, s Session, down *Denylist) error {
+			svc.denylist = down
+			claims, err := svc.issuer.Parse(s.Token)
+			if err != nil {
+				return err
+			}
+			userID, err := claims.UserID()
+			if err != nil {
+				return err
+			}
+			if err := svc.SignOut(context.Background(), userID); !errors.Is(err, ErrRevocationUnavailable) {
+				return fmt.Errorf("sign out with Redis down: error = %v, want %v", err, ErrRevocationUnavailable)
+			}
+			return nil
+		},
+		"refresh reuse": func(svc *Service, s Session, down *Denylist) error {
+			if _, err := svc.Refresh(context.Background(), s.RefreshToken); err != nil {
+				return fmt.Errorf("refresh: %w", err)
+			}
+			svc.denylist = down
+			if _, err := svc.Refresh(context.Background(), s.RefreshToken); !errors.Is(err, ErrInvalidRefreshToken) {
+				return fmt.Errorf("reuse with Redis down: error = %v, want %v", err, ErrInvalidRefreshToken)
+			}
+			return nil
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			svc, issuer, pool := newTestService(t)
+			ctx := context.Background()
+			user := verifiedUser(t, svc, pool)
+			session, err := svc.SignIn(ctx, user.email, user.password)
+			if err != nil {
+				t.Fatalf("sign in: %v", err)
+			}
+			live := svc.denylist
+
+			down := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", MaxRetries: -1, DialTimeout: time.Second})
+			t.Cleanup(func() { _ = down.Close() })
+			if err := revoke(svc, session, NewDenylist(down, 15*time.Minute)); err != nil {
+				t.Fatal(err)
+			}
+
+			var recorded *time.Time
+			if err := pool.QueryRow(ctx, "SELECT sessions_revoked_at FROM users WHERE email = $1", user.email).Scan(&recorded); err != nil {
+				t.Fatalf("read sessions_revoked_at: %v", err)
+			}
+			if recorded == nil {
+				t.Fatal("revocation was not recorded in Postgres while Redis was down")
+			}
+
+			if err := live.ReplayRevocations(ctx, db.New(pool)); err != nil {
+				t.Fatalf("replay: %v", err)
+			}
+			req := httptest.NewRequest(http.MethodGet, "/me", nil)
+			req.Header.Set("Authorization", "Bearer "+session.Token)
+			rec := httptest.NewRecorder()
+			Middleware(issuer, nil, live)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusNoContent)
+			})).ServeHTTP(rec, req)
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("access token after replayed revocation: status = %d, want 401", rec.Code)
+			}
+		})
 	}
 }

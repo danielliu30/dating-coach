@@ -12,6 +12,8 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
+
+	"github.com/danielliu30/dating-coach/backend/internal/store/db"
 )
 
 func TestDenylistRevokedSince(t *testing.T) {
@@ -121,5 +123,59 @@ func TestMiddlewareRefusesRevokedSessions(t *testing.T) {
 				t.Fatalf("status = %d, want %d", rec.Code, tc.want)
 			}
 		})
+	}
+}
+
+type stubRevocationLister []db.ListSessionRevocationsSinceRow
+
+func (s stubRevocationLister) ListSessionRevocationsSince(context.Context, time.Time) ([]db.ListSessionRevocationsSinceRow, error) {
+	return s, nil
+}
+
+// TestReplayRevocationsRestoresLostCutoffs covers a Redis that lost (or never
+// received) a cutoff recorded in Postgres: the replay writes it back, never
+// weakens a stronger entry, and only announces entries it changed, so repeated
+// replays do not drop sockets opened after the cutoff.
+func TestReplayRevocationsRestoresLostCutoffs(t *testing.T) {
+	ctx := context.Background()
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+	d := NewDenylist(rdb, time.Minute)
+
+	signedOut, deleted := uuid.New(), uuid.New()
+	cutoff := time.Now().Add(-time.Second).Truncate(time.Microsecond)
+	if err := d.Revoke(ctx, deleted); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	lister := stubRevocationLister{
+		{ID: signedOut, SessionsRevokedAt: &cutoff},
+		{ID: deleted, SessionsRevokedAt: &cutoff},
+	}
+
+	announcements := rdb.Subscribe(ctx, revokedChannel)
+	t.Cleanup(func() { _ = announcements.Close() })
+	if _, err := announcements.Receive(ctx); err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+
+	for range 2 {
+		if err := d.ReplayRevocations(ctx, lister); err != nil {
+			t.Fatalf("replay: %v", err)
+		}
+	}
+	if since, err := d.RevokedSince(ctx, signedOut); err != nil || !since.Equal(cutoff) {
+		t.Fatalf("replayed cutoff = %v, %v; want %v", since, err, cutoff)
+	}
+	if since, err := d.RevokedSince(ctx, deleted); err != nil || !since.Equal(revokeEverything) {
+		t.Fatalf("deleted account after replay = %v, %v; want every token revoked", since, err)
+	}
+
+	msg, err := announcements.ReceiveTimeout(ctx, time.Second)
+	if m, ok := msg.(*redis.Message); err != nil || !ok || m.Payload != signedOut.String() {
+		t.Fatalf("first announcement = %v, %v; want %s", msg, err, signedOut)
+	}
+	if msg, err := announcements.ReceiveTimeout(ctx, 200*time.Millisecond); err == nil {
+		t.Fatalf("unexpected extra announcement %v: replays must only announce what they changed", msg)
 	}
 }

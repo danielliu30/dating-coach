@@ -110,10 +110,15 @@ func (s *Service) Refresh(ctx context.Context, raw string) (Session, error) {
 		}
 		// Whoever holds the stolen pair may already hold access tokens and open
 		// sockets too: denylist them all now rather than letting them run out
-		// their lifetime. A Redis failure only logs, since the middleware
-		// already refuses every request while Redis is down.
+		// their lifetime. The cutoff is recorded in Postgres first, so a Redis
+		// failure only logs: the middleware refuses every request while Redis
+		// is down, and the worker replays the cutoff once it is back.
+		at, err := s.recordSessionRevocation(ctx, row.UserID)
+		if err != nil {
+			return Session{}, err
+		}
 		if s.denylist != nil {
-			if err := s.denylist.RevokeSessions(ctx, row.UserID); err != nil {
+			if err := s.denylist.RevokeSessionsAt(ctx, row.UserID, at); err != nil {
 				slog.Error("revoke sessions after refresh token reuse", "error", err, "user_id", row.UserID)
 			}
 		}
