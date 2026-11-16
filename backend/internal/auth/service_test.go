@@ -706,3 +706,63 @@ func TestRevocationsSurviveARedisOutage(t *testing.T) {
 		})
 	}
 }
+
+// TestReuseRevocationDeletesAConcurrentRotation covers a rotation that holds
+// the account row lock while reuse is detected: the reuse revocation waits for
+// it, so the replacement token the rotation commits is deleted too instead of
+// outliving the theft response.
+func TestReuseRevocationDeletesAConcurrentRotation(t *testing.T) {
+	svc, _, pool := newTestService(t)
+	ctx := context.Background()
+	user := verifiedUser(t, svc, pool)
+	if _, err := svc.SignIn(ctx, user.email, user.password); err != nil {
+		t.Fatalf("sign in: %v", err)
+	}
+	var userID uuid.UUID
+	if err := pool.QueryRow(ctx, "SELECT id FROM users WHERE email = $1", user.email).Scan(&userID); err != nil {
+		t.Fatalf("read user id: %v", err)
+	}
+
+	rotation, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin rotation: %v", err)
+	}
+	t.Cleanup(func() { _ = rotation.Rollback(ctx) })
+	if _, err := db.New(rotation).LockUserForRefresh(ctx, userID); err != nil {
+		t.Fatalf("lock user: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := svc.revokeReusedRefreshTokens(ctx, userID)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("reuse revocation finished while a rotation held the account row: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	if _, err := db.New(rotation).CreateRefreshToken(ctx, db.CreateRefreshTokenParams{
+		UserID:    userID,
+		TokenHash: hashRefreshToken(uuid.NewString()),
+		ExpiresAt: time.Now().Add(time.Hour),
+		FamilyID:  uuid.New(),
+	}); err != nil {
+		t.Fatalf("insert replacement: %v", err)
+	}
+	if err := rotation.Commit(ctx); err != nil {
+		t.Fatalf("commit rotation: %v", err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("reuse revocation: %v", err)
+	}
+
+	var remaining int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM refresh_tokens WHERE user_id = $1", userID).Scan(&remaining); err != nil {
+		t.Fatalf("count refresh tokens: %v", err)
+	}
+	if remaining != 0 {
+		t.Fatalf("%d refresh tokens survived the reuse revocation, want 0", remaining)
+	}
+}

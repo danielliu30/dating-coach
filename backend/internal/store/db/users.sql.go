@@ -187,6 +187,34 @@ func (q *Queries) ListSessionRevocationsSince(ctx context.Context, since time.Ti
 	return items, nil
 }
 
+const lockUserForRefresh = `-- name: LockUserForRefresh :one
+SELECT id, email, password_hash, display_name, role, email_verified, created_at, updated_at, deleted_at, dating_styles, phases_strong, phases_working_on, dating_preferences, sessions_revoked_at FROM users WHERE id = $1 FOR UPDATE
+`
+
+// Serialises a refresh-token rotation against a concurrent reuse revocation,
+// which updates the same row before deleting the user's refresh tokens.
+func (q *Queries) LockUserForRefresh(ctx context.Context, id uuid.UUID) (User, error) {
+	row := q.db.QueryRow(ctx, lockUserForRefresh, id)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.PasswordHash,
+		&i.DisplayName,
+		&i.Role,
+		&i.EmailVerified,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.DeletedAt,
+		&i.DatingStyles,
+		&i.PhasesStrong,
+		&i.PhasesWorkingOn,
+		&i.DatingPreferences,
+		&i.SessionsRevokedAt,
+	)
+	return i, err
+}
+
 const recordSessionRevocation = `-- name: RecordSessionRevocation :exec
 UPDATE users
 SET sessions_revoked_at = GREATEST(COALESCE(sessions_revoked_at, '-infinity'::timestamptz), $1::timestamptz)
