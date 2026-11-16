@@ -175,3 +175,22 @@ func TestReplayRevocationsRestoresLostCutoffs(t *testing.T) {
 		t.Fatalf("unexpected announcement %v: replays must not drop sockets opened after the cutoff", msg)
 	}
 }
+
+func TestSignInInTheSignOutSecondPasses(t *testing.T) {
+	issuer := NewTokenIssuer("test-secret")
+	user := uuid.New()
+	cutoff := time.Now()
+	time.Sleep(time.Millisecond)
+	token, _, err := issuer.Issue(user, "a@example.com", RoleUser, ScopeSession, time.Minute)
+	if err != nil {
+		t.Fatalf("issue token: %v", err)
+	}
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	req := httptest.NewRequest(http.MethodGet, "/auth/me", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	Middleware(issuer, nil, fakeRevocations{since: map[uuid.UUID]time.Time{user: cutoff}})(next).ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNoContent)
+	}
+}
