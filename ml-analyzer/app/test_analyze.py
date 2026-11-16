@@ -10,7 +10,8 @@ from pydantic import ValidationError
 from app.config import Settings
 from app.main import app
 from app.schemas import AnalyzeRequest, ImageAnalyzeRequest, ImageRef, Message, Overall, ReviewComment, ReviewSummaryRequest, Segment
-from app.scoring.base import message_range, meta_line, transcript
+from app.scoring.base import message_range
+from app.scoring.base import meta_line, transcript
 from app.scoring.heuristic import HeuristicScorer, reciprocity_patterns, reflection_questions, review_self_messages
 from app.scoring.image import HeuristicImageScorer, build_image_scorer, image_dimensions
 
@@ -487,6 +488,22 @@ def test_brain_renders_all_three_pillars() -> None:
     assert "Never prescribe who the client should date" in agency
     assert "Never mind-read the other person" in agency
     assert "FEEDBACK:" not in agency
+
+
+def test_pillars_are_looked_up_by_stable_key() -> None:
+    """Each pillar has a unique lowercase key; lookups normalise case and keep PILLARS order."""
+    from app.coaching import AGENCY, FEEDBACK, PILLAR_KEYS, PILLARS, SUPPORT, pillar_by_key, pillars_by_keys
+
+    assert PILLAR_KEYS == ("agency", "feedback", "support")
+    assert [p.key for p in PILLARS] == list(PILLAR_KEYS)
+    assert pillar_by_key("agency") is AGENCY
+    assert pillar_by_key(" Feedback ") is FEEDBACK
+    assert pillar_by_key("confidence") is None
+
+    assert pillars_by_keys(["support", "agency", "AGENCY"]) == (AGENCY, SUPPORT)
+    assert pillars_by_keys([]) == ()
+    with pytest.raises(ValueError, match="unknown pillar key 'confidence'"):
+        pillars_by_keys(["feedback", "confidence"])
 
 
 def test_llm_prompt_reviews_only_self_messages_and_never_drafts() -> None:
