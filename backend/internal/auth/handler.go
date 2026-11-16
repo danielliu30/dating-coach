@@ -57,6 +57,7 @@ func (h *Handler) Routes(authenticate func(http.Handler) http.Handler) http.Hand
 		private.Get("/me", h.me)
 		private.Patch("/me", h.updateMe)
 		private.Delete("/me", h.deleteMe)
+		private.Post("/signout", h.signOut)
 		private.With(RequireScope(ScopeSession)).Post("/ws-ticket", h.wsTicket)
 	})
 	return r
@@ -222,6 +223,26 @@ func (h *Handler) deleteMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusAccepted, map[string]string{"status": "deleted"})
+}
+
+// signOut handles POST /signout: it ends the caller's sessions on every
+// device. A denylist outage answers 503 so the client knows to retry.
+func (h *Handler) signOut(w http.ResponseWriter, r *http.Request) {
+	principal, ok := PrincipalFrom(r.Context())
+	if !ok {
+		httpx.Error(w, http.StatusUnauthorized, "unauthenticated")
+		return
+	}
+	if err := h.svc.SignOut(r.Context(), principal.UserID); err != nil {
+		slog.Error("sign out", "error", err, "user_id", principal.UserID)
+		if errors.Is(err, ErrRevocationUnavailable) {
+			httpx.Error(w, http.StatusServiceUnavailable, "could not sign out, try again")
+			return
+		}
+		httpx.Error(w, http.StatusInternalServerError, "could not sign out")
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]string{"status": "signed_out"})
 }
 
 // updateMe handles PATCH /me, replacing the caller's dating styles and phases
