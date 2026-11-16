@@ -21,6 +21,7 @@ def test_segment_rows_carry_meta_line_from_sent_at() -> None:
             "[meta] match_latency_min=12 self_latency_min=3 self_msgs=2 match_msgs=1\n"
             "[0] self: what did you bake?\n[1] match: sourdough\n[2] self: ha",
             0.7,
+            1.0,
         )
     ]
 
@@ -31,4 +32,4 @@ def test_rows_without_sent_at_train_on_plain_transcript() -> None:
         [{"position": 0, "sender": "self", "body": "hey"}, {"position": 1, "sender": "match", "body": "hi"}],
         outcome="kept_talking",
     )
-    assert list(to_segment_rows([example])) == [("[0] self: hey\n[1] match: hi", 0.55)]
+    assert list(to_segment_rows([example])) == [("[0] self: hey\n[1] match: hi", 0.55, 1.0)]
