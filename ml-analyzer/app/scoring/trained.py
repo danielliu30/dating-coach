@@ -18,7 +18,7 @@ from typing import Any, List, Sequence
 from ..coaching import AGENCY_VERSION, enforce_agency
 from ..config import Settings
 from ..schemas import AnalyzeRequest, AnalyzeResponse, Overall, Segment
-from .base import Scorer, align_segments, chunk, clamp, transcript
+from .base import TRANSCRIPT_VERSION, Scorer, align_segments, chunk, clamp, transcript
 from .heuristic import (
     HeuristicScorer,
     SelfMessageReview,
@@ -51,7 +51,7 @@ class TrainedScorer(Scorer):
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.model_dir = Path(settings.model_dir)
-        self.version = f"trained-v2-{self.model_dir.name}+{AGENCY_VERSION}"
+        self.version = f"trained-v2-{self.model_dir.name}+{AGENCY_VERSION}+{TRANSCRIPT_VERSION}"
         self._fallback = HeuristicScorer(settings.segment_size)
         self._model: Any | None = None
         self._tokenizer: Any | None = None
@@ -100,7 +100,7 @@ class TrainedScorer(Scorer):
             for start, end, window in chunk(request.messages, self.settings.segment_size)
         ]
         scored = [window for _, _, window, window_reviews in windows if window_reviews]
-        model_scores = iter(self._predict([transcript(window) for window in scored]) if scored else [])
+        model_scores = iter(self._predict([transcript(window, meta=True) for window in scored]) if scored else [])
 
         segments: List[Segment] = []
         for start, end, _, window_reviews in windows:
