@@ -189,22 +189,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not Path(args.data).is_file():
         print(f"eval_vs_llm: no eval file at {args.data}", file=sys.stderr)
         return 2
-    examples = load_jsonl(args.data, require_consent=not args.include_unconsented)
-    if not examples:
-        print(f"eval_vs_llm: no usable conversations in {args.data}", file=sys.stderr)
-        return 2
-
-    trained = TrainedScorer(replace(settings, backend="trained", model_dir=args.checkpoint))
-    llm = LLMScorer(replace(settings, backend="llm"))
     try:
+        examples = load_jsonl(args.data, require_consent=not args.include_unconsented)
+        if not examples:
+            print(f"eval_vs_llm: no usable conversations in {args.data}", file=sys.stderr)
+            return 2
+        trained = TrainedScorer(replace(settings, backend="trained", model_dir=args.checkpoint))
+        llm = LLMScorer(replace(settings, backend="llm"))
         pairs, fallbacks = asyncio.run(score_all(examples, trained, llm, args.concurrency))
-    except Exception:  # noqa: BLE001 - a crash is "could not evaluate" (2), never a gate verdict (1)
+        out = Path(args.out) if args.out else Path(args.checkpoint) / "eval_vs_llm.jsonl"
+        write_pairs(out, pairs)
+    except Exception:  # noqa: BLE001 - bad data, a crash or unwritable output is "could not evaluate" (2), never 1
         traceback.print_exc()
-        print("eval_vs_llm: scoring failed; the gate was not evaluated", file=sys.stderr)
+        print("eval_vs_llm: could not load, score or write; the gate was not evaluated", file=sys.stderr)
         return 2
 
-    out = Path(args.out) if args.out else Path(args.checkpoint) / "eval_vs_llm.jsonl"
-    write_pairs(out, pairs)
     passed, text = report(pairs, len(examples), fallbacks)
     print(f"eval_vs_llm: data={args.data} checkpoint={args.checkpoint} trained={trained.version} llm={llm.version}")
     print(text)

@@ -193,7 +193,7 @@ def test_main_scores_holdout_and_writes_pairs(monkeypatch: pytest.MonkeyPatch, t
 def test_main_without_data_or_with_crashing_scorer_is_not_a_gate_verdict(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys
 ) -> None:
-    """A missing eval file or a scorer crash exits 2 (not evaluated), never 1 (gate failed)."""
+    """A missing or malformed eval file or a scorer crash exits 2 (not evaluated), never 1 (gate failed)."""
     monkeypatch.setenv("LLM_API_KEY", "test-key")
     eval_vs_llm.get_settings.cache_clear()
 
@@ -210,6 +210,10 @@ def test_main_without_data_or_with_crashing_scorer_is_not_a_gate_verdict(
         assert eval_vs_llm.main(["--checkpoint", str(tmp_path), "--data", str(tmp_path / "missing.jsonl")]) == 2
         assert "no eval file" in capsys.readouterr().err
         assert eval_vs_llm.main(["--checkpoint", str(tmp_path)]) == 2
+        assert "gate was not evaluated" in capsys.readouterr().err
+        malformed = tmp_path / "malformed.jsonl"
+        malformed.write_text("{not json\n", encoding="utf-8")
+        assert eval_vs_llm.main(["--checkpoint", str(tmp_path), "--data", str(malformed)]) == 2
         assert "gate was not evaluated" in capsys.readouterr().err
     finally:
         eval_vs_llm.get_settings.cache_clear()
