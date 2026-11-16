@@ -55,4 +55,4 @@ WHERE sessions_revoked_at > @since::timestamptz;
 -- name: LockUserForRefresh :one
 -- Serialises a refresh-token rotation against a concurrent reuse revocation,
 -- which updates the same row before deleting the user's refresh tokens.
-SELECT * FROM users WHERE id = $1 FOR UPDATE;
+SELECT * FROM users WHERE id = $1 AND deleted_at IS NULL FOR UPDATE;

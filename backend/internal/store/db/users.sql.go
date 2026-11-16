@@ -188,7 +188,7 @@ func (q *Queries) ListSessionRevocationsSince(ctx context.Context, since time.Ti
 }
 
 const lockUserForRefresh = `-- name: LockUserForRefresh :one
-SELECT id, email, password_hash, display_name, role, email_verified, created_at, updated_at, deleted_at, dating_styles, phases_strong, phases_working_on, dating_preferences, sessions_revoked_at FROM users WHERE id = $1 FOR UPDATE
+SELECT id, email, password_hash, display_name, role, email_verified, created_at, updated_at, deleted_at, dating_styles, phases_strong, phases_working_on, dating_preferences, sessions_revoked_at FROM users WHERE id = $1 AND deleted_at IS NULL FOR UPDATE
 `
 
 // Serialises a refresh-token rotation against a concurrent reuse revocation,
