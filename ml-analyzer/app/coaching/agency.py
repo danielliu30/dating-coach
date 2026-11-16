@@ -17,6 +17,11 @@ import re
 from dataclasses import dataclass
 from typing import List, Optional, Pattern, Sequence, Tuple
 
+# Bump whenever ``enforce_agency`` changes which outputs it accepts (patterns,
+# exemptions, rules), so stored results record the acceptance policy they
+# passed. v1: original gate; v2: #140; v3: #148.
+AGENCY_VERSION = "agency-v3"
+
 # Phrases that mean the model drafted a reply for the customer instead of hinting.
 DRAFTING = re.compile(
     r"\b(try (asking|saying|something like)|you could (say|ask|write|reply|respond)|"
@@ -86,9 +91,28 @@ _DIRECTIVE = r"(?:just |should |need to |time to |better to |you can |you could 
 _POLITE = r"(?:(?:please|now|honestly|seriously),? )?"
 _CLAUSE_START = r"(?:^|(?<=[.!?;:]\s)|(?<=\band )|(?<=\bor )|(?<=\bbut )|(?<=\bthen ))"
 _CLAUSE_END = r"(?=\s*(?:[.!?,;:]|$|and\b|or\b))"
+# A directive reported from someone else or posed as a question ("your friends think you should
+# leave them", "you asked whether you should leave them") describes the customer's situation
+# rather than prescribing it. Present-tense reporting verbs also open the coach's own advice
+# ("I think you should leave him"), so those only count as reported without an "I"/"we" subject.
+_REPORTED_ALWAYS = ("whether", "if") + tuple(
+    f"{v}{t}"
+    for v in ("thinks", "thought", "says", "said", "feels", "felt", "believes", "believed",
+              "suggests", "suggested", "asks", "asked", "wonders", "wondered", "writes", "wrote",
+              "mentioned", "told you")
+    for t in ("", " that")
+)
+_REPORTED_UNLESS_FIRST_PERSON = tuple(f"{v}{t}" for v in ("think", "say", "feel", "believe") for t in ("", " that"))
+_NOT_REPORTED = "".join(
+    [rf"(?<!\b{r} you )(?<!\b{r} )" for r in _REPORTED_ALWAYS]
+    + [
+        rf"(?:(?<=\bI {r} you )|(?<=\bwe {r} you )|(?<!\b{r} you ))(?:(?<=\bI {r} )|(?<=\bwe {r} )|(?<!\b{r} ))"
+        for r in _REPORTED_UNLESS_FIRST_PERSON
+    ]
+)
 PRESCRIPTION = re.compile(
     rf"\b({_DIRECTIVE}?(?:drop|dump|ditch|unmatch|ghost) {_MATCH_OBJ}|"
-    rf"{_DIRECTIVE}{_POLITE}(?:leave|block) {_MATCH_OBJ}|"
+    rf"{_NOT_REPORTED}{_DIRECTIVE}{_POLITE}(?:leave|block) {_MATCH_OBJ}|"
     rf"{_CLAUSE_START}{_POLITE}(?:leave|block) {_MATCH_OBJ}{_CLAUSE_END}|"
     rf"(?:you )?(?:shouldn't|should not|don't|do not|mustn't|must not|can't|cannot) "
     r"(?:date|see|pursue|keep seeing|keep talking to|go out with|be with|text|message|chase|trust|wait for|leave|block) "
@@ -112,15 +136,21 @@ PRESCRIPTION = re.compile(
 # Phrases that claim to know why the match replied the way they did (causal explanations,
 # where ``MIND_READING`` covers asserted states). The prompt forbids them outright ("you
 # cannot know that"), so any hit means the model diagnosed the match. ``because`` counts
-# only when it introduces a cause (a pronoun or ``of``), so a bare "because" inside a
-# reflection question does not cost a fallback, and feelings/decisions are only diagnoses
+# only when it introduces a cause (a pronoun or ``of``) or, in a statement whose subject is
+# the match, a noun phrase (``_BECAUSE_NOUN``: "They withdrew because the topic became stale"),
+# so a bare "because" inside a reflection question does not cost a fallback, and feelings/decisions are only diagnoses
 # when attributed to the match (``_MATCH_AUX``: ``_MATCH`` plus optional auxiliaries such as
 # "had" or "probably"), never to the customer ("Were you bored?" is a reflection question).
 _MATCH_AUX = (
     _MATCH + r"( (had|have|has|are|were|is|was|might|may|must|probably|likely|clearly|just|simply|also|then|been|being|feeling))*"
 )
+# Up to six plain words after the match subject, then ``because <determiner>``; the
+# lookahead skips questions, whose sentence ends in "?" before any "." or "!".
+_BECAUSE_NOUN = (
+    r"(?![^.!?]*\?)" + _MATCH_AUX + r"( [\w']+){1,6} because (the|a|an|this|that|these|those|their|his|her|its)"
+)
 DIAGNOSIS = re.compile(
-    r"\b(because (they|she|he|it|you|your|of)|due to|(that|this|which) is why|(the|one) reason (they|she|he|for)|why (they|she|he)|"
+    r"\b(because (they|she|he|it|you|your|of)|" + _BECAUSE_NOUN + r"|due to|(that|this|which) is why|(the|one) reason (they|she|he|for)|why (they|she|he)|"
     r"made it (hard|harder|difficult|tough|easy|easier) for (her|him|them)|" + _MATCH_AUX + r" (lost|lose|losing|been losing) interest|"
     r"(not|wasn't|isn't|weren't) interested|"
     r"(turned?|turning|put|putting|scared|scaring|pushed|pushing|drove|driving) (her|him|them) (off|away)|turn-?off|"
@@ -132,8 +162,9 @@ DIAGNOSIS = re.compile(
 )
 
 # The one citation syntax the prompt mandates, ``Message N ("...")``, up to and including the
-# opening quote (group 1). Citations written any other way are simply not exempted.
-CITATION_START = re.compile(r"message\s+\d+\s*\(\s*([\"\u201c])", re.IGNORECASE)
+# opening quote (group ``quote``); group ``number`` is N. Citations written any other way are
+# simply not exempted.
+CITATION_START = re.compile(r"message\s+(?P<number>\d{1,6})\s*\(\s*(?P<quote>[\"\u201c])", re.IGNORECASE)
 CLOSING_QUOTE = re.compile(r"[\"\u201d]")
 # Shortest quotation that can be exempted from the scan.
 MIN_QUOTE_WORDS = 3
@@ -180,10 +211,13 @@ def enforce_agency(texts: Sequence[str], sources: Sequence[str] = (), match_name
     briefly, so a quoted span is blanked before scanning only when it is
     provably a citation: it is written in the prompt's ``Message N ("...")``
     syntax (``CITATION_START``), is at least ``MIN_QUOTE_WORDS`` long and is,
-    case- and whitespace-insensitively, a substring of one of the ``sources``
-    bodies. Everything else, including unquoted text that happens to echo a
-    short customer message and quoted text the model wrote itself (even when
-    it reuses the customer's words), is checked. A citation written any other
+    case- and whitespace-insensitively, a substring of the cited message's
+    body ``sources[N - 1]``. ``sources`` is indexed by message number, so a
+    message that is not the customer's has a blank slot. A quote attributed to
+    the wrong message, or an ``N`` outside ``sources``, is not exempted and is
+    scanned like any other text. Everything else, including unquoted text that
+    happens to echo a short customer message and quoted text the model wrote
+    itself (even when it reuses the customer's words), is checked. A citation written any other
     way is not exempted, so a customer message that itself sounds like a
     violation can still cause a needless (but safe) fallback.
 
@@ -204,8 +238,10 @@ def strip_citations(text: str, sources: Sequence[str] = ()) -> str:
 
     A span is blanked only when it is written in the prompt's ``Message N
     ("...")`` syntax (``CITATION_START``), is at least ``MIN_QUOTE_WORDS`` long
-    and is, case- and whitespace-insensitively, a substring of one of the
-    ``sources`` bodies; the ``Message N (`` prefix and everything else is kept.
+    and is, case- and whitespace-insensitively, a substring of the cited
+    message's body ``sources[N - 1]`` (``sources`` is indexed by message number;
+    an out-of-range ``N`` blanks nothing); the ``Message N (`` prefix and
+    everything else is kept.
     For a citation whose quote itself contains quotes, the longest closing
     quote that still matches a source wins, so the customer message is exempted
     whole. With no ``sources`` nothing is blanked.
@@ -214,24 +250,26 @@ def strip_citations(text: str, sources: Sequence[str] = ()) -> str:
 
 
 def _normalise_sources(sources: Sequence[str]) -> List[str]:
-    """``squash`` every non-blank source once (apostrophes folded), so a batch of texts can be stripped without re-normalising per text."""
-    return [squash(s.translate(_APOSTROPHES)) for s in sources if s.strip()]
+    """``squash`` every source once (apostrophes folded), keeping each at its index so ``Message N`` still maps to ``[N - 1]``."""
+    return [squash(s.translate(_APOSTROPHES)) for s in sources]
 
 
 def _strip_normalised_citations(text: str, normalised_sources: Sequence[str]) -> str:
     """``strip_citations`` for sources already passed through ``_normalise_sources``."""
 
-    def citation_end(start: int) -> Optional[int]:
+    def citation_end(start: int, source: str) -> Optional[int]:
         for closing in reversed(list(CLOSING_QUOTE.finditer(text, start + 1))):
             inner = squash(text[start + 1 : closing.start()].translate(_APOSTROPHES))
-            if len(inner.split()) >= MIN_QUOTE_WORDS and any(inner in s for s in normalised_sources):
+            if len(inner.split()) >= MIN_QUOTE_WORDS and inner in source:
                 return closing.end()
         return None
 
     kept, cursor = [], 0
     for match in CITATION_START.finditer(text):
-        start = match.start(1)
-        end = citation_end(start) if start >= cursor else None
+        start = match.start("quote")
+        number = int(match.group("number"))
+        in_range = 1 <= number <= len(normalised_sources)
+        end = citation_end(start, normalised_sources[number - 1]) if in_range and start >= cursor else None
         if end is None:
             continue
         kept.append(text[cursor:start] + " ")

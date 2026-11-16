@@ -216,6 +216,32 @@ describe('ChatSocket', () => {
     ]);
   });
 
+  it('does not replay a flushed send the server rejected when it reconnects again', async () => {
+    const onEvent = jest.fn();
+    const socket = new ChatSocket('t1', () => 'tok', { onEvent });
+    socket.connect();
+    latest().open();
+    latest().serverClose();
+    await flush();
+
+    socket.send('into a closed thread', 'c1');
+    jest.advanceTimersByTime(1000);
+    const flushed = latest();
+    flushed.open();
+    expect(flushed.send).toHaveBeenCalledTimes(1);
+
+    flushed.receive({ type: 'error', client_id: 'c1', body: 'thread is closed' });
+    expect(onEvent).toHaveBeenCalledWith({ type: 'error', client_id: 'c1', body: 'thread is closed' });
+
+    flushed.serverClose();
+    await flush();
+    jest.advanceTimersByTime(1000);
+    const again = latest();
+    expect(again).not.toBe(flushed);
+    again.open();
+    expect(again.send).not.toHaveBeenCalled();
+  });
+
   it("puts the caller's client id on the message frame and keeps it through the outbox", async () => {
     const socket = new ChatSocket('t1', () => 'tok', { onEvent: jest.fn() });
     socket.connect();
@@ -283,7 +309,7 @@ describe('ChatSocket', () => {
     await flush();
     jest.advanceTimersByTime(60_000);
 
-    expect(threadMessages).toHaveBeenCalledWith('t1', 1);
+    expect(threadMessages).toHaveBeenCalledWith('t1', 1, { renew: false });
     expect(FakeSocket.instances).toHaveLength(1);
     expect(onStatus).toHaveBeenLastCalledWith('closed');
     socket.connect();
@@ -331,6 +357,21 @@ describe('ChatSocket', () => {
     await flush();
     jest.advanceTimersByTime(1000);
     expect(FakeSocket.instances).toHaveLength(2);
+  });
+
+  it('probes the thread only on attempts due a renewal', async () => {
+    new ChatSocket('t1', () => 'tok', { onEvent: jest.fn() }).connect();
+
+    for (let attempt = 1; attempt <= 6; attempt += 1) {
+      latest().serverClose();
+      await flush();
+      jest.advanceTimersByTime(10_000);
+    }
+    expect(threadMessages).toHaveBeenCalledTimes(1);
+
+    latest().serverClose();
+    await flush();
+    expect(threadMessages).toHaveBeenCalledTimes(2);
   });
 
   it('does not probe the thread when an opened socket drops', async () => {

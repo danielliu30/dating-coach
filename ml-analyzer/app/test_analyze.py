@@ -422,7 +422,10 @@ def test_brain_renders_all_three_pillars() -> None:
     """The brain renders AGENCY, FEEDBACK and SUPPORT with every principle, and is versioned."""
     from app.coaching import AGENCY, BRAIN_VERSION, FEEDBACK, PILLARS, SUPPORT, render_pillars
 
+    from app.coaching import AGENCY_VERSION
+
     assert BRAIN_VERSION.startswith("brain-v")
+    assert AGENCY_VERSION.startswith("agency-v")
     assert PILLARS == (AGENCY, FEEDBACK, SUPPORT)
 
     text = render_pillars()
@@ -438,6 +441,22 @@ def test_brain_renders_all_three_pillars() -> None:
     assert "Never prescribe who the client should date" in agency
     assert "Never mind-read the other person" in agency
     assert "FEEDBACK:" not in agency
+
+
+def test_pillars_are_looked_up_by_stable_key() -> None:
+    """Each pillar has a unique lowercase key; lookups normalise case and keep PILLARS order."""
+    from app.coaching import AGENCY, FEEDBACK, PILLAR_KEYS, PILLARS, SUPPORT, pillar_by_key, pillars_by_keys
+
+    assert PILLAR_KEYS == ("agency", "feedback", "support")
+    assert [p.key for p in PILLARS] == list(PILLAR_KEYS)
+    assert pillar_by_key("agency") is AGENCY
+    assert pillar_by_key(" Feedback ") is FEEDBACK
+    assert pillar_by_key("confidence") is None
+
+    assert pillars_by_keys(["support", "agency", "AGENCY"]) == (AGENCY, SUPPORT)
+    assert pillars_by_keys([]) == ()
+    with pytest.raises(ValueError, match="unknown pillar key 'confidence'"):
+        pillars_by_keys(["feedback", "confidence"])
 
 
 def test_llm_prompt_reviews_only_self_messages_and_never_drafts() -> None:
@@ -480,7 +499,7 @@ def test_llm_prompt_reviews_only_self_messages_and_never_drafts() -> None:
 
 def test_llm_prompt_is_composed_from_the_brain() -> None:
     """The system prompt embeds all three rendered pillars and the scorer's version carries BRAIN_VERSION."""
-    from app.coaching import BRAIN_VERSION, PILLARS, render_pillars
+    from app.coaching import AGENCY_VERSION, BRAIN_VERSION, PILLARS, render_pillars
     from app.config import Settings
     from app.scoring.llm import SYSTEM_PROMPT, LLMScorer
 
@@ -496,12 +515,12 @@ def test_llm_prompt_is_composed_from_the_brain() -> None:
         llm_timeout=1.0, model_dir="", segment_size=2,
     )
     scorer = LLMScorer(settings)
-    assert scorer.version == f"llm-openai-m+{BRAIN_VERSION}"
+    assert scorer.version == f"llm-openai-m+{BRAIN_VERSION}+{AGENCY_VERSION}"
     good = {
         "segments": [{"start_position": 0, "end_position": 1, "engagement_score": 0.7, "comment": "Message 1 drew a detailed reply."}],
         "overall": {"engagement_score": 0.7, "summary": "Landing well.", "strengths": [], "improvements": []},
     }
-    assert scorer._parse(json.dumps(good), [(0, 1)]).model_version.endswith(BRAIN_VERSION)
+    assert scorer._parse(json.dumps(good), [(0, 1)]).model_version.endswith(f"+{BRAIN_VERSION}+{AGENCY_VERSION}")
 
 
 def test_enforce_agency_is_the_shared_drafting_gate() -> None:
@@ -513,7 +532,7 @@ def test_enforce_agency_is_the_shared_drafting_gate() -> None:
     assert llm.enforce_agency is enforce_agency
 
     sources = ["You could say I'm obsessed with climbing, but lately I mostly stay home"]
-    enforce_agency(['Message 3 ("You could say I\'m obsessed with climbing") got no reply.'], sources)
+    enforce_agency(['Message 1 ("You could say I\'m obsessed with climbing") got no reply.'], sources)
     enforce_agency(["Message 3 did not invite the match to respond with much detail."])
     with pytest.raises(ValueError, match="^llm drafted a reply for the customer"):
         enforce_agency(["Fine so far.", "Try asking: What are you passionate about?"])
@@ -577,7 +596,7 @@ def test_enforce_agency_rejects_mind_reading_and_prescription_but_passes_reflect
     with pytest.raises(ValueError, match="^llm mind-read the match"):
         enforce_agency(["J.J. is clearly not interested in you."], match_name="J.J.")
     # A curly-quoted citation of a straight-quoted customer message is still exempt.
-    enforce_agency(['Message 2 (\u201cDon\u2019t text her again\u201d) drew no reply.'], ["Don't text her again"])
+    enforce_agency(['Message 1 (\u201cDon\u2019t text her again\u201d) drew no reply.'], ["Don't text her again"])
 
     for text in (
         "Drop them.",
@@ -669,6 +688,35 @@ def test_enforce_agency_rejects_mind_reading_and_prescription_but_passes_reflect
     enforce_agency(prose)
 
 
+def test_enforce_agency_passes_reported_leave_and_block_but_rejects_direct_ones() -> None:
+    """A leave/block directive reported from someone else or asked as a question is description, not prescription."""
+    from app.coaching import enforce_agency
+
+    enforce_agency(
+        [
+            "You wrote that your friends think you should leave them.",
+            "You asked whether you should leave them.",
+            "Your friends think that you should leave them; what do your own messages show you?",
+            "Your sister said you need to block him.",
+            "You wonder if you could leave them.",
+            "You think you should leave him, but what did Message 3 show you?",
+            "You asked whether you should leave Sam.",
+        ],
+        match_name="Sam",
+    )
+    for text in (
+        "You should leave them.",
+        "I think you should leave him.",
+        "We think you need to block her.",
+        "I think that you should leave them.",
+        "I believe you could leave them.",
+        "Honestly, you should leave him.",
+        "Your friends are right, you should leave them.",
+    ):
+        with pytest.raises(ValueError, match="^llm prescribed the customer's dating life"):
+            enforce_agency([text])
+
+
 def test_crowd_opinions_are_all_rejected_by_the_brain() -> None:
     """Every crowd-style opinion is a violation: the brain rejects online advice instead of imitating it."""
     from app.coaching import enforce_agency
@@ -704,7 +752,7 @@ def test_llm_parse_falls_back_on_any_agency_violation() -> None:
             scorer._parse(json.dumps(bad), boundaries)
 
     # A cited customer message that itself sounds like a violation is still exempt.
-    sources = ["honestly she's not into me anymore lol"]
+    sources = ["", "honestly she's not into me anymore lol"]
     cited = dict(good, overall=dict(good["overall"], improvements=['Message 2 ("she\'s not into me anymore") drew no reply.']))
     assert scorer._parse(json.dumps(cited), boundaries, sources).overall.improvements
 
@@ -736,6 +784,8 @@ def test_llm_parse_rejects_drafted_replies() -> None:
             scorer._parse(json.dumps(worse), boundaries)
 
     sources = [
+        "",
+        "",
         "You could say I'm obsessed with climbing, but lately I mostly stay home",
         'She said "you could ask him about work"',
         "say",
@@ -808,6 +858,9 @@ def test_llm_parse_rejects_diagnosing_why_the_match_replied() -> None:
         "They had decided not to continue.",
         "They are losing interest as the thread goes on.",
         "She has been feeling bored since Message 3.",
+        "They withdrew because the topic became stale.",
+        "She went quiet after Message 3 because the plan was vague.",
+        "Your match stopped replying because a question felt too personal.",
     )
     for field in ("summary", "improvements", "reflection_questions", "patterns", "strengths"):
         for diagnosis in diagnoses:
@@ -819,7 +872,7 @@ def test_llm_parse_rejects_diagnosing_why_the_match_replied() -> None:
     with pytest.raises(ValueError, match="^llm (diagnosed why the match replied|mind-read the match)"):
         scorer._parse(json.dumps(bad_comment), boundaries)
 
-    sources = ["I only ask because you seem busy every weekend"]
+    sources = ["", "I only ask because you seem busy every weekend"]
     cited = 'Message 2 ("I only ask because you seem busy") drew a one-word reply.'
     fine = dict(good, overall=dict(good["overall"], improvements=[cited]))
     assert scorer._parse(json.dumps(fine), boundaries, sources).overall.improvements == [cited]
@@ -837,16 +890,25 @@ def test_llm_parse_rejects_diagnosing_why_the_match_replied() -> None:
         "Were you bored by this exchange, or did you want to continue?",
         "Did you lose interest before they did?",
         "You decided not to follow up after Message 6.",
+        "Was it because the topic became stale?",
+        "Did they go quiet because the plan felt vague, or did you stop asking?",
+        "The topic became stale because the questions repeated.",
+        "You asked again because the first question got no reply.",
     ):
         ok = dict(good, overall=dict(good["overall"], patterns=[outcome_only]))
         assert scorer._parse(json.dumps(ok), boundaries).overall.patterns == [outcome_only]
+
+    from app.coaching import enforce_agency
+
+    with pytest.raises(ValueError, match="^llm diagnosed why the match replied"):
+        enforce_agency(["Sam withdrew because the topic became stale."], match_name="Sam")
 
 
 def test_strip_citations_blanks_only_provable_customer_quotes() -> None:
     """``strip_citations`` blanks ``Message N ("...")`` spans that match a source and leaves everything else."""
     from app.coaching import strip_citations
 
-    sources = ["You could say I'm obsessed with climbing", 'She said "you could ask him about work"']
+    sources = ["", "", "You could say I'm obsessed with climbing", 'She said "you could ask him about work"']
     assert strip_citations('Message 3 ("You could say I\'m obsessed") got no reply.', sources) == "Message 3 ( ) got no reply."
     assert (
         strip_citations('Message 4 ("She said "you could ask him about work"") stalled.', sources)
@@ -866,6 +928,27 @@ def test_strip_citations_blanks_only_provable_customer_quotes() -> None:
     assert strip_citations('Message 3 ("You could say I\'m obsessed") got no reply.') == (
         'Message 3 ("You could say I\'m obsessed") got no reply.'
     )
+
+
+def test_citation_exemption_checks_only_the_cited_message() -> None:
+    """A quote is exempted only against ``sources[N - 1]``; a wrong or out-of-range ``N`` is scanned like any text."""
+    from app.coaching import enforce_agency, strip_citations
+
+    sources = ["", "", "You could say I'm obsessed with climbing", "Sounds fun, what trail was it?"]
+    quote = '("You could say I\'m obsessed with climbing") got no reply.'
+
+    assert strip_citations(f"Message 3 {quote}", sources) == "Message 3 ( ) got no reply."
+    enforce_agency([f"Message 3 {quote}"], sources)
+
+    for wrong in (2, 4):
+        assert strip_citations(f"Message {wrong} {quote}", sources) == f"Message {wrong} {quote}"
+        with pytest.raises(ValueError, match="^llm drafted a reply"):
+            enforce_agency([f"Message {wrong} {quote}"], sources)
+
+    for out_of_range in (0, 5, 999999, 10**7):
+        assert strip_citations(f"Message {out_of_range} {quote}", sources) == f"Message {out_of_range} {quote}"
+        with pytest.raises(ValueError, match="^llm drafted a reply"):
+            enforce_agency([f"Message {out_of_range} {quote}"], sources)
 
 
 def test_llm_parse_reads_and_guards_reflection_fields() -> None:

@@ -31,10 +31,19 @@ review tracks have their own prompts and are not yet wired to the brain):
   honest and direct but non-directive; point to a human coach when that is the
   better help.
 
+Each pillar carries a stable lowercase `key` (`agency`, `feedback`,
+`support`; `PILLAR_KEYS`) that clients use to name it; look pillars up with
+`pillar_by_key` / `pillars_by_keys`. Keys never change once published, even if
+a pillar's name or principles are reworded.
+
 The LLM `SYSTEM_PROMPT` is composed from the rendered pillars
 (`render_pillars()`), not written by hand, and `BRAIN_VERSION` is appended to
-`model_version` (e.g. `llm-openai-gpt-4o+brain-v1`) so every stored result is
-traceable to the philosophy revision that produced it.
+`model_version` together with `AGENCY_VERSION` (e.g.
+`llm-openai-gpt-4o+brain-v1+agency-v3`) so every stored result is traceable to
+both the philosophy revision and the enforcement policy that produced it. Bump
+`BRAIN_VERSION` (`app/coaching/brain.py`) when a pillar's principles change, and
+`AGENCY_VERSION` (`app/coaching/agency.py`) when the `enforce_agency` gate
+changes which outputs it accepts.
 
 The model generates its own feedback from this brain. What online forums or
 Reddit would say is never a target to match and is never fed into or copied into

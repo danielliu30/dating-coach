@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 import httpx
 
-from ..coaching import BRAIN_VERSION, enforce_agency, render_pillars
+from ..coaching import AGENCY_VERSION, BRAIN_VERSION, enforce_agency, render_pillars
 from ..config import Settings
 from ..schemas import AnalyzeRequest, AnalyzeResponse, Message, Overall, Segment
 from .base import Scorer, align_segments, chunk, clamp, transcript
@@ -97,7 +97,7 @@ class LLMScorer(Scorer):
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self.version = f"llm-{settings.llm_provider}-{settings.llm_model}+{BRAIN_VERSION}"
+        self.version = f"llm-{settings.llm_provider}-{settings.llm_model}+{BRAIN_VERSION}+{AGENCY_VERSION}"
         self._fallback = HeuristicScorer(settings.segment_size)
 
     async def analyze(self, request: AnalyzeRequest) -> AnalyzeResponse:
@@ -106,9 +106,7 @@ class LLMScorer(Scorer):
 
         try:
             raw = await self._complete(prompt)
-            return self._parse(
-                raw, boundaries, [m.body for m in request.messages if m.sender == "self"], request.match_name
-            )
+            return self._parse(raw, boundaries, citation_sources(request.messages), request.match_name)
         except Exception:  # noqa: BLE001 - degrade instead of failing the job
             logger.exception("llm scoring failed, falling back to heuristic scorer")
             response = await self._fallback.analyze(request)
@@ -230,6 +228,20 @@ def _string_list(overall: Dict[str, Any], key: str, limit: int = 5, max_chars: i
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
         raise ValueError(f"llm returned overall.{key} that is not a list of strings: {str(value)[:80]!r}")
     return [item[:max_chars] for item in value][:limit]
+
+
+def citation_sources(messages: Sequence[Message]) -> List[str]:
+    """Return the bodies ``enforce_agency`` checks citations against, indexed by message number.
+
+    Slot ``N - 1`` holds the body of the customer's message at ``position`` ``N - 1``
+    (the prompt's ``Message N``); match messages and positions beyond the
+    message count stay blank, so citing them earns no exemption.
+    """
+    bodies = [""] * len(messages)
+    for m in messages:
+        if m.sender == "self" and m.position < len(bodies):
+            bodies[m.position] = m.body
+    return bodies
 
 
 def self_message_digest(messages: Sequence[Message]) -> str:
