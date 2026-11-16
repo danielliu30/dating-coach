@@ -61,6 +61,7 @@ def test_correlation_is_nan_for_constant_vectors() -> None:
     # 0.1 * 3 / 3 != 0.1 in floats; the rounding must not fake variance.
     assert math.isnan(pearson([0.1, 0.1, 0.1], [0.1, 0.1, 0.1]))
     assert math.isnan(pearson([0.1, 0.1, 0.1], [0.2, 0.5, 0.9]))
+    assert math.isnan(pearson([0.0, 1e-200], [0.0, 1.0]))
 
 
 def test_cohen_kappa_matches_textbook_example() -> None:
