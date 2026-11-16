@@ -478,6 +478,27 @@ describe('ChatSocket', () => {
     expect(onStatus).toHaveBeenLastCalledWith('closed');
   });
 
+  it('gives up after 30 consecutive ticket failures and rejects queued sends', async () => {
+    wsTicket.mockRejectedValue(new TypeError('Failed to fetch'));
+    const onEvent = jest.fn();
+    const socket = new ChatSocket('t1', () => 'tok', { onEvent });
+    socket.connect();
+    await flush();
+    socket.send('queued', 'c1');
+
+    for (let attempt = 1; attempt <= 31; attempt += 1) {
+      jest.advanceTimersByTime(10_000);
+      await flush();
+    }
+    expect(wsTicket).toHaveBeenCalledTimes(31);
+    expect(onEvent).toHaveBeenCalledWith({ type: 'error', body: 'chat is no longer available', client_id: 'c1' });
+
+    jest.advanceTimersByTime(60_000);
+    await flush();
+    expect(wsTicket).toHaveBeenCalledTimes(31);
+    expect(FakeSocket.instances).toHaveLength(0);
+  });
+
   it('an opened connection resets the attempt cap', async () => {
     new ChatSocket('t1', () => 'tok', { onEvent: jest.fn() }).connect();
     await flush();

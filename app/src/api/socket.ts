@@ -73,6 +73,10 @@ export class ChatSocket {
       // retry; a signed-out session leaves token() empty and stops the loop.
       if (this.closed) return;
       this.handlers.onStatus?.('closed');
+      if (this.attempts >= maxAttempts) {
+        this.end();
+        return;
+      }
       this.attempts += 1;
       this.retry = setTimeout(() => void this.connect(), Math.min(1000 * this.attempts, 10_000));
       return;
