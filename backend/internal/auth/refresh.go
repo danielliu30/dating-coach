@@ -202,6 +202,12 @@ func (s *Service) revokeReusedRefreshTokens(ctx context.Context, userID uuid.UUI
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	q := s.queries.WithTx(tx)
+	// The cutoff is read only once the lock is held, so it postdates the access
+	// token any rotation that held the row has just minted. A deleted account
+	// matches no row; its deleted_at already refuses every token.
+	if _, err := q.LockUserForRefresh(ctx, userID); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return time.Time{}, fmt.Errorf("lock user: %w", err)
+	}
 	at := time.Now().Truncate(time.Microsecond)
 	if err := q.RecordSessionRevocation(ctx, db.RecordSessionRevocationParams{ID: userID, RevokedAt: at}); err != nil {
 		return time.Time{}, fmt.Errorf("record session revocation: %w", err)

@@ -732,14 +732,18 @@ func TestReuseRevocationDeletesAConcurrentRotation(t *testing.T) {
 		t.Fatalf("lock user: %v", err)
 	}
 
-	done := make(chan error, 1)
+	type revocation struct {
+		at  time.Time
+		err error
+	}
+	done := make(chan revocation, 1)
 	go func() {
-		_, err := svc.revokeReusedRefreshTokens(ctx, userID)
-		done <- err
+		at, err := svc.revokeReusedRefreshTokens(ctx, userID)
+		done <- revocation{at, err}
 	}()
 	select {
-	case err := <-done:
-		t.Fatalf("reuse revocation finished while a rotation held the account row: %v", err)
+	case r := <-done:
+		t.Fatalf("reuse revocation finished while a rotation held the account row: %v", r.err)
 	case <-time.After(200 * time.Millisecond):
 	}
 
@@ -751,11 +755,16 @@ func TestReuseRevocationDeletesAConcurrentRotation(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("insert replacement: %v", err)
 	}
+	accessIssuedAt := time.Now()
 	if err := rotation.Commit(ctx); err != nil {
 		t.Fatalf("commit rotation: %v", err)
 	}
-	if err := <-done; err != nil {
-		t.Fatalf("reuse revocation: %v", err)
+	r := <-done
+	if r.err != nil {
+		t.Fatalf("reuse revocation: %v", r.err)
+	}
+	if r.at.Before(accessIssuedAt) {
+		t.Fatalf("cutoff %v precedes the access token the rotation minted at %v", r.at, accessIssuedAt)
 	}
 
 	var remaining int
