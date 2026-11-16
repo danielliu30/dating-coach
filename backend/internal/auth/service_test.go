@@ -339,6 +339,36 @@ func verifiedUser(t *testing.T, svc *Service, pool *pgxpool.Pool) credentials {
 	return user
 }
 
+// TestVerifyEmailRefusesARevokedBearer covers the public verify route, which
+// mints a session for a verified account's own bearer: a token revoked by
+// sign-out must not be exchanged for a fresh one.
+func TestVerifyEmailRefusesARevokedBearer(t *testing.T) {
+	svc, _, pool := newTestService(t)
+	ctx := context.Background()
+
+	user := verifiedUser(t, svc, pool)
+	session, err := svc.SignIn(ctx, user.email, user.password)
+	if err != nil {
+		t.Fatalf("sign in: %v", err)
+	}
+	claims, err := svc.issuer.Parse(session.Token)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	userID, _ := claims.UserID()
+	time.Sleep(10 * time.Millisecond)
+	if err := svc.denylist.RevokeSessions(ctx, userID); err != nil {
+		t.Fatalf("revoke sessions: %v", err)
+	}
+	got, err := svc.VerifyEmail(ctx, user.email, "", session.Token)
+	if err != nil {
+		t.Fatalf("verify email: %v", err)
+	}
+	if got.Token != "" || got.RefreshToken != "" {
+		t.Fatalf("verify email with a revoked bearer issued a session")
+	}
+}
+
 // TestSignInRefusesAccountPendingDeletion covers the window between requesting
 // a deletion and the worker removing the row: the credentials still match, but
 // sign-in must not hand out a session that would outlive the revocation if the
