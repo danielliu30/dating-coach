@@ -58,7 +58,9 @@ class TrainingExample:
             conversation_id=payload["conversation_id"],
             platform=payload.get("platform", "unknown"),
             messages=[LabeledMessage(**m) for m in payload["messages"]],
-            segments=[LabeledSegment(**s) for s in payload.get("segments", [])],
+            # Rows labelled before the backend normalised segment_labels hold
+            # jsonb null, which exports as "segments": null.
+            segments=[LabeledSegment(**s) for s in payload.get("segments") or []],
             reply_received=payload.get("reply_received"),
             outcome=payload.get("outcome"),
             consented=bool(payload.get("consented", False)),
@@ -133,6 +135,8 @@ def deduplicate(examples: Sequence[TrainingExample]) -> List[TrainingExample]:
     the cluster's first copy in the output.
     """
     slots: List[TrainingExample | None] = []
+    # Input index of each slot's representative, so merges pick the first labeled copy in input order.
+    rep_order: List[int] = []
     parent: List[int] = []
     by_hash: Dict[str, int] = {}
     by_user: Dict[str, List[Tuple[int, FrozenSet[Tuple[str, ...]]]]] = {}
@@ -144,7 +148,7 @@ def deduplicate(examples: Sequence[TrainingExample]) -> List[TrainingExample]:
             index = parent[index]
         return index
 
-    for example in examples:
+    for order, example in enumerate(examples):
         normalized = _normalized_transcript(example)
         digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
         shingles = _shingles(normalized)
@@ -165,13 +169,16 @@ def deduplicate(examples: Sequence[TrainingExample]) -> List[TrainingExample]:
         if not matches:
             index = len(slots)
             slots.append(example)
+            rep_order.append(order)
             parent.append(index)
         else:
             # A copy matching several clusters bridges them: merge into the
             # earliest, keeping the first human-labeled representative if any.
             index = min(matches)
-            candidates = [slots[r] for r in sorted(matches)] + [example]
-            slots[index] = next((c for c in candidates if c is not None and c.segments), slots[index])
+            candidates = sorted([(rep_order[r], slots[r]) for r in matches] + [(order, example)], key=lambda c: c[0])
+            labeled = next((c for c in candidates if c[1] is not None and c[1].segments), None)
+            if labeled is not None:
+                rep_order[index], slots[index] = labeled
             for other_root in matches - {index}:
                 parent[other_root] = index
                 slots[other_root] = None
