@@ -148,19 +148,11 @@ func (s *Service) Refresh(ctx context.Context, raw string) (Session, error) {
 	defer func() { _ = tx.Rollback(ctx) }()
 	q := s.queries.WithTx(tx)
 
-	// The update is the rotation: it only matches a token that is still unspent
-	// and unexpired, so two concurrent requests cannot both be served.
-	rows, err := q.UseRefreshToken(ctx, row.ID)
-	if err != nil {
-		return Session{}, fmt.Errorf("spend refresh token: %w", err)
-	}
-	if rows == 0 {
-		return Session{}, ErrInvalidRefreshToken
-	}
-
 	// Locking the account row orders this rotation against a concurrent reuse
 	// revocation: either that revocation's delete sees the replacement token
-	// committed below, or this read sees its cutoff and refuses.
+	// committed below, or this read sees its cutoff and refuses. It is taken
+	// before the token row, the same order the revocation locks them in, so the
+	// two cannot deadlock.
 	user, err := q.LockUserForRefresh(ctx, row.UserID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -171,6 +163,16 @@ func (s *Service) Refresh(ctx context.Context, raw string) (Session, error) {
 	if user.SessionsRevokedAt != nil && !row.IssuedAt.After(*user.SessionsRevokedAt) {
 		return Session{}, ErrInvalidRefreshToken
 	}
+	// The update is the rotation: it only matches a token that is still unspent
+	// and unexpired, so two concurrent requests cannot both be served.
+	rows, err := q.UseRefreshToken(ctx, row.ID)
+	if err != nil {
+		return Session{}, fmt.Errorf("spend refresh token: %w", err)
+	}
+	if rows == 0 {
+		return Session{}, ErrInvalidRefreshToken
+	}
+
 	session, err := s.openSession(ctx, q, user, row.FamilyID)
 	if err != nil {
 		return Session{}, err
