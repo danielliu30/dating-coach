@@ -1,4 +1,4 @@
-import { api } from './client';
+import { ApiError, api } from './client';
 import { wsURL } from '../config';
 import type { ChatEvent } from './types';
 
@@ -12,6 +12,16 @@ import type { ChatEvent } from './types';
  */
 const attemptsPerRenewal = 6;
 
+/**
+ * Consecutive attempts without the socket ever opening before the retries stop.
+ * A backstop for failures the thread probe below cannot classify; at the 10s
+ * backoff ceiling this is a few minutes of retrying.
+ */
+const maxAttempts = 30;
+
+// HTTP statuses for a thread the server will never serve again.
+const GONE = new Set([404, 410]);
+
 // Close code the API uses when it drops a socket whose session it will not serve
 // any more, whether the account was revoked or the token behind it expired.
 const POLICY_VIOLATION = 1008;
@@ -23,7 +33,8 @@ interface Handlers {
 
 /**
  * Thin WebSocket wrapper for a chat thread. Reconnects with linear backoff so a
- * backgrounded phone or a redeployed API does not silently break the chat.
+ * backgrounded phone or a redeployed API does not silently break the chat, and
+ * gives up once the thread is gone or after maxAttempts failed tries.
  *
  * The access token is read per attempt rather than captured once: it lives for
  * minutes, and the handshake carries it, so a socket holding the value it was
@@ -33,6 +44,8 @@ export class ChatSocket {
   private socket: WebSocket | null = null;
   private attempts = 0;
   private closed = false;
+  /** Set when the retries gave up rather than the caller closing the socket. */
+  private ended = false;
   private opened = false;
   private retry: ReturnType<typeof setTimeout> | null = null;
   private failures = 0;
@@ -84,7 +97,8 @@ export class ChatSocket {
    * be an expired access token, and no HTTP 401 exists here to renew it, so the
    * shared renewal runs first. Only a refused refresh token ends the retries; a
    * renewal that merely could not be reached is treated like any other outage
-   * and retried with backoff.
+   * and retried with backoff. A thread the probe reports gone, or maxAttempts
+   * attempts in a row, also end them.
    *
    * Renewals are spaced every attemptsPerRenewal failures, so a handshake the
    * server refuses for its own reasons cannot turn the retry loop into a
@@ -104,9 +118,50 @@ export class ChatSocket {
       }
     }
     if (this.closed) return;
+    if (unopened && (await this.threadGone())) {
+      this.end();
+      return;
+    }
+    if (this.closed) return;
+    if (this.attempts >= maxAttempts) {
+      this.end();
+      return;
+    }
     this.attempts += 1;
     const delay = Math.min(1000 * this.attempts, 10_000);
     this.retry = setTimeout(() => this.connect(), delay);
+  }
+
+  /**
+   * A failed handshake hides its HTTP status, so a thread that is gone (and
+   * whose socket route 404s) looks like an outage. The thread's history uses
+   * the same lookup as the socket route, so its status stands in for the
+   * handshake's. Anything other than a definite 404/410 is retried as before.
+   */
+  private async threadGone(): Promise<boolean> {
+    try {
+      await api.threadMessages(this.threadID, 1);
+      return false;
+    } catch (err) {
+      return err instanceof ApiError && GONE.has(err.status);
+    }
+  }
+
+  /**
+   * Gives up on the thread. Queued messages, and any sent afterwards, are
+   * rejected like a server-refused send so the caller does not keep them
+   * pending for a reconnect that will never come.
+   */
+  private end(): void {
+    const pending = this.outbox;
+    this.close();
+    this.ended = true;
+    this.handlers.onStatus?.('closed');
+    for (const event of pending) this.reject(event);
+  }
+
+  private reject(event: ChatEvent): void {
+    this.handlers.onEvent({ type: 'error', body: 'chat is no longer available', client_id: event.client_id });
   }
 
   /**
@@ -131,7 +186,9 @@ export class ChatSocket {
       this.socket.send(JSON.stringify(event));
       return;
     }
-    if (event.type === 'message') this.outbox.push(event);
+    if (event.type !== 'message') return;
+    if (this.ended) this.reject(event);
+    else this.outbox.push(event);
   }
 
   private flush(): void {

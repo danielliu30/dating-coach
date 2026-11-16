@@ -1,13 +1,15 @@
 import { wsURL } from '../config';
-import { api } from './client';
+import { ApiError, api } from './client';
 import { ChatSocket } from './socket';
 import type { ChatEvent } from './types';
 
 jest.mock('./client', () => ({
-  api: { renewSession: jest.fn() },
+  ApiError: jest.requireActual<typeof import('./client')>('./client').ApiError,
+  api: { renewSession: jest.fn(), threadMessages: jest.fn() },
 }));
 
 const renewSession = api.renewSession as jest.MockedFunction<typeof api.renewSession>;
+const threadMessages = api.threadMessages as jest.MockedFunction<typeof api.threadMessages>;
 
 /** Stand-in for the browser WebSocket that lets a test drive open/message/close by hand. */
 class FakeSocket {
@@ -63,6 +65,8 @@ beforeEach(() => {
   FakeSocket.instances = [];
   globalThis.WebSocket = FakeSocket as unknown as typeof WebSocket;
   renewSession.mockResolvedValue('renewed');
+  threadMessages.mockReset();
+  threadMessages.mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -267,6 +271,113 @@ describe('ChatSocket', () => {
     jest.advanceTimersByTime(1000);
 
     expect(latest().url).toBe(wsURL('/chat/threads/t1/ws', 'second'));
+  });
+
+  it.each([404, 410])('stops retrying when the thread probe answers %i after an unopened failure', async (status) => {
+    threadMessages.mockRejectedValue(new ApiError(status, 'not found'));
+    const onStatus = jest.fn();
+    const socket = new ChatSocket('t1', () => 'tok', { onEvent: jest.fn(), onStatus });
+    socket.connect();
+
+    latest().serverClose();
+    await flush();
+    jest.advanceTimersByTime(60_000);
+
+    expect(threadMessages).toHaveBeenCalledWith('t1', 1);
+    expect(FakeSocket.instances).toHaveLength(1);
+    expect(onStatus).toHaveBeenLastCalledWith('closed');
+    socket.connect();
+    expect(FakeSocket.instances).toHaveLength(1);
+  });
+
+  it('rejects queued and later messages once the thread is gone', async () => {
+    threadMessages.mockRejectedValue(new ApiError(404, 'not found'));
+    const onEvent = jest.fn();
+    const socket = new ChatSocket('t1', () => 'tok', { onEvent });
+    socket.connect();
+    socket.send('queued', 'c1');
+
+    latest().serverClose();
+    await flush();
+    socket.send('after', 'c2');
+
+    expect(onEvent.mock.calls.map(([event]) => event)).toEqual([
+      { type: 'error', body: 'chat is no longer available', client_id: 'c1' },
+      { type: 'error', body: 'chat is no longer available', client_id: 'c2' },
+    ]);
+  });
+
+  it('close() by the caller drops queued messages without rejecting them', async () => {
+    const onEvent = jest.fn();
+    const socket = new ChatSocket('t1', () => 'tok', { onEvent });
+    socket.connect();
+    socket.send('queued', 'c1');
+
+    socket.close();
+    socket.send('after', 'c2');
+
+    expect(onEvent).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a 500', new ApiError(500, 'boom')],
+    ['a 403', new ApiError(403, 'not allowed')],
+    ['a network error', new TypeError('Failed to fetch')],
+  ])('keeps retrying when the thread probe fails with %s', async (_, error) => {
+    threadMessages.mockRejectedValue(error);
+    new ChatSocket('t1', () => 'tok', { onEvent: jest.fn() }).connect();
+
+    latest().serverClose();
+    await flush();
+    jest.advanceTimersByTime(1000);
+    expect(FakeSocket.instances).toHaveLength(2);
+  });
+
+  it('does not probe the thread when an opened socket drops', async () => {
+    new ChatSocket('t1', () => 'tok', { onEvent: jest.fn() }).connect();
+    latest().open();
+
+    latest().serverClose();
+    await flush();
+    jest.advanceTimersByTime(1000);
+
+    expect(threadMessages).not.toHaveBeenCalled();
+    expect(FakeSocket.instances).toHaveLength(2);
+  });
+
+  it('gives up after 30 consecutive attempts that never open', async () => {
+    const onStatus = jest.fn();
+    new ChatSocket('t1', () => 'tok', { onEvent: jest.fn(), onStatus }).connect();
+
+    for (let attempt = 1; attempt <= 30; attempt += 1) {
+      latest().serverClose();
+      await flush();
+      jest.advanceTimersByTime(10_000);
+    }
+    expect(FakeSocket.instances).toHaveLength(31);
+
+    latest().serverClose();
+    await flush();
+    jest.advanceTimersByTime(60_000);
+    expect(FakeSocket.instances).toHaveLength(31);
+    expect(onStatus).toHaveBeenLastCalledWith('closed');
+  });
+
+  it('an opened connection resets the attempt cap', async () => {
+    new ChatSocket('t1', () => 'tok', { onEvent: jest.fn() }).connect();
+
+    for (let attempt = 1; attempt <= 29; attempt += 1) {
+      latest().serverClose();
+      await flush();
+      jest.advanceTimersByTime(10_000);
+    }
+    latest().open();
+    for (let attempt = 1; attempt <= 5; attempt += 1) {
+      latest().serverClose();
+      await flush();
+      jest.advanceTimersByTime(10_000);
+    }
+    expect(FakeSocket.instances).toHaveLength(35);
   });
 
   it('an error event closes the underlying socket', () => {
