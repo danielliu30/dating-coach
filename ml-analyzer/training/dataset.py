@@ -118,6 +118,26 @@ def to_segment_rows(examples: Sequence[TrainingExample]) -> Iterator[Tuple[str, 
         yield transcript(example.messages), weak
 
 
+def exclude_holdout(
+    examples: Sequence[TrainingExample], holdout: Sequence[TrainingExample]
+) -> Tuple[List[TrainingExample], int]:
+    """Drop examples that share a conversation or a user with the frozen holdout.
+
+    The holdout (``data/eval_holdout.jsonl``) is never trained on; a
+    ``labeled.jsonl`` export from the same database may still contain its rows
+    or other conversations of its users, so they are removed before the split.
+    Returns the kept examples and how many were dropped.
+    """
+    conversation_ids = {e.conversation_id for e in holdout}
+    user_ids = {e.user_id for e in holdout if e.user_id}
+    kept = [
+        e
+        for e in examples
+        if e.conversation_id not in conversation_ids and not (e.user_id and e.user_id in user_ids)
+    ]
+    return kept, len(examples) - len(kept)
+
+
 def split(
     examples: Sequence[TrainingExample], eval_fraction: float = 0.1
 ) -> Tuple[List[Tuple[str, float]], List[Tuple[str, float]]]:
