@@ -101,6 +101,18 @@ describe('ApiClient 401 renewal', () => {
     expect((fetchMock.mock.calls[1][1] as RequestInit).headers).toMatchObject({ Authorization: 'Bearer new' });
   });
 
+  it('threadMessages with renew: false surfaces a 401 without renewing', async () => {
+    fetchMock.mockResolvedValueOnce(reply(401, { error: 'expired' }));
+    const client = new ApiClient();
+    client.useToken(() => 'tok');
+    const renew = jest.fn(async () => 'renewed' as const);
+    client.useRenewal(renew);
+
+    await expect(client.threadMessages('t1', 1, { renew: false })).rejects.toMatchObject({ status: 401 });
+    expect(renew).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('does not renew for a 401 on an unauthenticated request', async () => {
     fetchMock.mockResolvedValueOnce(reply(401, { error: 'nope' }));
     const client = new ApiClient();

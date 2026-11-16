@@ -283,7 +283,7 @@ describe('ChatSocket', () => {
     await flush();
     jest.advanceTimersByTime(60_000);
 
-    expect(threadMessages).toHaveBeenCalledWith('t1', 1);
+    expect(threadMessages).toHaveBeenCalledWith('t1', 1, { renew: false });
     expect(FakeSocket.instances).toHaveLength(1);
     expect(onStatus).toHaveBeenLastCalledWith('closed');
     socket.connect();
@@ -331,6 +331,21 @@ describe('ChatSocket', () => {
     await flush();
     jest.advanceTimersByTime(1000);
     expect(FakeSocket.instances).toHaveLength(2);
+  });
+
+  it('probes the thread only on attempts due a renewal', async () => {
+    new ChatSocket('t1', () => 'tok', { onEvent: jest.fn() }).connect();
+
+    for (let attempt = 1; attempt <= 6; attempt += 1) {
+      latest().serverClose();
+      await flush();
+      jest.advanceTimersByTime(10_000);
+    }
+    expect(threadMessages).toHaveBeenCalledTimes(1);
+
+    latest().serverClose();
+    await flush();
+    expect(threadMessages).toHaveBeenCalledTimes(2);
   });
 
   it('does not probe the thread when an opened socket drops', async () => {

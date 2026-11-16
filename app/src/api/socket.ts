@@ -109,8 +109,9 @@ export class ChatSocket {
    */
   private async scheduleReconnect(unopened: boolean, refused: boolean): Promise<void> {
     if (this.closed) return;
+    let due = false;
     if (unopened || refused) {
-      const due = refused || this.failures % attemptsPerRenewal === 0;
+      due = refused || this.failures % attemptsPerRenewal === 0;
       if (!refused) this.failures += 1;
       if (due && (await api.renewSession()) === 'rejected') {
         this.close();
@@ -118,7 +119,9 @@ export class ChatSocket {
       }
     }
     if (this.closed) return;
-    if (unopened && (await this.threadGone())) {
+    // The probe is a REST call whose 401 renews the session itself, so it only
+    // runs on the attempts already due a renewal to keep that spacing intact.
+    if (unopened && due && (await this.threadGone())) {
       this.end();
       return;
     }
@@ -140,7 +143,8 @@ export class ChatSocket {
    */
   private async threadGone(): Promise<boolean> {
     try {
-      await api.threadMessages(this.threadID, 1);
+      // No renewal on 401: scheduleReconnect already paces renewals.
+      await api.threadMessages(this.threadID, 1, { renew: false });
       return false;
     } catch (err) {
       return err instanceof ApiError && GONE.has(err.status);
