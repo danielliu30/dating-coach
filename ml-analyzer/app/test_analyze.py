@@ -10,7 +10,8 @@ from pydantic import ValidationError
 from app.config import Settings
 from app.main import app
 from app.schemas import AnalyzeRequest, ImageAnalyzeRequest, ImageRef, Message, Overall, ReviewComment, ReviewSummaryRequest, Segment
-from app.scoring.base import message_range, meta_line, transcript
+from app.scoring.base import message_range
+from app.scoring.base import meta_line, transcript
 from app.scoring.heuristic import HeuristicScorer, reciprocity_patterns, reflection_questions, review_self_messages
 from app.scoring.image import HeuristicImageScorer, build_image_scorer, image_dimensions
 
