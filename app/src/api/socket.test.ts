@@ -5,10 +5,11 @@ import type { ChatEvent } from './types';
 
 jest.mock('./client', () => ({
   ApiError: jest.requireActual<typeof import('./client')>('./client').ApiError,
-  api: { renewSession: jest.fn(), threadMessages: jest.fn() },
+  api: { renewSession: jest.fn(), wsTicket: jest.fn(), threadMessages: jest.fn() },
 }));
 
 const renewSession = api.renewSession as jest.MockedFunction<typeof api.renewSession>;
+const wsTicket = api.wsTicket as jest.MockedFunction<typeof api.wsTicket>;
 const threadMessages = api.threadMessages as jest.MockedFunction<typeof api.threadMessages>;
 
 /** Stand-in for the browser WebSocket that lets a test drive open/message/close by hand. */
@@ -65,6 +66,7 @@ beforeEach(() => {
   FakeSocket.instances = [];
   globalThis.WebSocket = FakeSocket as unknown as typeof WebSocket;
   renewSession.mockResolvedValue('renewed');
+  wsTicket.mockResolvedValue('tkt');
   threadMessages.mockReset();
   threadMessages.mockResolvedValue([]);
 });
@@ -74,29 +76,32 @@ afterEach(() => {
 });
 
 describe('ChatSocket', () => {
-  it('connects to the thread URL with the current token and reports status', () => {
+  it('connects to the thread URL with the current token and reports status', async () => {
     const onStatus = jest.fn();
     const socket = new ChatSocket('t1', () => 'tok', { onEvent: jest.fn(), onStatus });
 
     socket.connect();
+    await flush();
 
-    expect(latest().url).toBe(wsURL('/chat/threads/t1/ws', 'tok'));
+    expect(latest().url).toBe(wsURL('/chat/threads/t1/ws', 'tkt'));
     expect(onStatus).toHaveBeenLastCalledWith('connecting');
     latest().open();
     expect(onStatus).toHaveBeenLastCalledWith('open');
   });
 
-  it('reports closed and does not open a socket without a token', () => {
+  it('reports closed and does not open a socket without a token', async () => {
     const onStatus = jest.fn();
     new ChatSocket('t1', () => null, { onEvent: jest.fn(), onStatus }).connect();
+    await flush();
 
     expect(FakeSocket.instances).toHaveLength(0);
     expect(onStatus).toHaveBeenCalledWith('closed');
   });
 
-  it('forwards parsed events and ignores malformed frames', () => {
+  it('forwards parsed events and ignores malformed frames', async () => {
     const onEvent = jest.fn();
     new ChatSocket('t1', () => 'tok', { onEvent }).connect();
+    await flush();
     latest().open();
 
     latest().receive({ type: 'typing', typing: true });
@@ -109,14 +114,17 @@ describe('ChatSocket', () => {
   it('backs off linearly, capped at 10s, and resets attempts once a connection opens', async () => {
     const socket = new ChatSocket('t1', () => 'tok', { onEvent: jest.fn() });
     socket.connect();
+    await flush();
 
     for (let attempt = 1; attempt <= 12; attempt += 1) {
       latest().serverClose();
       await flush();
       const expected = Math.min(1000 * attempt, 10_000);
       jest.advanceTimersByTime(expected - 1);
+      await flush();
       expect(FakeSocket.instances).toHaveLength(attempt);
       jest.advanceTimersByTime(1);
+      await flush();
       expect(FakeSocket.instances).toHaveLength(attempt + 1);
     }
 
@@ -126,28 +134,34 @@ describe('ChatSocket', () => {
     await flush();
     const before = FakeSocket.instances.length;
     jest.advanceTimersByTime(999);
+    await flush();
     expect(FakeSocket.instances).toHaveLength(before);
     jest.advanceTimersByTime(1);
+    await flush();
     expect(FakeSocket.instances).toHaveLength(before + 1);
   });
 
   it('renews the session before retrying when the handshake never opened', async () => {
     new ChatSocket('t1', () => 'tok', { onEvent: jest.fn() }).connect();
+    await flush();
 
     latest().serverClose();
     await flush();
     expect(renewSession).toHaveBeenCalledTimes(1);
     jest.advanceTimersByTime(1000);
+    await flush();
     expect(FakeSocket.instances).toHaveLength(2);
   });
 
   it('spaces renewals every 6 unopened failures', async () => {
     new ChatSocket('t1', () => 'tok', { onEvent: jest.fn() }).connect();
+    await flush();
 
     for (let failure = 1; failure <= 13; failure += 1) {
       latest().serverClose();
       await flush();
       jest.advanceTimersByTime(10_000);
+      await flush();
     }
     // Failures 1, 7 and 13 are due for renewal.
     expect(renewSession).toHaveBeenCalledTimes(3);
@@ -155,6 +169,7 @@ describe('ChatSocket', () => {
 
   it('close code 1008 forces a renewal even after the socket had opened', async () => {
     new ChatSocket('t1', () => 'tok', { onEvent: jest.fn() }).connect();
+    await flush();
     latest().open();
 
     latest().serverClose(1008);
@@ -163,6 +178,7 @@ describe('ChatSocket', () => {
 
     // And again straight away: refused closes are not subject to the spacing.
     jest.advanceTimersByTime(1000);
+    await flush();
     latest().open();
     latest().serverClose(1008);
     await flush();
@@ -174,10 +190,12 @@ describe('ChatSocket', () => {
     const onStatus = jest.fn();
     const socket = new ChatSocket('t1', () => 'tok', { onEvent: jest.fn(), onStatus });
     socket.connect();
+    await flush();
 
     latest().serverClose();
     await flush();
     jest.advanceTimersByTime(60_000);
+    await flush();
 
     expect(FakeSocket.instances).toHaveLength(1);
     socket.send('late');
@@ -187,16 +205,19 @@ describe('ChatSocket', () => {
   it('retries with backoff when the renewal was merely unavailable', async () => {
     renewSession.mockResolvedValue('unavailable');
     new ChatSocket('t1', () => 'tok', { onEvent: jest.fn() }).connect();
+    await flush();
 
     latest().serverClose();
     await flush();
     jest.advanceTimersByTime(1000);
+    await flush();
     expect(FakeSocket.instances).toHaveLength(2);
   });
 
   it('queues messages while down and replays them on reconnect, dropping typing events', async () => {
     const socket = new ChatSocket('t1', () => 'tok', { onEvent: jest.fn() });
     socket.connect();
+    await flush();
     latest().open();
     latest().serverClose();
     await flush();
@@ -206,6 +227,7 @@ describe('ChatSocket', () => {
     socket.send('again');
 
     jest.advanceTimersByTime(1000);
+    await flush();
     const reconnected = latest();
     expect(reconnected.send).not.toHaveBeenCalled();
     reconnected.open();
@@ -245,6 +267,7 @@ describe('ChatSocket', () => {
   it("puts the caller's client id on the message frame and keeps it through the outbox", async () => {
     const socket = new ChatSocket('t1', () => 'tok', { onEvent: jest.fn() });
     socket.connect();
+    await flush();
     latest().open();
     socket.send('hi', 'c1');
     expect(JSON.parse(String(latest().send.mock.calls[0][0]))).toEqual({ type: 'message', body: 'hi', client_id: 'c1' });
@@ -253,13 +276,15 @@ describe('ChatSocket', () => {
     await flush();
     socket.send('later', 'c2');
     jest.advanceTimersByTime(1000);
+    await flush();
     latest().open();
     expect(JSON.parse(String(latest().send.mock.calls[0][0]))).toEqual({ type: 'message', body: 'later', client_id: 'c2' });
   });
 
-  it('sends immediately while open', () => {
+  it('sends immediately while open', async () => {
     const socket = new ChatSocket('t1', () => 'tok', { onEvent: jest.fn() });
     socket.connect();
+    await flush();
     latest().open();
 
     socket.send('hi');
@@ -274,6 +299,7 @@ describe('ChatSocket', () => {
   it('close() cancels the pending retry, empties the outbox and never reconnects', async () => {
     const socket = new ChatSocket('t1', () => 'tok', { onEvent: jest.fn() });
     socket.connect();
+    await flush();
     latest().open();
     latest().serverClose();
     await flush();
@@ -281,22 +307,53 @@ describe('ChatSocket', () => {
 
     socket.close();
     jest.advanceTimersByTime(60_000);
+    await flush();
     expect(FakeSocket.instances).toHaveLength(1);
 
     socket.connect();
+    await flush();
     expect(FakeSocket.instances).toHaveLength(1);
   });
 
-  it('reads the token per attempt so a renewed token is used on reconnect', async () => {
-    let token = 'first';
-    new ChatSocket('t1', () => token, { onEvent: jest.fn() }).connect();
+  it('mints a fresh ticket per attempt and never puts the token in the URL', async () => {
+    wsTicket.mockResolvedValueOnce('first').mockResolvedValueOnce('second');
+    new ChatSocket('t1', () => 'secret-token', { onEvent: jest.fn() }).connect();
+    await flush();
     latest().open();
-    token = 'second';
     latest().serverClose();
     await flush();
     jest.advanceTimersByTime(1000);
+    await flush();
 
-    expect(latest().url).toBe(wsURL('/chat/threads/t1/ws', 'second'));
+    expect(FakeSocket.instances.map((s) => s.url)).toEqual([
+      wsURL('/chat/threads/t1/ws', 'first'),
+      wsURL('/chat/threads/t1/ws', 'second'),
+    ]);
+    expect(FakeSocket.instances.some((s) => s.url.includes('secret-token'))).toBe(false);
+  });
+
+  it('backs off and retries when the ticket cannot be minted', async () => {
+    const onStatus = jest.fn();
+    wsTicket.mockRejectedValueOnce(new Error('offline'));
+    new ChatSocket('t1', () => 'tok', { onEvent: jest.fn(), onStatus }).connect();
+    await flush();
+
+    expect(FakeSocket.instances).toHaveLength(0);
+    expect(onStatus).toHaveBeenLastCalledWith('closed');
+    jest.advanceTimersByTime(1000);
+    await flush();
+    expect(latest().url).toBe(wsURL('/chat/threads/t1/ws', 'tkt'));
+  });
+
+  it('close() while a ticket is in flight opens no socket', async () => {
+    let resolve: (t: string) => void = () => {};
+    wsTicket.mockReturnValueOnce(new Promise((r) => (resolve = r)));
+    const socket = new ChatSocket('t1', () => 'tok', { onEvent: jest.fn() });
+    socket.connect();
+    socket.close();
+    resolve('late');
+    await flush();
+    expect(FakeSocket.instances).toHaveLength(0);
   });
 
   it.each([404, 410])('stops retrying when the thread probe answers %i after an unopened failure', async (status) => {
@@ -304,15 +361,18 @@ describe('ChatSocket', () => {
     const onStatus = jest.fn();
     const socket = new ChatSocket('t1', () => 'tok', { onEvent: jest.fn(), onStatus });
     socket.connect();
+    await flush();
 
     latest().serverClose();
     await flush();
     jest.advanceTimersByTime(60_000);
+    await flush();
 
     expect(threadMessages).toHaveBeenCalledWith('t1', 1, { renew: false });
     expect(FakeSocket.instances).toHaveLength(1);
     expect(onStatus).toHaveBeenLastCalledWith('closed');
     socket.connect();
+    await flush();
     expect(FakeSocket.instances).toHaveLength(1);
   });
 
@@ -321,6 +381,7 @@ describe('ChatSocket', () => {
     const onEvent = jest.fn();
     const socket = new ChatSocket('t1', () => 'tok', { onEvent });
     socket.connect();
+    await flush();
     socket.send('queued', 'c1');
 
     latest().serverClose();
@@ -337,6 +398,7 @@ describe('ChatSocket', () => {
     const onEvent = jest.fn();
     const socket = new ChatSocket('t1', () => 'tok', { onEvent });
     socket.connect();
+    await flush();
     socket.send('queued', 'c1');
 
     socket.close();
@@ -352,10 +414,12 @@ describe('ChatSocket', () => {
   ])('keeps retrying when the thread probe fails with %s', async (_, error) => {
     threadMessages.mockRejectedValue(error);
     new ChatSocket('t1', () => 'tok', { onEvent: jest.fn() }).connect();
+    await flush();
 
     latest().serverClose();
     await flush();
     jest.advanceTimersByTime(1000);
+    await flush();
     expect(FakeSocket.instances).toHaveLength(2);
   });
 
@@ -376,11 +440,13 @@ describe('ChatSocket', () => {
 
   it('does not probe the thread when an opened socket drops', async () => {
     new ChatSocket('t1', () => 'tok', { onEvent: jest.fn() }).connect();
+    await flush();
     latest().open();
 
     latest().serverClose();
     await flush();
     jest.advanceTimersByTime(1000);
+    await flush();
 
     expect(threadMessages).not.toHaveBeenCalled();
     expect(FakeSocket.instances).toHaveLength(2);
@@ -389,40 +455,47 @@ describe('ChatSocket', () => {
   it('gives up after 30 consecutive attempts that never open', async () => {
     const onStatus = jest.fn();
     new ChatSocket('t1', () => 'tok', { onEvent: jest.fn(), onStatus }).connect();
+    await flush();
 
     for (let attempt = 1; attempt <= 30; attempt += 1) {
       latest().serverClose();
       await flush();
       jest.advanceTimersByTime(10_000);
+      await flush();
     }
     expect(FakeSocket.instances).toHaveLength(31);
 
     latest().serverClose();
     await flush();
     jest.advanceTimersByTime(60_000);
+    await flush();
     expect(FakeSocket.instances).toHaveLength(31);
     expect(onStatus).toHaveBeenLastCalledWith('closed');
   });
 
   it('an opened connection resets the attempt cap', async () => {
     new ChatSocket('t1', () => 'tok', { onEvent: jest.fn() }).connect();
+    await flush();
 
     for (let attempt = 1; attempt <= 29; attempt += 1) {
       latest().serverClose();
       await flush();
       jest.advanceTimersByTime(10_000);
+      await flush();
     }
     latest().open();
     for (let attempt = 1; attempt <= 5; attempt += 1) {
       latest().serverClose();
       await flush();
       jest.advanceTimersByTime(10_000);
+      await flush();
     }
     expect(FakeSocket.instances).toHaveLength(35);
   });
 
-  it('an error event closes the underlying socket', () => {
+  it('an error event closes the underlying socket', async () => {
     new ChatSocket('t1', () => 'tok', { onEvent: jest.fn() }).connect();
+    await flush();
     latest().onerror?.();
     expect(latest().close).toHaveBeenCalled();
   });
