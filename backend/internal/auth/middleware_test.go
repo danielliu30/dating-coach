@@ -134,3 +134,25 @@ func TestMiddlewareQueryTokenOnlyOnWebSocketUpgrade(t *testing.T) {
 		})
 	}
 }
+
+// TestMiddlewareQueryTokenRejectedOnRESTUpgrade checks that a websocket
+// Upgrade header cannot smuggle a URL token onto a non-/ws REST endpoint,
+// whose access-log line nginx does not redact.
+func TestMiddlewareQueryTokenRejectedOnRESTUpgrade(t *testing.T) {
+	issuer := NewTokenIssuer("test-secret")
+	token, _, err := issuer.Issue(uuid.New(), "a@example.com", RoleUser, ScopeSession, time.Minute)
+	if err != nil {
+		t.Fatalf("issue token: %v", err)
+	}
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	req := httptest.NewRequest(http.MethodGet, "/auth/me?token="+token, nil)
+	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Upgrade", "websocket")
+	rec := httptest.NewRecorder()
+	Middleware(issuer)(next).ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+}
