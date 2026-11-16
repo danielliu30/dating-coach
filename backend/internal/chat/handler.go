@@ -31,6 +31,7 @@ type Handler struct {
 	svc            *Service
 	hub            *Hub
 	accounts       AccountStatus
+	revocations    auth.Revocations
 	originPatterns []string
 }
 
@@ -48,6 +49,13 @@ type AccountStatus interface {
 // outlives the token that opened it.
 func NewHandler(svc *Service, hub *Hub, accounts AccountStatus, originPatterns []string) *Handler {
 	return &Handler{svc: svc, hub: hub, accounts: accounts, originPatterns: originPatterns}
+}
+
+// SetRevocations makes live sockets honour sign-outs and refresh-token reuse,
+// not only deletion. The announcement on auth:revoked closes them at once; this
+// is the backstop for a replica that missed it.
+func (h *Handler) SetRevocations(revocations auth.Revocations) {
+	h.revocations = revocations
 }
 
 // Routes mounts the chat endpoints. All of them require authentication; the
@@ -251,7 +259,7 @@ func (h *Handler) websocket(w http.ResponseWriter, r *http.Request) {
 
 	// Re-check after registering, never before: an announcement made while this
 	// socket was still being set up reached an index that did not list it yet.
-	if verdict := h.sessionStatus(ctx, principal.UserID); verdict != socketActive {
+	if verdict := h.sessionStatus(ctx, principal); verdict != socketActive {
 		closeSocket(conn, verdict, principal.UserID, connID, "connect")
 		return
 	}
@@ -282,7 +290,7 @@ func (h *Handler) websocket(w http.ResponseWriter, r *http.Request) {
 			closeSocket(conn, socketExpired, principal.UserID, connID, "expiry")
 			return
 		case <-accountTicker.C:
-			if verdict := h.sessionStatus(ctx, principal.UserID); verdict != socketActive {
+			if verdict := h.sessionStatus(ctx, principal); verdict != socketActive {
 				closeSocket(conn, verdict, principal.UserID, connID, "heartbeat")
 				return
 			}
@@ -336,17 +344,32 @@ func expiryTimer(expiresAt time.Time) *time.Timer {
 // announced, so a socket's fate does not depend on a cache that can be lost or
 // an announcement that can be missed.
 //
+// The revocation cutoff (sign-out, refresh-token reuse) is checked too when
+// set, so a socket whose replica missed the announcement still closes within
+// accountRefresh rather than when its token expires.
+//
 // It fails closed, so a status it cannot read ends the connection rather than
 // serving an account whose standing is unknown. That case is reported as
 // socketUnverifiable rather than socketRevoked, so a database blip does not
 // tell clients their session is gone for good.
-func (h *Handler) sessionStatus(ctx context.Context, userID uuid.UUID) socketVerdict {
-	active, err := h.accounts.UserActive(ctx, userID)
+func (h *Handler) sessionStatus(ctx context.Context, principal auth.Principal) socketVerdict {
+	active, err := h.accounts.UserActive(ctx, principal.UserID)
 	switch {
 	case err != nil:
-		slog.Error("check socket account status", "error", err, "user_id", userID)
+		slog.Error("check socket account status", "error", err, "user_id", principal.UserID)
 		return socketUnverifiable
 	case !active:
+		return socketRevoked
+	}
+	if h.revocations == nil {
+		return socketActive
+	}
+	since, err := h.revocations.RevokedSince(ctx, principal.UserID)
+	switch {
+	case err != nil:
+		slog.Error("check socket revocation", "error", err, "user_id", principal.UserID)
+		return socketUnverifiable
+	case !since.IsZero() && !principal.IssuedAt.After(since):
 		return socketRevoked
 	}
 	return socketActive
@@ -397,7 +420,7 @@ func (h *Handler) handleIncoming(ctx context.Context, conn *websocket.Conn, thre
 		closeSocket(conn, socketExpired, principal.UserID, connID, "client_event")
 		return false
 	}
-	if verdict := h.sessionStatus(ctx, principal.UserID); verdict != socketActive {
+	if verdict := h.sessionStatus(ctx, principal); verdict != socketActive {
 		closeSocket(conn, verdict, principal.UserID, connID, "client_event")
 		return false
 	}
