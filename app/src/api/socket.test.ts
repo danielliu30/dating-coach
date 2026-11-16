@@ -242,12 +242,14 @@ describe('ChatSocket', () => {
     const onEvent = jest.fn();
     const socket = new ChatSocket('t1', () => 'tok', { onEvent });
     socket.connect();
+    await flush();
     latest().open();
     latest().serverClose();
     await flush();
 
     socket.send('into a closed thread', 'c1');
     jest.advanceTimersByTime(1000);
+    await flush();
     const flushed = latest();
     flushed.open();
     expect(flushed.send).toHaveBeenCalledTimes(1);
@@ -258,6 +260,7 @@ describe('ChatSocket', () => {
     flushed.serverClose();
     await flush();
     jest.advanceTimersByTime(1000);
+    await flush();
     const again = latest();
     expect(again).not.toBe(flushed);
     again.open();
@@ -425,11 +428,13 @@ describe('ChatSocket', () => {
 
   it('probes the thread only on attempts due a renewal', async () => {
     new ChatSocket('t1', () => 'tok', { onEvent: jest.fn() }).connect();
+    await flush();
 
     for (let attempt = 1; attempt <= 6; attempt += 1) {
       latest().serverClose();
       await flush();
       jest.advanceTimersByTime(10_000);
+      await flush();
     }
     expect(threadMessages).toHaveBeenCalledTimes(1);
 
