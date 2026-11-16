@@ -397,10 +397,16 @@ export class ApiClient {
     return threads ?? [];
   }
 
-  async threadMessages(threadID: string, limit = 50): Promise<ChatMessage[]> {
+  /**
+   * renew: false skips the 401-renewal retry, for callers (the chat socket's
+   * thread probe) that pace session renewals themselves.
+   */
+  async threadMessages(threadID: string, limit = 50, { renew = true } = {}): Promise<ChatMessage[]> {
     const { messages } = await this.request<{ messages: ChatMessage[] | null }>(
       'GET',
       `/chat/threads/${threadID}/messages?limit=${limit}`,
+      undefined,
+      !renew,
     );
     return messages ?? [];
   }
