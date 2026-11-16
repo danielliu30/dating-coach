@@ -369,6 +369,114 @@ func TestVerifyEmailRefusesARevokedBearer(t *testing.T) {
 	}
 }
 
+// TestSignOut covers POST /auth/signout end to end: the account's refresh
+// tokens are gone, access tokens minted before it are refused, a later sign-in
+// still works, and a denylist that cannot be written is reported rather than
+// passed off as a sign-out.
+func TestSignOut(t *testing.T) {
+	svc, issuer, pool := newTestService(t)
+	ctx := context.Background()
+
+	// authenticated reports whether token gets past the auth middleware.
+	authenticated := func(t *testing.T, token string) int {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/me", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		Middleware(issuer, nil, svc.denylist)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		})).ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	user := verifiedUser(t, svc, pool)
+	first, err := svc.SignIn(ctx, user.email, user.password)
+	if err != nil {
+		t.Fatalf("sign in: %v", err)
+	}
+	second, err := svc.SignIn(ctx, user.email, user.password)
+	if err != nil {
+		t.Fatalf("second sign in: %v", err)
+	}
+	userID := uuid.MustParse(first.User.ID)
+	if code := authenticated(t, first.Token); code != http.StatusNoContent {
+		t.Fatalf("access token before sign-out: status = %d, want 204", code)
+	}
+
+	time.Sleep(10 * time.Millisecond)
+	if err := svc.SignOut(ctx, userID); err != nil {
+		t.Fatalf("sign out: %v", err)
+	}
+
+	t.Run("refresh tokens are deleted", func(t *testing.T) {
+		var left int
+		if err := pool.QueryRow(ctx, "SELECT count(*) FROM refresh_tokens WHERE user_id = $1", userID).Scan(&left); err != nil {
+			t.Fatalf("count refresh tokens: %v", err)
+		}
+		if left != 0 {
+			t.Fatalf("%d refresh tokens left after sign-out, want 0", left)
+		}
+		for name, session := range map[string]Session{"first": first, "second": second} {
+			if _, err := svc.Refresh(ctx, session.RefreshToken); !errors.Is(err, ErrInvalidRefreshToken) {
+				t.Fatalf("%s refresh token after sign-out: error = %v, want %v", name, err, ErrInvalidRefreshToken)
+			}
+		}
+	})
+
+	t.Run("access tokens issued before sign-out get 401", func(t *testing.T) {
+		for name, session := range map[string]Session{"first": first, "second": second} {
+			if code := authenticated(t, session.Token); code != http.StatusUnauthorized {
+				t.Fatalf("%s access token after sign-out: status = %d, want 401", name, code)
+			}
+		}
+	})
+
+	t.Run("a fresh sign-in afterwards works", func(t *testing.T) {
+		// iat has one-second precision, so a token minted in the sign-out's own
+		// second is refused by design; sign in from the next second on.
+		time.Sleep(time.Until(time.Now().Truncate(time.Second).Add(time.Second + 10*time.Millisecond)))
+		fresh, err := svc.SignIn(ctx, user.email, user.password)
+		if err != nil {
+			t.Fatalf("sign in after sign-out: %v", err)
+		}
+		if code := authenticated(t, fresh.Token); code != http.StatusNoContent {
+			t.Fatalf("fresh access token: status = %d, want 204", code)
+		}
+		if _, err := svc.Refresh(ctx, fresh.RefreshToken); err != nil {
+			t.Fatalf("fresh refresh token: %v", err)
+		}
+	})
+
+	t.Run("a nil denylist returns ErrRevocationUnavailable", func(t *testing.T) {
+		noDenylist := *svc
+		noDenylist.denylist = nil
+		if err := noDenylist.SignOut(ctx, userID); !errors.Is(err, ErrRevocationUnavailable) {
+			t.Fatalf("sign out without a denylist: error = %v, want %v", err, ErrRevocationUnavailable)
+		}
+	})
+
+	t.Run("the handler answers 503 when the denylist is unavailable", func(t *testing.T) {
+		rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", MaxRetries: -1, DialTimeout: time.Second})
+		t.Cleanup(func() { _ = rdb.Close() })
+		unreachable := *svc
+		unreachable.denylist = NewDenylist(rdb, time.Hour)
+		// The real middleware would fail closed on the same Redis before the
+		// handler runs, so a stub hands it the caller instead.
+		asUser := func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				next.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), Principal{UserID: userID, Scope: ScopeSession})))
+			})
+		}
+		routes := NewHandler(&unreachable, NewRateLimiter(rdb, 100, time.Minute)).Routes(asUser)
+
+		rec := httptest.NewRecorder()
+		routes.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/signout", nil))
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("POST /signout with Redis down: status = %d, want 503", rec.Code)
+		}
+	})
+}
+
 // TestSignInRefusesAccountPendingDeletion covers the window between requesting
 // a deletion and the worker removing the row: the credentials still match, but
 // sign-in must not hand out a session that would outlive the revocation if the
