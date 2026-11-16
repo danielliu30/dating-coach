@@ -172,6 +172,28 @@ func (s *Service) DeleteAccount(ctx context.Context, userID uuid.UUID) error {
 	return nil
 }
 
+// ErrRevocationUnavailable means a sign-out could not be made effective
+// because the denylist is unreachable; the caller should retry.
+var ErrRevocationUnavailable = errors.New("session revocation unavailable")
+
+// SignOut ends every session of userID on every device: its refresh tokens are
+// deleted and every access token issued so far is denylisted, which also closes
+// the account's open sockets. It fails, rather than half-succeeding silently,
+// when the denylist cannot be written, since access tokens would otherwise keep
+// working for their remaining lifetime.
+func (s *Service) SignOut(ctx context.Context, userID uuid.UUID) error {
+	if _, err := s.queries.RevokeUserRefreshTokens(ctx, userID); err != nil {
+		return fmt.Errorf("revoke refresh tokens: %w", err)
+	}
+	if s.denylist == nil {
+		return ErrRevocationUnavailable
+	}
+	if err := s.denylist.RevokeSessions(ctx, userID); err != nil {
+		return fmt.Errorf("%w: %w", ErrRevocationUnavailable, err)
+	}
+	return nil
+}
+
 // SignUpInput is the decoded POST /auth/signup body.
 type SignUpInput struct {
 	Email       string `json:"email"`
@@ -600,7 +622,11 @@ func (s *Service) VerifyEmail(ctx context.Context, email, code, bearer string) (
 		}
 	}
 	profile := profileOf(user)
-	if !s.ownsBearer(user.ID, bearer) {
+	owns, err := s.ownsBearer(ctx, user.ID, bearer)
+	if err != nil {
+		return Session{}, err
+	}
+	if !owns {
 		return Session{User: profile}, nil
 	}
 	session, err := s.openSession(ctx, s.queries, user, uuid.Nil)
@@ -628,17 +654,33 @@ func (s *Service) recordFailedAttempt(ctx context.Context, userID string) error 
 	return nil
 }
 
-// ownsBearer reports whether bearer is a currently valid token for userID.
-func (s *Service) ownsBearer(userID uuid.UUID, bearer string) bool {
+// ownsBearer reports whether bearer is a currently valid, unrevoked token for
+// userID. This route sits outside Middleware, so it applies the same
+// revocation check itself; a Redis failure is returned so callers fail closed.
+func (s *Service) ownsBearer(ctx context.Context, userID uuid.UUID, bearer string) (bool, error) {
 	if bearer == "" {
-		return false
+		return false, nil
 	}
 	claims, err := s.issuer.Parse(bearer)
 	if err != nil {
-		return false
+		return false, nil
 	}
 	subject, err := claims.UserID()
-	return err == nil && subject == userID
+	if err != nil || subject != userID {
+		return false, nil
+	}
+	if s.denylist == nil {
+		return true, nil
+	}
+	since, err := s.denylist.RevokedSince(ctx, userID)
+	if err != nil {
+		return false, err
+	}
+	var issuedAt time.Time
+	if claims.IssuedAt != nil {
+		issuedAt = claims.IssuedAt.Time
+	}
+	return since.IsZero() || issuedAt.After(since), nil
 }
 
 // ResendVerification issues a fresh code, replacing any outstanding one, and
