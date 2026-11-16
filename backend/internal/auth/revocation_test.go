@@ -57,10 +57,10 @@ func TestDenylistRevokedSince(t *testing.T) {
 	}
 
 	newer := time.Now()
-	if err := d.write(ctx, user, strconv.FormatInt(newer.UnixNano(), 10)); err != nil {
+	if err := d.write(ctx, user, strconv.FormatInt(newer.UnixNano(), 10), true); err != nil {
 		t.Fatalf("write newer cutoff: %v", err)
 	}
-	if err := d.write(ctx, user, strconv.FormatInt(newer.Add(-time.Second).UnixNano(), 10)); err != nil {
+	if err := d.write(ctx, user, strconv.FormatInt(newer.Add(-time.Second).UnixNano(), 10), true); err != nil {
 		t.Fatalf("write older cutoff: %v", err)
 	}
 	if since, err := d.RevokedSince(ctx, user); err != nil || !since.Equal(time.Unix(0, newer.UnixNano())) {
@@ -134,8 +134,8 @@ func (s stubRevocationLister) ListSessionRevocationsSince(context.Context, time.
 
 // TestReplayRevocationsRestoresLostCutoffs covers a Redis that lost (or never
 // received) a cutoff recorded in Postgres: the replay writes it back, never
-// weakens a stronger entry, and only announces entries it changed, so repeated
-// replays do not drop sockets opened after the cutoff.
+// weakens a stronger entry, and announces nothing, so it cannot drop sockets
+// opened by a sign-in after the cutoff.
 func TestReplayRevocationsRestoresLostCutoffs(t *testing.T) {
 	ctx := context.Background()
 	mr := miniredis.RunT(t)
@@ -171,11 +171,7 @@ func TestReplayRevocationsRestoresLostCutoffs(t *testing.T) {
 		t.Fatalf("deleted account after replay = %v, %v; want every token revoked", since, err)
 	}
 
-	msg, err := announcements.ReceiveTimeout(ctx, time.Second)
-	if m, ok := msg.(*redis.Message); err != nil || !ok || m.Payload != signedOut.String() {
-		t.Fatalf("first announcement = %v, %v; want %s", msg, err, signedOut)
-	}
 	if msg, err := announcements.ReceiveTimeout(ctx, 200*time.Millisecond); err == nil {
-		t.Fatalf("unexpected extra announcement %v: replays must only announce what they changed", msg)
+		t.Fatalf("unexpected announcement %v: replays must not drop sockets opened after the cutoff", msg)
 	}
 }

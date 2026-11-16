@@ -66,7 +66,7 @@ func NewDenylist(rdb *redis.Client, ttl time.Duration) *Denylist {
 // cutoffs, users.sessions_revoked_at) is what makes the revocation true, and listeners that miss the announcement still
 // pick it up from their own periodic re-check.
 func (d *Denylist) Revoke(ctx context.Context, userID uuid.UUID) error {
-	return d.write(ctx, userID, revokedAll)
+	return d.write(ctx, userID, revokedAll, true)
 }
 
 // RevokeSessions marks every token for userID issued up to now as unusable,
@@ -79,7 +79,7 @@ func (d *Denylist) RevokeSessions(ctx context.Context, userID uuid.UUID) error {
 // RevokeSessionsAt is RevokeSessions with an explicit cutoff, so the same
 // instant can be recorded in Postgres (users.sessions_revoked_at) and Redis.
 func (d *Denylist) RevokeSessionsAt(ctx context.Context, userID uuid.UUID, at time.Time) error {
-	return d.write(ctx, userID, strconv.FormatInt(at.UnixNano(), 10))
+	return d.write(ctx, userID, strconv.FormatInt(at.UnixNano(), 10), true)
 }
 
 // SessionRevocationLister reads the durable cutoffs recorded in Postgres.
@@ -89,9 +89,11 @@ type SessionRevocationLister interface {
 
 // ReplayRevocations copies every durable cutoff still young enough to matter
 // back into Redis. It covers a cutoff recorded while Redis was unreachable and
-// one lost to a Redis flush or failover. Replays are idempotent: the write
-// never weakens an entry, and only an entry it actually changed is announced,
-// so a replay does not drop sockets opened after the cutoff.
+// one lost to a Redis flush or failover. Replays are idempotent, since the
+// write never weakens an entry, and silent: an announcement would make every
+// replica's hub drop all of the user's sockets, including ones opened by a
+// sign-in after the cutoff. Sockets older than the cutoff are closed by their
+// own heartbeat check instead.
 func (d *Denylist) ReplayRevocations(ctx context.Context, lister SessionRevocationLister) error {
 	rows, err := lister.ListSessionRevocationsSince(ctx, time.Now().Add(-d.ttl))
 	if err != nil {
@@ -101,7 +103,8 @@ func (d *Denylist) ReplayRevocations(ctx context.Context, lister SessionRevocati
 		if row.SessionsRevokedAt == nil {
 			continue
 		}
-		if err := d.RevokeSessionsAt(ctx, row.ID, *row.SessionsRevokedAt); err != nil {
+		cutoff := strconv.FormatInt(row.SessionsRevokedAt.UnixNano(), 10)
+		if err := d.write(ctx, row.ID, cutoff, false); err != nil {
 			return err
 		}
 	}
@@ -143,13 +146,13 @@ redis.call("SET", KEYS[1], ARGV[1], "PX", ARGV[2])
 return 1
 `)
 
-func (d *Denylist) write(ctx context.Context, userID uuid.UUID, value string) error {
+func (d *Denylist) write(ctx context.Context, userID uuid.UUID, value string, announce bool) error {
 	key := revokedKeyPrefix + userID.String()
 	changed, err := writeRevocation.Run(ctx, d.rdb, []string{key}, value, d.ttl.Milliseconds(), revokedAll).Int()
 	if err != nil {
 		return fmt.Errorf("revoke sessions for %s: %w", userID, err)
 	}
-	if changed == 0 {
+	if changed == 0 || !announce {
 		return nil
 	}
 	if err := d.rdb.Publish(ctx, revokedChannel, userID.String()).Err(); err != nil {

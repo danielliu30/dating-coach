@@ -105,22 +105,26 @@ func (s *Service) Refresh(ctx context.Context, raw string) (Session, error) {
 	}
 	if row.UsedAt != nil {
 		slog.Warn("refresh token reused", "user_id", row.UserID)
-		if _, err := s.queries.RevokeUserRefreshTokens(ctx, row.UserID); err != nil {
-			return Session{}, fmt.Errorf("revoke reused refresh tokens: %w", err)
-		}
 		// Whoever holds the stolen pair may already hold access tokens and open
 		// sockets too: denylist them all now rather than letting them run out
-		// their lifetime. The cutoff is recorded in Postgres first, so a Redis
-		// failure only logs: the middleware refuses every request while Redis
-		// is down, and the worker replays the cutoff once it is back.
-		at, err := s.recordSessionRevocation(ctx, row.UserID)
-		if err != nil {
-			return Session{}, err
+		// their lifetime. The cutoff is recorded in Postgres so it survives a
+		// Redis outage (the worker replays it), but a Postgres failure must not
+		// skip the other steps: once the refresh tokens are gone a retry can no
+		// longer detect the reuse, so every step is attempted before failing.
+		at, recordErr := s.recordSessionRevocation(ctx, row.UserID)
+		if recordErr != nil {
+			at = time.Now()
+		}
+		if _, err := s.queries.RevokeUserRefreshTokens(ctx, row.UserID); err != nil {
+			return Session{}, errors.Join(recordErr, fmt.Errorf("revoke reused refresh tokens: %w", err))
 		}
 		if s.denylist != nil {
 			if err := s.denylist.RevokeSessionsAt(ctx, row.UserID, at); err != nil {
 				slog.Error("revoke sessions after refresh token reuse", "error", err, "user_id", row.UserID)
 			}
+		}
+		if recordErr != nil {
+			return Session{}, recordErr
 		}
 		return Session{}, ErrInvalidRefreshToken
 	}
