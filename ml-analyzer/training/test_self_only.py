@@ -22,16 +22,16 @@ def test_self_only_drops_match_only_segment_windows() -> None:
             {"start_position": 2, "end_position": 3, "engagement_score": 0.8},
         ],
     )
-    assert [score for _, score in to_segment_rows([example])] == [0.8]
-    assert [score for _, score in to_segment_rows([example], self_only=False)] == [0.3, 0.8]
+    assert [score for _, score, _ in to_segment_rows([example])] == [0.8]
+    assert [score for _, score, _ in to_segment_rows([example], self_only=False)] == [0.3, 0.8]
 
 
 def test_self_only_drops_weak_labeled_conversations_without_self() -> None:
-    """The whole-conversation weak-label row needs a self message too."""
+    """Weak-label windows need a self message too."""
     match_only = _example("c2", MESSAGES[:2], outcome="ghosted")
     mixed = _example("c3", MESSAGES, outcome="kept_talking")
-    assert [score for _, score in to_segment_rows([match_only, mixed])] == [0.55]
-    assert [score for _, score in to_segment_rows([match_only, mixed], self_only=False)] == [0.05, 0.55]
+    assert [score for _, score, _ in to_segment_rows([match_only, mixed])] == [0.55]
+    assert [score for _, score, _ in to_segment_rows([match_only, mixed], self_only=False)] == [0.05, 0.55]
 
 
 def test_split_applies_self_only_to_both_sides() -> None:

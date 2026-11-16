@@ -23,7 +23,7 @@ reads, and it mirrors the `training_examples` table in the Go backend.
 
 | Field | Type | Required | Notes |
 | --- | --- | --- | --- |
-| `conversation_id` | string | yes | Stable id; used for de-duplication and as the split group when `user_id` is absent. |
+| `conversation_id` | string | yes | Stable id; used as the split group when `user_id` is absent. |
 | `user_id` | string | no | Split group: every conversation of a user lands entirely in train or eval. |
 | `platform` | string | no | `hinge`, `tinder`, `bumble`, `unknown`. Useful as a slice for evaluation. |
 | `consented` | bool | yes | `dataset.load_jsonl` drops rows without it unless `--include-unconsented`. |
@@ -38,13 +38,51 @@ reads, and it mirrors the `training_examples` table in the Go backend.
 
 ## Label precedence
 
-1. `segments[].engagement_score` — human labels, used directly.
+1. `segments[].engagement_score` — human labels, used directly: one row per
+   segment, score clamped to 0–1, weight 1.0. If a conversation has any
+   `segments`, its weak labels are ignored.
 2. `outcome` — mapped to a conversation-level weak score
-   (`ghosted` 0.05, `kept_talking` 0.55, `number_exchanged` 0.8, `date_set` 0.95)
-   and applied to the whole conversation.
+   (`ghosted` 0.05, `kept_talking` 0.55, `number_exchanged` 0.8, `date_set` 0.95).
 3. `reply_received` — coarsest fallback (0.6 / 0.2).
 
 Rows with none of the three are skipped.
+
+### Weak-label weighting
+
+An outcome describes how a conversation ended, so it says the most about the
+messages just before it. Weak scores (2 and 3) are therefore not stamped on the
+whole transcript. Instead, the conversation is cut into windows of
+`--segment-size` messages (default 4), starting at position 0. These are the
+same boundaries the served model scores (`ML_SEGMENT_SIZE`), so the last window
+can be shorter. Each window becomes one row with the same weak score:
+
+| Window | Weight |
+| --- | --- |
+| final (holds the last message) | 1.0 |
+| every earlier window | `--weak-earlier-weight` (default 0.5; `0` keeps only the final window) |
+
+A conversation that fits in one window gives one row at weight 1.0. `train.py`
+passes each row's weight to `binary_cross_entropy_with_logits(..., weight=...)`,
+so a 0.5 row counts half as much in the loss as a human-labeled or final-window
+row.
+
+## De-duplication
+
+`dataset.load_jsonl` drops repeated conversations before the split (pass
+`dedupe=False` to keep them):
+
+1. Exact duplicates: message bodies are lowercased with punctuation removed and
+   whitespace collapsed, joined with their `sender` in `position` order, and
+   hashed (SHA-256). Equal hashes are duplicates across the whole file.
+2. Near-duplicates: within one `user_id`, conversations whose word 3-gram
+   shingles have Jaccard similarity >= 0.9 are duplicates (e.g. the same thread
+   re-submitted with one more message). Rows without `user_id` get only the exact
+   check.
+
+Duplicates form clusters: a conversation that matches any earlier copy, kept or
+dropped, joins that copy's cluster, and each cluster keeps one row. That row is
+the first occurrence, unless a later copy has human `segments` and the first
+does not; then the human-labeled copy takes its place.
 
 ## Annotation guidance
 
