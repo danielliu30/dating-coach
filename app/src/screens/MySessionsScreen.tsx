@@ -49,6 +49,9 @@ const calendarParts = (iso: string): { month: string; day: string } => {
 /** A request a client can fire from a session card: cancel, or reschedule to a given start. */
 type SessionAction = 'cancel' | `reschedule:${string}`;
 
+/** Reschedule slots shown at first and added by each "Show more times" press. */
+const SLOT_PAGE = 8;
+
 export default function MySessionsScreen(): React.ReactElement {
   const navigation = useNavigation<NavigationProp<RootTabParams>>();
   const { data, error, loading, reload } = useAsync(() => api.mySessions());
@@ -59,6 +62,7 @@ export default function MySessionsScreen(): React.ReactElement {
   const [busy, setBusy] = useState<Record<string, SessionAction>>({});
   const [reschedulingID, setReschedulingID] = useState<string | null>(null);
   const [slots, setSlots] = useState<Slot[] | null>(null);
+  const [slotLimit, setSlotLimit] = useState(SLOT_PAGE);
   const [slotError, setSlotError] = useState<string | null>(null);
   const [linkError, setLinkError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<{ sessionID: string; message: string } | null>(null);
@@ -72,6 +76,7 @@ export default function MySessionsScreen(): React.ReactElement {
   const openReschedule = async (session: CoachingSession) => {
     setReschedulingID(session.id);
     setSlots(null);
+    setSlotLimit(SLOT_PAGE);
     setSlotError(null);
     try {
       // Excluding this session frees the times it currently occupies, so small
@@ -285,7 +290,7 @@ export default function MySessionsScreen(): React.ReactElement {
                   {slots?.length === 0 ? (
                     <Empty text="No open slots in the next few weeks." icon="calendar-clear-outline" />
                   ) : null}
-                  {slots?.slice(0, 8).map((slot) => (
+                  {slots?.slice(0, slotLimit).map((slot) => (
                     <Button
                       key={slot.start}
                       label={formatWhen(slot.start)}
@@ -295,6 +300,15 @@ export default function MySessionsScreen(): React.ReactElement {
                       onPress={() => void reschedule(item, slot.start)}
                     />
                   ))}
+                  {slots && slots.length > slotLimit ? (
+                    <Pressable
+                      accessibilityRole="button"
+                      onPress={() => setSlotLimit((limit) => limit + SLOT_PAGE)}
+                      style={styles.showMore}
+                    >
+                      <Text style={styles.showMoreText}>Show more times ({slots.length - slotLimit} more)</Text>
+                    </Pressable>
+                  ) : null}
                 </View>
               ) : null}
             </View>
@@ -330,4 +344,6 @@ const styles = StyleSheet.create({
   link: { color: colors.primaryDeep, textDecorationLine: 'underline' },
   actions: { flexDirection: 'row', gap: 8 },
   reschedule: { gap: 8, padding: 14, borderRadius: radii.md, backgroundColor: colors.surfaceAlt },
+  showMore: { alignSelf: 'center', paddingVertical: 6, paddingHorizontal: 12 },
+  showMoreText: { fontFamily: fonts.sansBold, fontSize: 14, color: colors.primaryDeep },
 });
