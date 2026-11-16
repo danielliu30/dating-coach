@@ -10,9 +10,10 @@ from pydantic import ValidationError
 from app.config import Settings
 from app.main import app
 from app.schemas import AnalyzeRequest, ImageAnalyzeRequest, ImageRef, Message, Overall, ReviewComment, ReviewSummaryRequest, Segment
-from app.scoring.base import message_range
+from app.scoring.base import message_range, meta_line, transcript
 from app.scoring.heuristic import HeuristicScorer, reciprocity_patterns, reflection_questions, review_self_messages
 from app.scoring.image import HeuristicImageScorer, build_image_scorer, image_dimensions
+from app.scoring.trained import TrainedScorer
 
 client = TestClient(app)
 
@@ -96,6 +97,52 @@ def test_message_range_shifts_only_the_prose() -> None:
     segment = Segment(start_position=0, end_position=5, engagement_score=0.5, comment="")
     assert message_range(segment) == "Messages 1-6"
     assert (segment.start_position, segment.end_position) == (0, 5)
+
+
+def _timed(position: int, sender: str, sent_at: str | None) -> Message:
+    return Message(position=position, sender=sender, body=f"m{position}", sent_at=sent_at)
+
+
+def test_meta_line_renders_median_latencies_and_counts() -> None:
+    """Latency is measured at each change of sender; same-sender bubbles only add to the counts."""
+    messages = [
+        _timed(0, "self", "2026-03-01T18:00:00Z"),
+        _timed(1, "match", "2026-03-01T18:10:00Z"),  # match answers in 10 min
+        _timed(2, "self", "2026-03-01T18:12:00Z"),  # self answers in 2 min
+        _timed(3, "self", "2026-03-01T18:13:00Z"),
+        _timed(4, "match", "2026-03-01T18:33:00+00:00"),  # match answers in 20 min
+        _timed(5, "self", "2026-03-01T18:37:00"),  # naive reads as UTC: 4 min
+    ]
+    assert meta_line(messages) == "[meta] match_latency_min=15 self_latency_min=3 self_msgs=4 match_msgs=2"
+
+
+def test_transcript_meta_prefix_is_opt_in() -> None:
+    """The LLM prompt's plain transcript is unchanged; ``meta=True`` prepends the feature line."""
+    messages = [_timed(1, "match", "2026-03-01T18:05:00Z"), _timed(0, "self", "2026-03-01T18:00:00Z")]
+    plain = "[0] self: m0\n[1] match: m1"
+    assert transcript(messages) == plain
+    assert transcript(messages, meta=True) == "[meta] match_latency_min=5 self_latency_min=na self_msgs=1 match_msgs=1\n" + plain
+
+
+def test_meta_line_without_timestamps_is_omitted() -> None:
+    """Old exports and requests without ``sent_at`` keep the plain transcript."""
+    messages = [_timed(0, "self", None), _timed(1, "match", None)]
+    assert meta_line(messages) is None
+    assert transcript(messages, meta=True) == "[0] self: m0\n[1] match: m1"
+    assert meta_line([_timed(0, "self", "not a time"), _timed(1, "match", "")]) is None
+    # A date carries no time of day, so it must not read as a midnight timestamp.
+    assert meta_line([_timed(0, "self", "2026-03-01"), _timed(1, "match", "2026-03-02")]) is None
+
+
+def test_meta_line_skips_pairs_missing_or_reversing_time() -> None:
+    """A pair with a missing or backwards timestamp contributes no latency; counts still cover the window."""
+    messages = [
+        _timed(0, "self", "2026-03-01T18:00:00Z"),
+        _timed(1, "match", None),
+        _timed(2, "self", "2026-03-01T18:30:00Z"),
+        _timed(3, "match", "2026-03-01T18:20:00Z"),
+    ]
+    assert meta_line(messages) == "[meta] match_latency_min=na self_latency_min=na self_msgs=2 match_msgs=2"
 
 
 def test_heuristic_feedback_numbers_messages_from_one() -> None:
@@ -242,6 +289,120 @@ def test_heuristic_match_only_stretch_is_neutral() -> None:
     assert response.segments[0].engagement_score == 0.5
     assert response.segments[0].comment == "No messages from you in this stretch; the match was carrying it."
     assert response.overall.strengths == [] and response.overall.improvements == []
+
+
+def _stub_trained_scorer(monkeypatch: pytest.MonkeyPatch, scores: list[float], tmp_path) -> tuple[TrainedScorer, list[list[str]]]:
+    """A TrainedScorer whose checkpoint load is skipped and whose model returns ``scores`` in order."""
+    settings = Settings(
+        backend="trained", llm_provider="openai", llm_api_key="", llm_model="unused", llm_base_url="http://x",
+        llm_timeout=1.0, model_dir=str(tmp_path / "ckpt"), segment_size=2,
+    )
+    scorer = TrainedScorer(settings)
+    calls: list[list[str]] = []
+
+    def predict(texts):
+        calls.append(list(texts))
+        return scores[: len(texts)]
+
+    monkeypatch.setattr(scorer, "_load", lambda: None)
+    monkeypatch.setattr(scorer, "_predict", predict)
+    return scorer, calls
+
+
+def test_trained_scores_only_windows_with_self_messages(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """The trained model only sees windows holding the customer's messages; match-only windows stay neutral."""
+    scorer, calls = _stub_trained_scorer(monkeypatch, [0.9, 0.2], tmp_path)
+    request = AnalyzeRequest(
+        conversation_id="trained-1",
+        messages=[
+            Message(position=0, sender="self", body="How was the climbing trip?"),
+            Message(position=1, sender="match", body="Amazing, we did a multi-pitch route on the last day, want to hear about it?"),
+            Message(position=2, sender="match", body="Also I got a new rope"),
+            Message(position=3, sender="match", body="It is bright orange"),
+            Message(position=4, sender="self", body="nice"),
+        ],
+    )
+    response = asyncio.run(scorer.analyze(request))
+
+    assert len(calls) == 1 and len(calls[0]) == 2
+    assert all("self:" in text for text in calls[0])
+    assert [s.engagement_score for s in response.segments] == [0.9, 0.5, 0.2]
+    assert response.segments[1].comment == "No messages from you in this stretch; the match was carrying it."
+    assert all(s.comment for s in response.segments)
+    assert response.overall.engagement_score == pytest.approx(0.55)
+    assert response.model_version == "trained-v2-ckpt+agency-v3+transcript-v2"
+    assert response.overall.strengths and response.overall.improvements
+    assert response.overall.summary != "Scored by the fine-tuned engagement model."
+
+
+def test_trained_skips_the_model_when_none_of_the_messages_are_yours(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """A match-only conversation is neutral throughout and never reaches the model."""
+    scorer, calls = _stub_trained_scorer(monkeypatch, [], tmp_path)
+    request = AnalyzeRequest(
+        conversation_id="trained-2",
+        messages=[Message(position=0, sender="match", body="Hey there"), Message(position=1, sender="match", body="Hello?")],
+    )
+    response = asyncio.run(scorer.analyze(request))
+
+    assert calls == []
+    assert [s.engagement_score for s in response.segments] == [0.5]
+    assert response.segments[0].comment == "No messages from you in this stretch; the match was carrying it."
+    assert response.overall.engagement_score == 0.5
+    assert response.overall.summary == "None of these messages are yours, so there is nothing to review yet."
+
+
+def test_trained_honors_preferences(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """The customer's stated preferences reach the summary and the reflection questions."""
+    scorer, _ = _stub_trained_scorer(monkeypatch, [0.7], tmp_path)
+    request = AnalyzeRequest(
+        conversation_id="trained-3",
+        preferences="  a fellow climber  ",
+        messages=[
+            Message(position=0, sender="self", body="What got you into bouldering?"),
+            Message(position=1, sender="match", body="A friend dragged me along and I got hooked, how about you?"),
+        ],
+    )
+    response = asyncio.run(scorer.analyze(request))
+
+    assert "You said you are looking for: a fellow climber" in response.overall.summary
+    assert any("a fellow climber" in q for q in response.overall.reflection_questions)
+
+
+def test_trained_agency_gate_ignores_echoed_preferences_and_messages(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """Preferences and message excerpts the heuristic echoes are the customer's words, so they never trigger the fallback."""
+    scorer, _ = _stub_trained_scorer(monkeypatch, [0.9], tmp_path)
+    request = AnalyzeRequest(
+        conversation_id="trained-5",
+        preferences="find someone who shares my values",
+        messages=[
+            Message(position=0, sender="self", body="You should just leave your job and travel"),
+            Message(position=1, sender="match", body="ha"),
+        ],
+    )
+    response = asyncio.run(scorer.analyze(request))
+
+    assert response.model_version == scorer.version
+    assert response.segments[0].engagement_score == 0.9
+    assert "find someone who shares my values" in response.overall.summary
+
+
+def test_trained_falls_back_to_heuristic_when_prose_breaks_agency(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """An agency violation in the generated prose degrades to the heuristic scorer, as LLMScorer does."""
+    import app.scoring.trained as trained
+
+    def reject(*_args, **_kwargs):
+        raise ValueError("llm drafted a reply: 'x'")
+
+    monkeypatch.setattr(trained, "enforce_agency", reject)
+    scorer, _ = _stub_trained_scorer(monkeypatch, [0.9], tmp_path)
+    request = AnalyzeRequest(
+        conversation_id="trained-4",
+        messages=[Message(position=0, sender="self", body="Hi"), Message(position=1, sender="match", body="hey")],
+    )
+    response = asyncio.run(scorer.analyze(request))
+
+    assert response.model_version == f"{scorer.version}+fallback:{HeuristicScorer.version}"
+    assert response.segments[0].engagement_score != 0.9
 
 
 def test_reciprocity_patterns_name_over_investment_descriptively() -> None:
