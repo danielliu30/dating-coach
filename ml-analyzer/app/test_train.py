@@ -36,7 +36,7 @@ def test_prediction_metrics_empty_is_nan() -> None:
 def test_write_eval_predictions_writes_one_line_per_segment(tmp_path: Path) -> None:
     """Each eval segment becomes a JSONL record with its label, prediction and label_for buckets."""
     path = tmp_path / "segment-scorer" / "eval_predictions.jsonl"
-    rows = [("[0] self: hey", 0.1), ("[0] self: what was the last thing you baked?", 0.8)]
+    rows = [("[0] self: hey", 0.1, 1.0), ("[0] self: what was the last thing you baked?", 0.8, 0.5)]
     train.write_eval_predictions(path, rows, [0.55, 0.7])
     records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
     assert records == [
@@ -60,4 +60,4 @@ def test_write_eval_predictions_writes_one_line_per_segment(tmp_path: Path) -> N
 def test_write_eval_predictions_rejects_misaligned_predictions(tmp_path: Path) -> None:
     """A prediction count that does not match the eval rows is a bug, not a silent truncation."""
     with pytest.raises(ValueError, match="2 eval rows but 1 predictions"):
-        train.write_eval_predictions(tmp_path / "p.jsonl", [("a", 0.1), ("b", 0.2)], [0.5])
+        train.write_eval_predictions(tmp_path / "p.jsonl", [("a", 0.1, 1.0), ("b", 0.2, 1.0)], [0.5])
