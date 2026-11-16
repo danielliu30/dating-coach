@@ -33,18 +33,25 @@ func (q *Queries) CloseChatThread(ctx context.Context, id uuid.UUID) (ChatThread
 
 const createChatMessage = `-- name: CreateChatMessage :one
 INSERT INTO chat_messages (thread_id, sender_id, body)
-VALUES ($1, $2, $3)
+SELECT t.id, $1::uuid, $2::text
+FROM chat_threads t
+WHERE t.id = $3 AND t.status = 'active'
+FOR SHARE
 RETURNING id, thread_id, sender_id, body, created_at
 `
 
 type CreateChatMessageParams struct {
-	ThreadID uuid.UUID `json:"thread_id"`
 	SenderID uuid.UUID `json:"sender_id"`
 	Body     string    `json:"body"`
+	ThreadID uuid.UUID `json:"thread_id"`
 }
 
+// Stores the message only while the thread is active, so no row is returned
+// for a closed one. FOR SHARE conflicts with CloseChatThread's row lock: a
+// close in flight makes the insert wait and then re-check the status, and a
+// close arriving later waits for the insert.
 func (q *Queries) CreateChatMessage(ctx context.Context, arg CreateChatMessageParams) (ChatMessage, error) {
-	row := q.db.QueryRow(ctx, createChatMessage, arg.ThreadID, arg.SenderID, arg.Body)
+	row := q.db.QueryRow(ctx, createChatMessage, arg.SenderID, arg.Body, arg.ThreadID)
 	var i ChatMessage
 	err := row.Scan(
 		&i.ID,

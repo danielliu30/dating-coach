@@ -17,12 +17,14 @@ import (
 // groups: the client-facing endpoints from Routes and the coach-only dashboard
 // endpoints from CoachRoutes.
 type Handler struct {
-	svc *Service
+	svc     *Service
+	limiter *auth.RateLimiter
 }
 
 // NewHandler builds the coaching handler; cmd/api mounts both route groups.
-func NewHandler(svc *Service) *Handler {
-	return &Handler{svc: svc}
+// limiter throttles the public token endpoint; nil disables throttling.
+func NewHandler(svc *Service, limiter *auth.RateLimiter) *Handler {
+	return &Handler{svc: svc, limiter: limiter}
 }
 
 // Routes mounts the client-facing coaching endpoints (requires auth).
@@ -114,9 +116,19 @@ func (h *Handler) PublicRoutes() http.Handler {
 	return r
 }
 
+// errLinkInactive is the single answer to a token that matches no pending,
+// in-time request, so a caller cannot tell a wrong token from an expired or
+// already answered request.
+const errLinkInactive = "this link is invalid, expired or already used"
+
 // respondWithToken handles POST /booking/respond, the target of the confirm and
-// decline links in the coach's email: {session_id, token, action}.
+// decline links in the coach's email: {session_id, token, action}. It is rate
+// limited per client IP and per session.
 func (h *Handler) respondWithToken(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if !h.allow(w, r, "booking-respond:ip:"+auth.ClientIP(r)) {
+		return
+	}
 	var in struct {
 		SessionID string `json:"session_id"`
 		Token     string `json:"token"`
@@ -131,12 +143,45 @@ func (h *Handler) respondWithToken(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusBadRequest, "session_id must be a uuid")
 		return
 	}
+	if in.Token == "" {
+		httpx.Error(w, http.StatusBadRequest, "token is required")
+		return
+	}
+	if in.Action != "confirm" && in.Action != "decline" {
+		httpx.Error(w, http.StatusBadRequest, "action must be confirm or decline")
+		return
+	}
+	if !h.allow(w, r, "booking-respond:session:"+sessionID.String()) {
+		return
+	}
 	session, err := h.svc.RespondWithToken(r.Context(), sessionID, in.Token, in.Action)
 	if err != nil {
+		if errors.Is(err, ErrNotFound) || errors.Is(err, ErrExpired) || errors.Is(err, ErrInvalidInput) {
+			httpx.Error(w, http.StatusNotFound, errLinkInactive)
+			return
+		}
 		respondErr(w, err, "could not respond to request")
 		return
 	}
 	httpx.JSON(w, http.StatusOK, session)
+}
+
+// allow counts the request against key and answers 429 once it is over budget.
+// Like the auth limiter, a Redis outage fails open.
+func (h *Handler) allow(w http.ResponseWriter, r *http.Request, key string) bool {
+	if h.limiter == nil {
+		return true
+	}
+	ok, err := h.limiter.Allow(r.Context(), key)
+	if err != nil {
+		slog.Error("booking respond rate limiter unavailable", "error", err)
+		return true
+	}
+	if !ok {
+		httpx.Error(w, http.StatusTooManyRequests, "too many requests")
+		return false
+	}
+	return true
 }
 
 // respondAsCoach handles POST /coach/sessions/{sessionID}/respond, the

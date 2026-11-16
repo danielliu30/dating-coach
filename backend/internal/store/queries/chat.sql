@@ -31,8 +31,15 @@ ORDER BY t.last_message_at DESC;
 UPDATE chat_threads SET status = 'closed' WHERE id = $1 RETURNING *;
 
 -- name: CreateChatMessage :one
+-- Stores the message only while the thread is active, so no row is returned
+-- for a closed one. FOR SHARE conflicts with CloseChatThread's row lock: a
+-- close in flight makes the insert wait and then re-check the status, and a
+-- close arriving later waits for the insert.
 INSERT INTO chat_messages (thread_id, sender_id, body)
-VALUES ($1, $2, $3)
+SELECT t.id, @sender_id::uuid, @body::text
+FROM chat_threads t
+WHERE t.id = @thread_id AND t.status = 'active'
+FOR SHARE
 RETURNING *;
 
 -- name: TouchChatThread :exec
