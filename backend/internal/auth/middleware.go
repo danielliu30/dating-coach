@@ -67,8 +67,16 @@ func isWebSocketUpgrade(r *http.Request) bool {
 	return false
 }
 
+// isWebSocketHandshake reports whether r is a WebSocket opening handshake on a
+// socket route: a GET upgrading to websocket whose path ends in /ws. The
+// Upgrade header alone is client-controlled, so without the method and path a
+// leaked ticket would authorize any REST call that set it.
+func isWebSocketHandshake(r *http.Request) bool {
+	return r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/ws") && isWebSocketUpgrade(r)
+}
+
 // Middleware rejects requests without a valid bearer token. A WebSocket
-// upgrade may instead carry a single-use ?ticket= minted by POST
+// handshake on a /ws route may instead carry a single-use ?ticket= minted by POST
 // /auth/ws-ticket, which tickets redeems; tickets may be nil to disable that.
 //
 // Every authenticated caller is then checked against revocations, so a token
@@ -104,7 +112,7 @@ func Middleware(issuer *TokenIssuer, tickets TicketRedeemer, revocations Revocat
 // authenticate resolves r's caller from its ticket or bearer token. A non-zero
 // status is the error response to send instead.
 func authenticate(r *http.Request, issuer *TokenIssuer, tickets TicketRedeemer) (Principal, int, string) {
-	if ticket := r.URL.Query().Get("ticket"); ticket != "" && tickets != nil && isWebSocketUpgrade(r) {
+	if ticket := r.URL.Query().Get("ticket"); ticket != "" && tickets != nil && isWebSocketHandshake(r) {
 		principal, err := tickets.Redeem(r.Context(), ticket)
 		switch {
 		case errors.Is(err, ErrInvalidTicket):

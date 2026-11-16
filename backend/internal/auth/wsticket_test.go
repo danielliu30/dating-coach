@@ -109,12 +109,16 @@ func TestMiddlewareTicketOnWebSocketUpgrade(t *testing.T) {
 		ticket   string
 		upgrade  bool
 		want     int
+		method   string
+		path     string
 	}{
-		{"valid ticket on upgrade authenticates", good, "good", true, http.StatusNoContent},
-		{"unknown ticket is unauthorized", good, "bad", true, http.StatusUnauthorized},
-		{"ticket on plain HTTP is ignored", good, "good", false, http.StatusUnauthorized},
-		{"redis failure fails closed", fakeRedeemer{err: errors.New("redis down")}, "good", true, http.StatusServiceUnavailable},
-		{"tickets disabled ignores the ticket", nil, "good", true, http.StatusUnauthorized},
+		{"valid ticket on upgrade authenticates", good, "good", true, http.StatusNoContent, "", ""},
+		{"unknown ticket is unauthorized", good, "bad", true, http.StatusUnauthorized, "", ""},
+		{"ticket on plain HTTP is ignored", good, "good", false, http.StatusUnauthorized, "", ""},
+		{"redis failure fails closed", fakeRedeemer{err: errors.New("redis down")}, "good", true, http.StatusServiceUnavailable, "", ""},
+		{"tickets disabled ignores the ticket", nil, "good", true, http.StatusUnauthorized, "", ""},
+		{"ticket on a REST route is ignored even with Upgrade", good, "good", true, http.StatusUnauthorized, http.MethodDelete, "/auth/me"},
+		{"ticket on a non-socket GET is ignored even with Upgrade", good, "good", true, http.StatusUnauthorized, http.MethodGet, "/auth/me"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -123,7 +127,11 @@ func TestMiddlewareTicketOnWebSocketUpgrade(t *testing.T) {
 				seen, _ = PrincipalFrom(r.Context())
 				w.WriteHeader(http.StatusNoContent)
 			})
-			req := httptest.NewRequest(http.MethodGet, "/chat/threads/t1/ws?ticket="+tc.ticket, nil)
+			method, path := http.MethodGet, "/chat/threads/t1/ws"
+			if tc.method != "" {
+				method, path = tc.method, tc.path
+			}
+			req := httptest.NewRequest(method, path+"?ticket="+tc.ticket, nil)
 			if tc.upgrade {
 				req.Header.Set("Connection", "Upgrade")
 				req.Header.Set("Upgrade", "websocket")
