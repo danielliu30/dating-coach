@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 
@@ -51,6 +52,17 @@ func TestDenylistRevokedSince(t *testing.T) {
 	}
 	if ttl := mr.TTL(revokedKeyPrefix + deleted.String()); ttl != time.Minute+revocationGrace {
 		t.Fatalf("entry ttl = %v, want %v", ttl, time.Minute+revocationGrace)
+	}
+
+	newer := time.Now()
+	if err := d.write(ctx, user, strconv.FormatInt(newer.UnixNano(), 10)); err != nil {
+		t.Fatalf("write newer cutoff: %v", err)
+	}
+	if err := d.write(ctx, user, strconv.FormatInt(newer.Add(-time.Second).UnixNano(), 10)); err != nil {
+		t.Fatalf("write older cutoff: %v", err)
+	}
+	if since, err := d.RevokedSince(ctx, user); err != nil || !since.Equal(time.Unix(0, newer.UnixNano())) {
+		t.Fatalf("cutoff after a delayed older write = %v, %v; want %v", since, err, newer)
 	}
 
 	mr.Close()

@@ -43,8 +43,8 @@ type Denylist struct {
 }
 
 // NewDenylist returns a denylist whose entries live for ttl plus a short grace
-// period. Pass the longest lifetime of any access token, session- or
-// verify-scoped: deletion marks the account row
+// period. Pass the longest lifetime of any token a cutoff must outlive: access
+// tokens of either scope, and refresh tokens, which Refresh also checks: deletion marks the account row
 // before it revokes, so no later token exists and the entry can no longer make
 // a difference once the tokens that predate it have expired.
 func NewDenylist(rdb *redis.Client, ttl time.Duration) *Denylist {
@@ -77,10 +77,14 @@ func (d *Denylist) RevokeSessions(ctx context.Context, userID uuid.UUID) error {
 // revokedAll is the entry Revoke writes: every token is refused.
 const revokedAll = "all"
 
-// writeRevocation sets the entry unless it already revokes everything, so a
-// sign-out cannot turn a deleted account's ban into a time-bounded one.
+// writeRevocation sets the entry unless it already revokes at least as much:
+// a sign-out cannot turn a deleted account's ban into a time-bounded one, and a
+// delayed write cannot move a cutoff back. Cutoffs are equal-length decimal
+// nanoseconds, so comparing them as strings orders them.
 var writeRevocation = redis.NewScript(`
-if redis.call("GET", KEYS[1]) == ARGV[3] then return 0 end
+local current = redis.call("GET", KEYS[1])
+if current == ARGV[3] then return 0 end
+if current and ARGV[1] ~= ARGV[3] and #current == #ARGV[1] and current >= ARGV[1] then return 0 end
 redis.call("SET", KEYS[1], ARGV[1], "PX", ARGV[2])
 return 1
 `)

@@ -67,7 +67,7 @@ func run() error {
 	}
 	defer rdb.Close()
 
-	deleter := account.NewWorker(pg.Queries, auth.NewDenylist(rdb, max(cfg.JWTTTL, cfg.VerifyTokenTTL)))
+	deleter := account.NewWorker(pg.Queries, auth.NewDenylist(rdb, max(cfg.JWTTTL, cfg.VerifyTokenTTL, cfg.RefreshTokenTTL)))
 
 	slog.Info("worker started",
 		"analysis_queue", cfg.AnalysisQueue,
