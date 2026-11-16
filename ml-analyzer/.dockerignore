@@ -3,3 +3,4 @@ __pycache__/
 .venv/
 artifacts/
 data/
+!data/eval_holdout.jsonl
