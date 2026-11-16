@@ -10,6 +10,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
+
+	"github.com/danielliu30/dating-coach/backend/internal/store/db"
 )
 
 const (
@@ -60,18 +62,73 @@ func NewDenylist(rdb *redis.Client, ttl time.Duration) *Denylist {
 // works from the job's latency to milliseconds.
 //
 // It also announces the revocation on revokedChannel. That publish is best
-// effort and its failure is logged, not returned: the durable key above is what
-// makes the revocation true, and listeners that miss the announcement still
+// effort and its failure is logged, not returned: the Redis key (and, for session
+// cutoffs, users.sessions_revoked_at) is what makes the revocation true, and listeners that miss the announcement still
 // pick it up from their own periodic re-check.
 func (d *Denylist) Revoke(ctx context.Context, userID uuid.UUID) error {
-	return d.write(ctx, userID, revokedAll)
+	return d.write(ctx, userID, revokedAll, true)
 }
 
 // RevokeSessions marks every token for userID issued up to now as unusable,
 // while tokens minted afterwards (a fresh sign-in) keep working. Sign-out and
 // refresh-token reuse call it. It never weakens an account-wide Revoke.
 func (d *Denylist) RevokeSessions(ctx context.Context, userID uuid.UUID) error {
-	return d.write(ctx, userID, strconv.FormatInt(time.Now().UnixNano(), 10))
+	return d.RevokeSessionsAt(ctx, userID, time.Now())
+}
+
+// RevokeSessionsAt is RevokeSessions with an explicit cutoff, so the same
+// instant can be recorded in Postgres (users.sessions_revoked_at) and Redis.
+func (d *Denylist) RevokeSessionsAt(ctx context.Context, userID uuid.UUID, at time.Time) error {
+	return d.write(ctx, userID, strconv.FormatInt(at.UnixNano(), 10), true)
+}
+
+// SessionRevocationLister reads the durable cutoffs recorded in Postgres.
+type SessionRevocationLister interface {
+	ListSessionRevocationsSince(ctx context.Context, since time.Time) ([]db.ListSessionRevocationsSinceRow, error)
+}
+
+// ReplayRevocations copies every durable cutoff still young enough to matter
+// back into Redis. It covers a cutoff recorded while Redis was unreachable and
+// one lost to a Redis flush or failover. Replays are idempotent, since the
+// write never weakens an entry, and silent: an announcement would make every
+// replica's hub drop all of the user's sockets, including ones opened by a
+// sign-in after the cutoff. Sockets older than the cutoff are closed by their
+// own heartbeat check instead.
+func (d *Denylist) ReplayRevocations(ctx context.Context, lister SessionRevocationLister) error {
+	rows, err := lister.ListSessionRevocationsSince(ctx, time.Now().Add(-d.ttl))
+	if err != nil {
+		return fmt.Errorf("list session revocations: %w", err)
+	}
+	for _, row := range rows {
+		if row.SessionsRevokedAt == nil {
+			continue
+		}
+		cutoff := strconv.FormatInt(row.SessionsRevokedAt.UnixNano(), 10)
+		if err := d.write(ctx, row.ID, cutoff, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// RevocationReplayPeriod is how often the worker runs ReplayRevocations.
+const RevocationReplayPeriod = 15 * time.Second
+
+// WatchDurableRevocations runs ReplayRevocations every period until ctx is
+// done, returning the first failure so the caller can back off and retry.
+func (d *Denylist) WatchDurableRevocations(ctx context.Context, lister SessionRevocationLister, period time.Duration) error {
+	ticker := time.NewTicker(period)
+	defer ticker.Stop()
+	for {
+		if err := d.ReplayRevocations(ctx, lister); err != nil {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+		}
+	}
 }
 
 // revokedAll is the entry Revoke writes: every token is refused.
@@ -89,10 +146,14 @@ redis.call("SET", KEYS[1], ARGV[1], "PX", ARGV[2])
 return 1
 `)
 
-func (d *Denylist) write(ctx context.Context, userID uuid.UUID, value string) error {
+func (d *Denylist) write(ctx context.Context, userID uuid.UUID, value string, announce bool) error {
 	key := revokedKeyPrefix + userID.String()
-	if err := writeRevocation.Run(ctx, d.rdb, []string{key}, value, d.ttl.Milliseconds(), revokedAll).Err(); err != nil {
+	changed, err := writeRevocation.Run(ctx, d.rdb, []string{key}, value, d.ttl.Milliseconds(), revokedAll).Int()
+	if err != nil {
 		return fmt.Errorf("revoke sessions for %s: %w", userID, err)
+	}
+	if changed == 0 || !announce {
+		return nil
 	}
 	if err := d.rdb.Publish(ctx, revokedChannel, userID.String()).Err(); err != nil {
 		slog.Error("announce revocation", "error", err, "user_id", userID)

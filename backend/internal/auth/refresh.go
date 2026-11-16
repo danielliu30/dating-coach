@@ -105,17 +105,26 @@ func (s *Service) Refresh(ctx context.Context, raw string) (Session, error) {
 	}
 	if row.UsedAt != nil {
 		slog.Warn("refresh token reused", "user_id", row.UserID)
-		if _, err := s.queries.RevokeUserRefreshTokens(ctx, row.UserID); err != nil {
-			return Session{}, fmt.Errorf("revoke reused refresh tokens: %w", err)
-		}
 		// Whoever holds the stolen pair may already hold access tokens and open
 		// sockets too: denylist them all now rather than letting them run out
-		// their lifetime. A Redis failure only logs, since the middleware
-		// already refuses every request while Redis is down.
+		// their lifetime. The cutoff is recorded in Postgres so it survives a
+		// Redis outage (the worker replays it), but a Postgres failure must not
+		// skip the other steps: once the refresh tokens are gone a retry can no
+		// longer detect the reuse, so every step is attempted before failing.
+		at, recordErr := s.revokeReusedRefreshTokens(ctx, row.UserID)
+		if recordErr != nil {
+			at = time.Now()
+			if _, err := s.queries.RevokeUserRefreshTokens(ctx, row.UserID); err != nil {
+				return Session{}, errors.Join(recordErr, fmt.Errorf("revoke reused refresh tokens: %w", err))
+			}
+		}
 		if s.denylist != nil {
-			if err := s.denylist.RevokeSessions(ctx, row.UserID); err != nil {
+			if err := s.denylist.RevokeSessionsAt(ctx, row.UserID, at); err != nil {
 				slog.Error("revoke sessions after refresh token reuse", "error", err, "user_id", row.UserID)
 			}
+		}
+		if recordErr != nil {
+			return Session{}, recordErr
 		}
 		return Session{}, ErrInvalidRefreshToken
 	}
@@ -139,6 +148,21 @@ func (s *Service) Refresh(ctx context.Context, raw string) (Session, error) {
 	defer func() { _ = tx.Rollback(ctx) }()
 	q := s.queries.WithTx(tx)
 
+	// Locking the account row orders this rotation against a concurrent reuse
+	// revocation: either that revocation's delete sees the replacement token
+	// committed below, or this read sees its cutoff and refuses. It is taken
+	// before the token row, the same order the revocation locks them in, so the
+	// two cannot deadlock.
+	user, err := q.LockUserForRefresh(ctx, row.UserID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Session{}, ErrInvalidRefreshToken
+		}
+		return Session{}, fmt.Errorf("get user: %w", err)
+	}
+	if user.SessionsRevokedAt != nil && !row.IssuedAt.After(*user.SessionsRevokedAt) {
+		return Session{}, ErrInvalidRefreshToken
+	}
 	// The update is the rotation: it only matches a token that is still unspent
 	// and unexpired, so two concurrent requests cannot both be served.
 	rows, err := q.UseRefreshToken(ctx, row.ID)
@@ -149,13 +173,6 @@ func (s *Service) Refresh(ctx context.Context, raw string) (Session, error) {
 		return Session{}, ErrInvalidRefreshToken
 	}
 
-	user, err := q.GetUserByID(ctx, row.UserID)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return Session{}, ErrInvalidRefreshToken
-		}
-		return Session{}, fmt.Errorf("get user: %w", err)
-	}
 	session, err := s.openSession(ctx, q, user, row.FamilyID)
 	if err != nil {
 		return Session{}, err
@@ -172,6 +189,30 @@ func (s *Service) Refresh(ctx context.Context, raw string) (Session, error) {
 		"expires_at", session.ExpiresAt,
 	)
 	return session, nil
+}
+
+// revokeReusedRefreshTokens records the reuse cutoff and deletes userID's
+// refresh tokens in one transaction. The cutoff update takes the account row
+// lock a rotation also takes, so a replacement minted concurrently is either
+// committed before the delete runs (and deleted) or refused by its rotation.
+func (s *Service) revokeReusedRefreshTokens(ctx context.Context, userID uuid.UUID) (time.Time, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := s.queries.WithTx(tx)
+	at := time.Now().Truncate(time.Microsecond)
+	if err := q.RecordSessionRevocation(ctx, db.RecordSessionRevocationParams{ID: userID, RevokedAt: at}); err != nil {
+		return time.Time{}, fmt.Errorf("record session revocation: %w", err)
+	}
+	if _, err := q.RevokeUserRefreshTokens(ctx, userID); err != nil {
+		return time.Time{}, fmt.Errorf("revoke reused refresh tokens: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return time.Time{}, fmt.Errorf("commit reuse revocation: %w", err)
+	}
+	return at, nil
 }
 
 // hashRefreshToken returns the hex SHA-256 of a refresh token, which is what
