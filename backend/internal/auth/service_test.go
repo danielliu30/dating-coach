@@ -404,8 +404,13 @@ func TestSignOut(t *testing.T) {
 	}
 
 	time.Sleep(10 * time.Millisecond)
-	if err := svc.SignOut(ctx, userID); err != nil {
-		t.Fatalf("sign out: %v", err)
+	routes := NewHandler(svc, NewRateLimiter(svc.denylist.rdb, 100, time.Minute)).Routes(Middleware(issuer, nil, svc.denylist))
+	req := httptest.NewRequest(http.MethodPost, "/signout", nil)
+	req.Header.Set("Authorization", "Bearer "+first.Token)
+	rec := httptest.NewRecorder()
+	routes.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"signed_out"`) {
+		t.Fatalf("POST /signout = %d %s, want 200 signed_out", rec.Code, rec.Body.String())
 	}
 
 	t.Run("refresh tokens are deleted", func(t *testing.T) {
