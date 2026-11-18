@@ -58,8 +58,7 @@ type MLSegment struct {
 // (open questions for the customer and recurring behaviour named as an
 // observation). Results stored before the analyzer emitted them, or from an
 // analyzer that omits them, carry null for these keys, like any absent slice.
-// GoalScores has one entry per requested focus area the analyzer could judge;
-// it must be declared here or the worker's decode -> re-encode would drop it.
+// GoalScores holds requested focus areas the analyzer could judge.
 type MLOverall struct {
 	EngagementScore     float64       `json:"engagement_score"`
 	Summary             string        `json:"summary"`

@@ -89,39 +89,22 @@ func (w *Worker) Handle(ctx context.Context, job Job, lastAttempt bool) error {
 	return nil
 }
 
-// tailoring is what the conversation's owner told us about themselves that the
-// analyzer tailors to: users.dating_preferences (what they are looking for) and
-// users.coaching_goals (the coaching-brain pillars they want scored).
-type tailoring struct {
-	Preferences string
-	FocusAreas  []string
-}
-
-// ownerTailoring reads the owner's tailoring from their user row when the job
-// runs, so an edit made after the upload still applies. A user that no longer
-// exists (or is soft-deleted) yields the zero value rather than an error: the
-// analysis still runs, just untailored, and the owner's absence is dealt with
-// when the result is delivered.
-func (w *Worker) ownerTailoring(ctx context.Context, userID uuid.UUID) (tailoring, error) {
+// ownerTailoring loads current preferences and goals; missing owners leave analysis untailored.
+func (w *Worker) ownerTailoring(ctx context.Context, userID uuid.UUID) (db.User, error) {
 	user, err := w.queries.GetUserByID(ctx, userID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return tailoring{}, nil
+		return db.User{}, nil
 	}
-	if err != nil {
-		return tailoring{}, err
-	}
-	return tailoring{Preferences: user.DatingPreferences, FocusAreas: user.CoachingGoals}, nil
+	return user, err
 }
 
-// newMLRequest builds the analyzer request for conversation and its messages,
-// tailored to owner.
-func newMLRequest(conversation db.Conversation, messages []db.Message, owner tailoring) MLRequest {
+func newMLRequest(conversation db.Conversation, messages []db.Message, owner db.User) MLRequest {
 	req := MLRequest{
 		ConversationID: conversation.ID.String(),
 		Platform:       conversation.Platform,
 		MatchName:      conversation.MatchName,
-		Preferences:    owner.Preferences,
-		FocusAreas:     owner.FocusAreas,
+		Preferences:    owner.DatingPreferences,
+		FocusAreas:     owner.CoachingGoals,
 		Messages:       make([]MLMessage, 0, len(messages)),
 	}
 	for _, m := range messages {

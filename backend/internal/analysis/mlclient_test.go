@@ -100,9 +100,6 @@ func TestMLRequestPreferencesWireFormat(t *testing.T) {
 	}
 }
 
-// TestMLRequestFocusAreasWireFormat pins the analyzer contract for coaching
-// goals: they travel as the top-level "focus_areas" list and are omitted when
-// the user has chosen none, so the analyzer returns no goal_scores.
 func TestMLRequestFocusAreasWireFormat(t *testing.T) {
 	with, err := json.Marshal(MLRequest{ConversationID: "c", Platform: "hinge", FocusAreas: []string{"agency", "feedback"}})
 	if err != nil {
