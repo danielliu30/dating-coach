@@ -326,10 +326,13 @@ python train.py --data data/labeled.jsonl --dry-run   # dataset stats only
 python train.py --data data/labeled.jsonl --out artifacts/segment-scorer
 ```
 
+With `--weak-earlier-weight 0`, the default self-message filter leaves no rows
+for a weakly labeled conversation whose final window is match-only.
+
 Default recipe: DistilBERT with a single-logit head over segment transcripts,
 soft-target BCE against the 0–1 score (so serving's `sigmoid(logit)` is on the
-same scale as the labels), weighted per row by `training.dataset` (human
-segments 1.0; see `training/data_schema.md`), `mae`/`rmse` on the eval split.
+same scale as the labels), with [per-row weights](training/data_schema.md#weak-label-weighting)
+and `mae`/`rmse` plus `weighted_mae`/`weighted_rmse` on the eval split.
 
 For a generative model that also writes the `comment`/`summary` text, LoRA
 fine-tune a small instruct model on `(transcript → the exact JSON the prompt

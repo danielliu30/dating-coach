@@ -1,7 +1,15 @@
 import json
+import sys
+
+import pytest
+
+from app.schemas import Message
+from app.scoring.base import chunk
+from train import parse_args
 
 import training.dataset as dataset_module
 from training.dataset import (
+    OUTCOME_SCORE,
     TrainingExample,
     _jaccard,
     _normalized_transcript,
@@ -11,6 +19,7 @@ from training.dataset import (
     normalize_body,
     split,
     to_segment_rows,
+    windows,
 )
 
 
@@ -163,6 +172,74 @@ def test_near_copy_of_a_replaced_representative_stays_in_its_cluster():
     ]
 
     assert [e.conversation_id for e in deduplicate(examples)] == ["human", "other"]
+
+
+LONG_BODIES = BODIES + ["deal. saturday?", "saturday works", "bring the starter", "obviously"]
+
+
+def _lines(positions):
+    return "\n".join(f"[{i}] {'self' if i % 2 == 0 else 'match'}: {LONG_BODIES[i]}" for i in positions)
+
+
+@pytest.mark.parametrize(
+    "length,outcome,options,score,windows_and_weights",
+    [
+        (10, "date_set", {}, OUTCOME_SCORE["date_set"], [(0, 4, 0.5), (4, 8, 0.5), (8, 10, 1.0)]),
+        (10, "ghosted", {"earlier_window_weight": 0.0}, OUTCOME_SCORE["ghosted"], [(8, 10, 1.0)]),
+        (6, None, {}, 0.2, [(0, 4, 0.5), (4, 6, 1.0)]),
+        (3, "kept_talking", {}, OUTCOME_SCORE["kept_talking"], [(0, 3, 1.0)]),
+    ],
+)
+def test_weak_label_window_weights(length, outcome, options, score, windows_and_weights):
+    payload = _payload("a", LONG_BODIES[:length], outcome=outcome)
+    if outcome is None:
+        payload["reply_received"] = False
+    example = TrainingExample.from_json(payload)
+
+    assert list(to_segment_rows([example], **options)) == [
+        (_lines(range(start, end)), score, weight) for start, end, weight in windows_and_weights
+    ]
+
+
+@pytest.mark.parametrize("weight", ["nan", "inf", "-inf"])
+def test_train_rejects_nonfinite_weak_earlier_weight(monkeypatch, capsys, weight):
+    monkeypatch.setattr(sys, "argv", ["train.py", "--data", "unused.jsonl", f"--weak-earlier-weight={weight}"])
+    with pytest.raises(SystemExit) as exc:
+        parse_args()
+    assert exc.value.code == 2
+    assert "--weak-earlier-weight must be finite" in capsys.readouterr().err
+
+
+def test_human_segments_ignore_window_settings():
+    segments = [{"start_position": 0, "end_position": 9, "engagement_score": 0.3}]
+    example = TrainingExample.from_json(_payload("a", LONG_BODIES, segments=segments, outcome="date_set"))
+
+    rows = list(to_segment_rows([example], window_size=2, earlier_window_weight=0.0))
+
+    assert rows == [(_lines(range(10)), 0.3, 1.0)]
+
+
+def test_split_passes_window_settings_through_to_rows():
+    examples = [
+        TrainingExample.from_json(_payload(f"c{i}", LONG_BODIES, user_id=f"u{i}", outcome="date_set"))
+        for i in range(5)
+    ]
+
+    train_rows, eval_rows = split(examples, eval_fraction=0.2, window_size=5, earlier_window_weight=0.25)
+
+    assert len(train_rows) == 8 and len(eval_rows) == 2
+    assert [weight for _, _, weight in eval_rows] == [0.25, 1.0]
+
+
+def test_windows_match_serving_segment_boundaries():
+    example = TrainingExample.from_json(_payload("a", LONG_BODIES))
+    served = [
+        Message(position=m.position, sender=m.sender, body=m.body) for m in example.messages
+    ]
+
+    for size in (1, 3, 4, 7):
+        ours = [(w[0].position, w[-1].position) for w in windows(example.messages, size)]
+        assert ours == [(start, end) for start, end, _ in chunk(served, size)]
 
 
 def test_copy_bridging_two_clusters_merges_them_and_keeps_a_human_label():

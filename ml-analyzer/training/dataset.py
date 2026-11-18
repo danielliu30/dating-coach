@@ -71,6 +71,14 @@ Row = Tuple[str, float, float]
 
 HUMAN_LABEL_WEIGHT = 1.0
 
+# Weak (conversation-level) labels are spread over fixed-size windows. The final
+# window — the messages leading up to the outcome — gets full weight; earlier
+# windows are down-weighted because the outcome says little about them.
+# DEFAULT_WINDOW_SIZE matches serving's default ML_SEGMENT_SIZE.
+DEFAULT_WINDOW_SIZE = 4
+WEAK_FINAL_WINDOW_WEIGHT = 1.0
+WEAK_EARLIER_WINDOW_WEIGHT = 0.5
+
 OUTCOME_SCORE = {
     "ghosted": 0.05,
     "kept_talking": 0.55,
@@ -198,12 +206,38 @@ def transcript(messages: Sequence[LabeledMessage]) -> str:
     return "\n".join(f"[{m.position}] {m.sender}: {m.body}" for m in sorted(messages, key=lambda m: m.position))
 
 
-def to_segment_rows(examples: Sequence[TrainingExample]) -> Iterator[Row]:
+def _has_self(messages: Sequence[LabeledMessage]) -> bool:
+    return any(m.sender == "self" for m in messages)
+
+
+def windows(messages: Sequence[LabeledMessage], size: int) -> List[List[LabeledMessage]]:
+    """Contiguous windows of at most ``size`` messages, aligned from position 0.
+
+    Same boundaries as ``app.scoring.base.chunk``, so training rows look like the
+    segments the served model scores.
+    """
+    ordered = sorted(messages, key=lambda m: m.position)
+    step = max(size, 1)
+    return [ordered[start : start + step] for start in range(0, len(ordered), step)]
+
+
+def to_segment_rows(
+    examples: Sequence[TrainingExample],
+    window_size: int = DEFAULT_WINDOW_SIZE,
+    earlier_window_weight: float = WEAK_EARLIER_WINDOW_WEIGHT,
+    self_only: bool = True,
+) -> Iterator[Row]:
     """Flatten examples into (segment transcript, target score, weight) rows.
 
-    Human per-segment labels win. When they are absent, the conversation outcome
-    is used as a weak label for every segment — noisy, but it is what makes
-    passively collected data usable.
+    Human per-segment labels win and are used as-is at ``HUMAN_LABEL_WEIGHT``.
+    When they are absent, the conversation outcome (else ``reply_received``) is a
+    weak label: one row per ``window_size`` window, the final window at
+    ``WEAK_FINAL_WINDOW_WEIGHT`` and every earlier one at ``earlier_window_weight``.
+    ``earlier_window_weight <= 0`` keeps only the final window.
+
+    ``self_only`` (the default) drops windows with no ``self`` message, matching
+    ``HeuristicScorer``'s rule that only the customer's messages are judged: a
+    match-only stretch says nothing about the customer's own messages.
     """
     for example in examples:
         by_position = {m.position: m for m in example.messages}
@@ -214,7 +248,7 @@ def to_segment_rows(examples: Sequence[TrainingExample]) -> Iterator[Row]:
                     for p in range(segment.start_position, segment.end_position + 1)
                     if p in by_position
                 ]
-                if window:
+                if window and (_has_self(window) or not self_only):
                     yield (
                         transcript(window),
                         max(0.0, min(1.0, segment.engagement_score)),
@@ -227,22 +261,34 @@ def to_segment_rows(examples: Sequence[TrainingExample]) -> Iterator[Row]:
             weak = 0.6 if example.reply_received else 0.2 if example.reply_received is False else None
         if weak is None:
             continue
-        yield transcript(example.messages), weak, 1.0
+        chunks = windows(example.messages, window_size)
+        for index, window in enumerate(chunks):
+            weight = WEAK_FINAL_WINDOW_WEIGHT if index == len(chunks) - 1 else earlier_window_weight
+            if weight > 0 and (_has_self(window) or not self_only):
+                yield transcript(window), weak, weight
 
 
 def split(
-    examples: Sequence[TrainingExample], eval_fraction: float = 0.1
+    examples: Sequence[TrainingExample],
+    eval_fraction: float = 0.1,
+    window_size: int = DEFAULT_WINDOW_SIZE,
+    earlier_window_weight: float = WEAK_EARLIER_WINDOW_WEIGHT,
+    self_only: bool = True,
 ) -> Tuple[List[Row], List[Row]]:
     """Flatten examples into rows with a group-disjoint train/eval split.
 
     Grouping is by ``group_key`` (user when known, otherwise conversation), so no
     segment of an evaluated conversation is ever seen during training. The group
-    hash keeps the assignment stable as the dataset grows.
+    hash keeps the assignment stable as the dataset grows. ``self_only`` is
+    passed to ``to_segment_rows``; only groups left with at least one row are
+    split, so filtered-out groups never take an eval slot.
     """
     eval_fraction = max(0.0, min(1.0, eval_fraction))
-    buckets: Dict[str, List[TrainingExample]] = {}
+    buckets: Dict[str, List[Row]] = {}
     for example in examples:
-        buckets.setdefault(example.group_key(), []).append(example)
+        rows = list(to_segment_rows([example], window_size, earlier_window_weight, self_only))
+        if rows:
+            buckets.setdefault(example.group_key(), []).extend(rows)
 
     keys = sorted(buckets)
     keys.sort(key=lambda k: hashlib.sha256(k.encode("utf-8")).hexdigest())
@@ -251,6 +297,6 @@ def split(
         eval_count = 1
     eval_keys = set(keys[:eval_count])
 
-    train_examples = [e for k in keys if k not in eval_keys for e in buckets[k]]
-    eval_examples = [e for k in keys if k in eval_keys for e in buckets[k]]
-    return list(to_segment_rows(train_examples)), list(to_segment_rows(eval_examples))
+    train_rows = [row for k in keys if k not in eval_keys for row in buckets[k]]
+    eval_rows = [row for k in keys if k in eval_keys for row in buckets[k]]
+    return train_rows, eval_rows
