@@ -1323,6 +1323,15 @@ func (q *Queries) ListSessionsForUser(ctx context.Context, arg ListSessionsForUs
 	return items, nil
 }
 
+const lockCoachForBooking = `-- name: LockCoachForBooking :exec
+SELECT user_id FROM coaches WHERE user_id = $1 FOR NO KEY UPDATE
+`
+
+func (q *Queries) LockCoachForBooking(ctx context.Context, userID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, lockCoachForBooking, userID)
+	return err
+}
+
 const markAuthorizationReleased = `-- name: MarkAuthorizationReleased :execrows
 UPDATE coaching_sessions
 SET payment_status = 'released', updated_at = now()
