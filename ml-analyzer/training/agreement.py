@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import math
 from collections import Counter
+from statistics import pstdev
 from typing import Dict, List, Sequence
 
 from app.scoring.base import label_for
@@ -107,7 +108,7 @@ def distribution(values: Sequence[float]) -> Dict[str, float]:
     mean = sum(values) / n
     return {
         "mean": mean,
-        "std": math.sqrt(sum((v - mean) ** 2 for v in values) / n),
+        "std": pstdev(values) if math.isfinite(mean) else math.nan,
         "min": min(values),
         "max": max(values),
     }

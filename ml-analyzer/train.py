@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 
 from training.agreement import distribution, label_counts
@@ -71,7 +72,10 @@ def parse_args() -> argparse.Namespace:
         help="Drop segment windows with no 'self' message, as HeuristicScorer judges only the customer (default: on)",
     )
     parser.add_argument("--dry-run", action="store_true", help="Report dataset stats and exit")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if not math.isfinite(args.weak_earlier_weight):
+        parser.error("--weak-earlier-weight must be finite")
+    return args
 
 
 def report_holdout(

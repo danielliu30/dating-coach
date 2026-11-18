@@ -1,5 +1,5 @@
 import { API_BASE_URL, API_PREFIX } from '../config';
-import { ApiClient, ApiError } from './client';
+import { ApiClient, ApiError, TRANSPORT_ERROR_MESSAGE } from './client';
 
 type FetchMock = jest.MockedFunction<typeof fetch>;
 
@@ -10,6 +10,10 @@ const reply = (status: number, body?: unknown): Response =>
     status,
     text: async () => (body === undefined ? '' : JSON.stringify(body)),
   }) as Response;
+
+/** Like `reply`, but with a raw (possibly non-JSON) body. */
+const rawReply = (status: number, text: string): Response =>
+  ({ ok: status >= 200 && status < 300, status, text: async () => text }) as Response;
 
 /** Creates a promise whose settlement the test controls. */
 function deferred<T>() {
@@ -82,6 +86,70 @@ describe('ApiClient request plumbing', () => {
   });
 });
 
+describe('ApiClient transport failures', () => {
+  let warn: jest.SpyInstance;
+
+  beforeEach(() => {
+    warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    warn.mockRestore();
+  });
+
+  it('turns a rejected fetch into a friendly ApiError with status 0 and logs the original', async () => {
+    const original = new TypeError('Failed to fetch');
+    fetchMock.mockRejectedValueOnce(original);
+
+    const error = await new ApiClient().openSlots('c1').catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({ status: 0, message: TRANSPORT_ERROR_MESSAGE });
+    expect((error as Error).message).not.toContain('Failed to fetch');
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('/coaching/coaches/c1/slots'), original);
+  });
+
+  it('treats a body that cannot be read as a transport failure', async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      text: async () => {
+        throw new TypeError('network error');
+      },
+    } as unknown as Response);
+
+    await expect(new ApiClient().me()).rejects.toMatchObject({ status: 0, message: TRANSPORT_ERROR_MESSAGE });
+    expect(warn).toHaveBeenCalled();
+  });
+
+  it('treats a non-JSON success body as a transport failure', async () => {
+    fetchMock.mockResolvedValueOnce(rawReply(200, '<!doctype html><html></html>'));
+
+    await expect(new ApiClient().me()).rejects.toMatchObject({ status: 0, message: TRANSPORT_ERROR_MESSAGE });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('non-JSON'), expect.any(SyntaxError));
+  });
+
+  it('keeps the HTTP status for a non-JSON error body', async () => {
+    fetchMock.mockResolvedValueOnce(rawReply(502, '<html>Bad Gateway</html>'));
+
+    await expect(new ApiClient().me()).rejects.toMatchObject({ status: 502, message: 'request failed with 502' });
+  });
+
+  it('still renews on a 401 with a non-JSON body', async () => {
+    let token = 'old';
+    fetchMock.mockResolvedValueOnce(rawReply(401, 'Unauthorized')).mockResolvedValueOnce(reply(200, { id: 'me' }));
+    const client = new ApiClient();
+    client.useToken(() => token);
+    client.useRenewal(async () => {
+      token = 'new';
+      return 'renewed';
+    });
+
+    await expect(client.me()).resolves.toEqual({ id: 'me' });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe('ApiClient 401 renewal', () => {
   it('renews once and retries a token-carrying request on 401', async () => {
     let token = 'old';
@@ -99,6 +167,18 @@ describe('ApiClient 401 renewal', () => {
     expect(renew).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect((fetchMock.mock.calls[1][1] as RequestInit).headers).toMatchObject({ Authorization: 'Bearer new' });
+  });
+
+  it('threadMessages with renew: false surfaces a 401 without renewing', async () => {
+    fetchMock.mockResolvedValueOnce(reply(401, { error: 'expired' }));
+    const client = new ApiClient();
+    client.useToken(() => 'tok');
+    const renew = jest.fn(async () => 'renewed' as const);
+    client.useRenewal(renew);
+
+    await expect(client.threadMessages('t1', 1, { renew: false })).rejects.toMatchObject({ status: 401 });
+    expect(renew).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('does not renew for a 401 on an unauthenticated request', async () => {

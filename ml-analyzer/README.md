@@ -240,8 +240,8 @@ vision endpoint of the configured provider (Anthropic or OpenAI-compatible);
   (a violation falls back to the heuristic scorer). Each segment is scored on the
   same text training rows use: the transcript, prefixed with a `[meta]` line of
   `sent_at` latency/count features when timestamps exist (see
-  [`training/data_schema.md`](training/data_schema.md#model-input)), so
-  checkpoints trained before that line existed should be retrained.
+  [`training/data_schema.md`](training/data_schema.md#model-input)). Retrain
+  pre-`[meta]` checkpoints before serving timestamped inputs.
 
 ## Training your own model
 
@@ -281,9 +281,7 @@ Export a dataset:
 Ground rules: only export `consented` rows, pseudonymise names/handles/links
 before they leave the database, and keep an opt-out path that deletes a user's
 training rows. `outcome`/`reply_received` are weak labels — cheap and plentiful;
-human `segments` labels are scarce and authoritative. Weak labels are applied
-per segment window, at full weight only on the final window (see "Label
-precedence" in `training/data_schema.md`). Aim for a few thousand
+human `segments` labels are scarce and authoritative. Aim for a few thousand
 weak-labeled conversations plus a few hundred hand-labeled ones as the eval set,
 and keep the eval set user-disjoint from training.
 
@@ -313,13 +311,14 @@ python train.py --data data/labeled.jsonl --out artifacts/segment-scorer
 ```
 
 By default (`--self-only`) segment windows with no `self` message are dropped,
-matching the heuristic scorer's rule that only the customer's messages are
-judged; pass `--no-self-only` to keep match-only windows.
+matching the heuristic scorer; pass `--no-self-only` to keep them. With
+`--weak-earlier-weight 0`, a weakly labeled conversation whose final window is
+match-only produces no rows.
 
 Default recipe: DistilBERT with a single-logit head over segment transcripts,
 soft-target BCE against the 0–1 score (so serving's `sigmoid(logit)` is on the
-same scale as the labels), weighted per row by `training.dataset` (human
-segments 1.0; see `training/data_schema.md`), `mae`/`rmse` on the eval split.
+same scale as the labels), with [per-row weights](training/data_schema.md#weak-label-weighting)
+and `mae`/`rmse` on the eval split.
 
 For a generative model that also writes the `comment`/`summary` text, LoRA
 fine-tune a small instruct model on `(transcript → the exact JSON the prompt
