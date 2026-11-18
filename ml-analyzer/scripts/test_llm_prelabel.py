@@ -68,7 +68,6 @@ def test_conversations_dedupes_prefers_user_row_and_skips_labeled():
     assert [r["conversation_id"] for r in rows] == ["c1"]
     assert rows[0]["outcome"] == "kept_talking"
     assert "segments" not in rows[0] and "label_source" not in rows[0]
-    assert {r["conversation_id"] for r in conversations([labeled], include_labeled=True)} == {"c2"}
 
 
 def test_prelabel_writes_a_suggested_score_per_segment(tmp_path):
@@ -89,18 +88,14 @@ def test_prelabel_writes_a_suggested_score_per_segment(tmp_path):
     assert row["segments"][0]["suggested_comment"] == "The message drew an engaged reply."
 
 
-@pytest.mark.parametrize("skip_fallback", [False, True])
-def test_llm_failure_is_flagged_as_fallback(tmp_path, skip_fallback):
+def test_llm_failure_is_flagged_as_fallback(tmp_path):
     out = tmp_path / "prelabeled.jsonl"
     with respx.mock(assert_all_called=True) as mock:
         mock.post(URL).mock(return_value=httpx.Response(500))
-        stats = asyncio.run(prelabel([_conversation()], LLMScorer(_settings()), out, skip_fallback=skip_fallback))
+        stats = asyncio.run(prelabel([_conversation()], LLMScorer(_settings()), out))
     rows = _rows(out)
-    if skip_fallback:
-        assert rows == [] and stats["skipped_fallback"] == 1
-    else:
-        assert rows[0]["prelabel"]["fallback"] is True and stats["fallback"] == 1
-        assert all(isinstance(s["suggested_score"], float) for s in rows[0]["segments"])
+    assert rows[0]["prelabel"]["fallback"] is True and stats["fallback"] == 1
+    assert all(isinstance(s["suggested_score"], float) for s in rows[0]["segments"])
 
 
 def test_invalid_conversation_is_skipped(tmp_path):
@@ -123,12 +118,18 @@ def test_main_resumes_without_rescoring(tmp_path, monkeypatch):
     data.write_text("".join(json.dumps(_conversation(c)) + "\n" for c in ("c1", "c2")))
     monkeypatch.setattr(llm_prelabel, "get_settings", _settings)
     argv = ["--data", str(data), "--out", str(out)]
+    saved_counts = []
+
+    def reply(request):
+        saved_counts.append(len(_rows(out)))
+        return _llm_reply()
+
     with respx.mock(assert_all_called=True) as mock:
-        route = mock.post(URL).mock(return_value=_llm_reply())
-        llm_prelabel.main([*argv, "--limit", "1"])
+        route = mock.post(URL).mock(side_effect=reply)
         llm_prelabel.main(argv)
         llm_prelabel.main(argv)
     assert route.call_count == 2
+    assert saved_counts == [0, 1]
     assert sorted(r["conversation_id"] for r in _rows(out)) == ["c1", "c2"]
 
 
@@ -138,22 +139,15 @@ def test_main_requires_an_api_key(tmp_path, monkeypatch):
         llm_prelabel.main(["--data", str(tmp_path / "missing.jsonl")])
 
 
-def test_main_refuses_to_overwrite_its_input(tmp_path, monkeypatch):
+@pytest.mark.parametrize("hardlink", [False, True])
+def test_main_refuses_to_write_to_its_input(tmp_path, monkeypatch, hardlink):
     data = tmp_path / "labeled.jsonl"
     data.write_text(json.dumps(_conversation()) + "\n")
+    out = tmp_path / "." / "labeled.jsonl"
+    if hardlink:
+        out = tmp_path / "alias.jsonl"
+        out.hardlink_to(data)
     monkeypatch.setattr(llm_prelabel, "get_settings", _settings)
     with pytest.raises(SystemExit, match="must not be"):
-        llm_prelabel.main(["--data", str(data), "--out", str(tmp_path / "." / "labeled.jsonl"), "--overwrite"])
+        llm_prelabel.main(["--data", str(data), "--out", str(out)])
     assert data.exists()
-
-
-def test_allow_heuristic_without_a_key_makes_no_llm_calls(tmp_path, monkeypatch):
-    data, out = tmp_path / "labeled.jsonl", tmp_path / "prelabeled.jsonl"
-    data.write_text(json.dumps(_conversation()) + "\n")
-    monkeypatch.setattr(llm_prelabel, "get_settings", lambda: _settings(api_key=""))
-    with respx.mock(assert_all_called=False) as mock:
-        route = mock.post(URL).mock(return_value=_llm_reply())
-        llm_prelabel.main(["--data", str(data), "--out", str(out), "--allow-heuristic"])
-    assert not route.called
-    [row] = _rows(out)
-    assert row["prelabel"]["fallback"] is True and row["prelabel"]["model_version"].startswith("heuristic")
