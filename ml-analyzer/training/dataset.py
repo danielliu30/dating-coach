@@ -18,6 +18,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, FrozenSet, Iterator, List, Sequence, Tuple
 
+from app.scoring.base import transcript as _model_transcript
+
 
 @dataclass
 class LabeledMessage:
@@ -203,7 +205,12 @@ def load_jsonl(
 
 
 def transcript(messages: Sequence[LabeledMessage]) -> str:
-    return "\n".join(f"[{m.position}] {m.sender}: {m.body}" for m in sorted(messages, key=lambda m: m.position))
+    """Model input text: the ``[meta]`` feature line (when ``sent_at`` exists) plus one line per message.
+
+    Delegates to the serving formatter so ``TrainedScorer`` sees exactly the
+    text the model was trained on.
+    """
+    return _model_transcript(messages, meta=True)
 
 
 def _has_self(messages: Sequence[LabeledMessage]) -> bool:
