@@ -60,8 +60,9 @@ Rows with none of the three are skipped.
    check.
 
 A match joins or merges clusters even if the matching copy was dropped. Each
-cluster keeps its first human-labeled copy in input order, or its first copy
-when unlabeled, at the position of the cluster's first occurrence.
+cluster keeps its first human-labeled copy in input order, else its first copy
+with a weak label (`outcome` or `reply_received`), else its first copy, at the
+position of the cluster's first occurrence.
 
 ## Annotation guidance
 
