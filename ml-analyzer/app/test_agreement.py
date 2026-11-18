@@ -109,6 +109,8 @@ def test_distribution_reports_population_stats() -> None:
         {"mean": 0.5, "std": math.sqrt(0.05), "min": 0.2, "max": 0.8}
     )
     assert all(math.isnan(v) for v in distribution([]).values())
+    assert distribution([0.1] * 3)["std"] == 0.0
+    assert math.isnan(distribution([math.nan])["std"])
 
 
 def test_label_counts_cover_every_bucket() -> None:
