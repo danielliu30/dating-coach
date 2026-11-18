@@ -2,8 +2,10 @@ package auth
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -15,11 +17,21 @@ import (
 type Handler struct {
 	svc     *Service
 	limiter *RateLimiter
+	tickets *WSTickets
+	// ticketLimiter bounds tickets minted per user, so one account cannot
+	// flood Redis with live ticket keys.
+	ticketLimiter *RateLimiter
 }
 
 // NewHandler builds the auth handler; cmd/api mounts its Routes.
 func NewHandler(svc *Service, limiter *RateLimiter) *Handler {
 	return &Handler{svc: svc, limiter: limiter}
+}
+
+// SetWSTickets enables POST /ws-ticket, minting at most limiter's budget per
+// user. Without it the route answers 503.
+func (h *Handler) SetWSTickets(tickets *WSTickets, limiter *RateLimiter) {
+	h.tickets, h.ticketLimiter = tickets, limiter
 }
 
 // Routes mounts the auth endpoints. The credential endpoints are rate limited
@@ -45,6 +57,8 @@ func (h *Handler) Routes(authenticate func(http.Handler) http.Handler) http.Hand
 		private.Get("/me", h.me)
 		private.Patch("/me", h.updateMe)
 		private.Delete("/me", h.deleteMe)
+		private.Post("/signout", h.signOut)
+		private.With(RequireScope(ScopeSession)).Post("/ws-ticket", h.wsTicket)
 	})
 	return r
 }
@@ -163,6 +177,8 @@ func (h *Handler) verify(w http.ResponseWriter, r *http.Request) {
 	}
 	session, err := h.svc.VerifyEmail(r.Context(), in.Email, in.Code, bearerToken(r))
 	switch {
+	case errors.Is(err, ErrSessionRevoked):
+		httpx.Error(w, http.StatusUnauthorized, err.Error())
 	case errors.Is(err, ErrInvalidCode):
 		httpx.Error(w, http.StatusBadRequest, err.Error())
 	case err != nil:
@@ -211,6 +227,24 @@ func (h *Handler) deleteMe(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusAccepted, map[string]string{"status": "deleted"})
 }
 
+func (h *Handler) signOut(w http.ResponseWriter, r *http.Request) {
+	principal, ok := PrincipalFrom(r.Context())
+	if !ok {
+		httpx.Error(w, http.StatusUnauthorized, "unauthenticated")
+		return
+	}
+	if err := h.svc.SignOut(r.Context(), principal.UserID); err != nil {
+		slog.Error("sign out", "error", err, "user_id", principal.UserID)
+		if errors.Is(err, ErrRevocationUnavailable) {
+			httpx.Error(w, http.StatusServiceUnavailable, "could not sign out, try again")
+			return
+		}
+		httpx.Error(w, http.StatusInternalServerError, "could not sign out")
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]string{"status": "signed_out"})
+}
+
 // updateMe handles PATCH /me, replacing the caller's dating styles and phases
 // and returning the updated profile. Values outside the vocabularies, or a
 // phase listed on both sides, answer 400.
@@ -251,4 +285,37 @@ func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusOK, profile)
+}
+
+// wsTicket handles POST /ws-ticket. It mints a single-use ticket, valid for
+// WSTicketTTL, that a browser WebSocket passes as ?ticket= in place of its
+// access token, so the JWT never appears in a URL.
+func (h *Handler) wsTicket(w http.ResponseWriter, r *http.Request) {
+	principal, ok := PrincipalFrom(r.Context())
+	if !ok {
+		httpx.Error(w, http.StatusUnauthorized, "unauthenticated")
+		return
+	}
+	if h.tickets == nil {
+		httpx.Error(w, http.StatusServiceUnavailable, "websocket tickets unavailable")
+		return
+	}
+	allowed, err := h.ticketLimiter.Allow(r.Context(), "wsticket:"+principal.UserID.String())
+	if err != nil {
+		slog.Error("websocket ticket rate limiter unavailable", "error", err)
+		httpx.Error(w, http.StatusServiceUnavailable, "websocket tickets unavailable")
+		return
+	}
+	if !allowed {
+		w.Header().Set("Retry-After", fmt.Sprintf("%d", int(h.ticketLimiter.window.Seconds())))
+		httpx.Error(w, http.StatusTooManyRequests, "too many requests")
+		return
+	}
+	ticket, err := h.tickets.Issue(r.Context(), principal)
+	if err != nil {
+		slog.Error("issue websocket ticket", "error", err, "user_id", principal.UserID)
+		httpx.Error(w, http.StatusServiceUnavailable, "websocket tickets unavailable")
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"ticket": ticket, "expires_in": int(h.tickets.ttl / time.Second)})
 }

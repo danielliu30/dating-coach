@@ -67,7 +67,8 @@ func run() error {
 	}
 	defer rdb.Close()
 
-	deleter := account.NewWorker(pg.Queries, auth.NewDenylist(rdb, cfg.JWTTTL))
+	denylist := auth.NewDenylist(rdb, max(cfg.JWTTTL, cfg.VerifyTokenTTL, cfg.RefreshTokenTTL))
+	deleter := account.NewWorker(pg.Queries, denylist)
 
 	slog.Info("worker started",
 		"analysis_queue", cfg.AnalysisQueue,
@@ -122,6 +123,13 @@ func run() error {
 		defer wg.Done()
 		consume(ctx, "booking expiry", func(ctx context.Context) error {
 			return expireBookings(ctx, bookings)
+		})
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		consume(ctx, "revocation replay", func(ctx context.Context) error {
+			return denylist.WatchDurableRevocations(ctx, pg.Queries, auth.RevocationReplayPeriod)
 		})
 	}()
 	if provider.Enabled() {

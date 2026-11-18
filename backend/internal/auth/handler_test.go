@@ -52,6 +52,7 @@ func TestRoutesLeaveRefreshUnauthenticated(t *testing.T) {
 		{"refresh reaches the handler", http.MethodPost, "/refresh", "{", http.StatusBadRequest},
 		{"me stays authenticated", http.MethodGet, "/me", "", http.StatusUnauthorized},
 		{"delete me stays authenticated", http.MethodDelete, "/me", "", http.StatusUnauthorized},
+		{"signout stays authenticated", http.MethodPost, "/signout", "", http.StatusUnauthorized},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
