@@ -172,6 +172,30 @@ func (s *Service) DeleteAccount(ctx context.Context, userID uuid.UUID) error {
 	return nil
 }
 
+// ErrRevocationUnavailable means a sign-out could not be made effective
+// because the denylist is unreachable; the caller should retry.
+var ErrRevocationUnavailable = errors.New("session revocation unavailable")
+
+// SignOut ends userID's sessions on every device.
+// The worker replays the Postgres cutoff after a Redis outage or flush.
+func (s *Service) SignOut(ctx context.Context, userID uuid.UUID) error {
+	if _, err := s.queries.RevokeUserRefreshTokens(ctx, userID); err != nil {
+		return fmt.Errorf("revoke refresh tokens: %w", err)
+	}
+	// Match Postgres precision so replay preserves the cutoff exactly.
+	at := time.Now().Truncate(time.Microsecond)
+	if err := s.queries.RecordSessionRevocation(ctx, db.RecordSessionRevocationParams{ID: userID, RevokedAt: at}); err != nil {
+		return fmt.Errorf("record session revocation: %w", err)
+	}
+	if s.denylist == nil {
+		return ErrRevocationUnavailable
+	}
+	if err := s.denylist.RevokeSessionsAt(ctx, userID, at); err != nil {
+		return fmt.Errorf("%w: %w", ErrRevocationUnavailable, err)
+	}
+	return nil
+}
+
 // SignUpInput is the decoded POST /auth/signup body.
 type SignUpInput struct {
 	Email       string `json:"email"`
@@ -205,6 +229,9 @@ type Profile struct {
 	PhasesWorkingOn []string `json:"phases_working_on"`
 	// DatingPreferences is what the user is looking for, in their own words.
 	DatingPreferences string `json:"dating_preferences"`
+	// CoachingGoals are the coaching-brain pillars the user wants to improve
+	// on; each message analysis scores them.
+	CoachingGoals []string `json:"coaching_goals"`
 }
 
 // MaxDatingPreferencesLen caps users.dating_preferences; the ML analyzer
@@ -225,14 +252,19 @@ var DatingPhases = []string{
 	"asking_out", "first_date", "follow_up", "defining_relationship",
 }
 
-// DatingProfileInput is the decoded PATCH /auth/me body. Every list replaces the
-// stored one wholesale; a nil list is treated as empty. DatingPreferences
-// likewise replaces the stored text; blank clears it.
+// CoachingGoals is the vocabulary of coaching-brain pillars a user can choose to
+// improve on, as stored in users.coaching_goals. It mirrors the ML analyzer's
+// PILLAR_KEYS, which rejects any other focus area.
+var CoachingGoals = []string{"agency", "feedback", "support"}
+
+// DatingProfileInput is the decoded PATCH /auth/me body. Nil CoachingGoals
+// preserves saved goals; other lists and DatingPreferences replace stored values.
 type DatingProfileInput struct {
 	DatingStyles      []string `json:"dating_styles"`
 	PhasesStrong      []string `json:"phases_strong"`
 	PhasesWorkingOn   []string `json:"phases_working_on"`
 	DatingPreferences string   `json:"dating_preferences"`
+	CoachingGoals     []string `json:"coaching_goals"`
 }
 
 // profileOf projects a database row onto the API shape, keeping the password
@@ -248,6 +280,7 @@ func profileOf(u db.User) Profile {
 		PhasesStrong:      nonNil(u.PhasesStrong),
 		PhasesWorkingOn:   nonNil(u.PhasesWorkingOn),
 		DatingPreferences: u.DatingPreferences,
+		CoachingGoals:     nonNil(u.CoachingGoals),
 	}
 }
 
@@ -285,7 +318,7 @@ func normaliseChoices(field string, values, vocabulary []string) ([]string, erro
 }
 
 // UpdateDatingProfile validates in against the vocabularies and replaces the
-// caller's dating styles and phases, returning the updated profile. A phase
+// caller's dating styles, phases, preferences and coaching goals, returning the updated profile. A phase
 // listed both as a strength and as being worked on is rejected with
 // ErrInvalidInput rather than resolved silently.
 func (s *Service) UpdateDatingProfile(ctx context.Context, principal Principal, in DatingProfileInput) (Profile, error) {
@@ -306,6 +339,13 @@ func (s *Service) UpdateDatingProfile(ctx context.Context, principal Principal, 
 			return Profile{}, fmt.Errorf("%w: phase %q cannot be both a strength and being worked on", ErrInvalidInput, p)
 		}
 	}
+	goals, err := normaliseChoices("coaching_goals", in.CoachingGoals, CoachingGoals)
+	if err != nil {
+		return Profile{}, err
+	}
+	if in.CoachingGoals == nil {
+		goals = nil
+	}
 	preferences := strings.TrimSpace(in.DatingPreferences)
 	if utf8.RuneCountInString(preferences) > MaxDatingPreferencesLen {
 		return Profile{}, fmt.Errorf("%w: dating_preferences exceeds %d characters", ErrInvalidInput, MaxDatingPreferencesLen)
@@ -316,6 +356,7 @@ func (s *Service) UpdateDatingProfile(ctx context.Context, principal Principal, 
 		PhasesStrong:      strong,
 		PhasesWorkingOn:   working,
 		DatingPreferences: preferences,
+		CoachingGoals:     goals,
 	})
 	if err != nil {
 		return Profile{}, fmt.Errorf("update dating profile: %w", err)
@@ -600,7 +641,11 @@ func (s *Service) VerifyEmail(ctx context.Context, email, code, bearer string) (
 		}
 	}
 	profile := profileOf(user)
-	if !s.ownsBearer(user.ID, bearer) {
+	owns, err := s.ownsBearer(ctx, user.ID, bearer)
+	if err != nil {
+		return Session{}, err
+	}
+	if !owns {
 		return Session{User: profile}, nil
 	}
 	session, err := s.openSession(ctx, s.queries, user, uuid.Nil)
@@ -628,17 +673,33 @@ func (s *Service) recordFailedAttempt(ctx context.Context, userID string) error 
 	return nil
 }
 
-// ownsBearer reports whether bearer is a currently valid token for userID.
-func (s *Service) ownsBearer(userID uuid.UUID, bearer string) bool {
+// ownsBearer reports whether bearer is a currently valid, unrevoked token for
+// userID. This route sits outside Middleware, so it applies the same
+// revocation check itself; a Redis failure is returned so callers fail closed.
+func (s *Service) ownsBearer(ctx context.Context, userID uuid.UUID, bearer string) (bool, error) {
 	if bearer == "" {
-		return false
+		return false, nil
 	}
 	claims, err := s.issuer.Parse(bearer)
 	if err != nil {
-		return false
+		return false, nil
 	}
 	subject, err := claims.UserID()
-	return err == nil && subject == userID
+	if err != nil || subject != userID {
+		return false, nil
+	}
+	if s.denylist == nil {
+		return true, nil
+	}
+	since, err := s.denylist.RevokedSince(ctx, userID)
+	if err != nil {
+		return false, err
+	}
+	var issuedAt time.Time
+	if claims.IssuedAt != nil {
+		issuedAt = claims.IssuedAt.Time
+	}
+	return since.IsZero() || issuedAt.After(since), nil
 }
 
 // ResendVerification issues a fresh code, replacing any outstanding one, and
