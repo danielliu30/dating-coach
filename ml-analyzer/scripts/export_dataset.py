@@ -105,9 +105,11 @@ class Pseudonymiser:
                 if len(variant) >= 2:
                     variants.setdefault(variant.lower(), placeholder)
         ordered = sorted(variants, key=len, reverse=True)
-        self._placeholders = variants
+        # One group per variant: case-insensitive matches such as "ışıl" for
+        # "Işıl" don't lower() back to the variant's key.
+        self._placeholders = [variants[v] for v in ordered]
         self._names = (
-            re.compile(r"(?<!\w)(" + "|".join(re.escape(v) for v in ordered) + r")(?!\w)", re.IGNORECASE)
+            re.compile(r"(?<!\w)(?:" + "|".join(f"({re.escape(v)})" for v in ordered) + r")(?!\w)", re.IGNORECASE)
             if ordered
             else None
         )
@@ -135,7 +137,7 @@ class Pseudonymiser:
         return "[PHONE]"
 
     def _name(self, match: re.Match) -> str:
-        return self._placeholders[match.group(0).lower()]
+        return self._placeholders[match.lastindex - 1]
 
 
 def pseudonymise_row(row: Dict) -> Dict:

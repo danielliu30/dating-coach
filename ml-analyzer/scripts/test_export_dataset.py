@@ -36,6 +36,10 @@ def test_known_names_are_replaced_as_whole_words_case_insensitively():
     )
 
 
+def test_names_match_across_unicode_case_folding():
+    assert Pseudonymiser({"Işıl": "[MATCH]"})("hi ışıl, IŞIL") == "hi [MATCH], [MATCH]"
+
+
 def test_row_drops_name_columns_and_normalises_null_segments():
     row = {
         "conversation_id": "c1",
