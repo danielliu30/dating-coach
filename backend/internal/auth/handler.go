@@ -225,8 +225,6 @@ func (h *Handler) deleteMe(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusAccepted, map[string]string{"status": "deleted"})
 }
 
-// signOut handles POST /signout: it ends the caller's sessions on every
-// device. A denylist outage answers 503 so the client knows to retry.
 func (h *Handler) signOut(w http.ResponseWriter, r *http.Request) {
 	principal, ok := PrincipalFrom(r.Context())
 	if !ok {

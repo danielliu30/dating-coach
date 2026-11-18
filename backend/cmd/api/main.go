@@ -74,8 +74,6 @@ func run() error {
 	notifier := notify.New(cfg)
 	issuer := auth.NewTokenIssuer(cfg.JWTSecret)
 	limiter := auth.NewRateLimiter(rdb, cfg.AuthRateLimit, cfg.AuthRateWindow)
-	// The middleware checks every request against the denylist and fails
-	// closed when Redis is down; its announcements close open sockets at once.
 	denylist := auth.NewDenylist(rdb, max(cfg.JWTTTL, cfg.VerifyTokenTTL, cfg.RefreshTokenTTL))
 	verificationCodes := auth.NewVerificationCache(rdb, auth.VerificationCodeTTL)
 

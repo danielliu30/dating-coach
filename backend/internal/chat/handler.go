@@ -51,9 +51,7 @@ func NewHandler(svc *Service, hub *Hub, accounts AccountStatus, originPatterns [
 	return &Handler{svc: svc, hub: hub, accounts: accounts, originPatterns: originPatterns}
 }
 
-// SetRevocations makes live sockets honour sign-outs and refresh-token reuse,
-// not only deletion. The announcement on auth:revoked closes them at once; this
-// is the backstop for a replica that missed it.
+// SetRevocations enables the backstop for missed revocation announcements.
 func (h *Handler) SetRevocations(revocations auth.Revocations) {
 	h.revocations = revocations
 }
@@ -343,10 +341,6 @@ func expiryTimer(expiresAt time.Time) *time.Timer {
 // The account row is the authority: deletion marks it before anything is
 // announced, so a socket's fate does not depend on a cache that can be lost or
 // an announcement that can be missed.
-//
-// The revocation cutoff (sign-out, refresh-token reuse) is checked too when
-// set, so a socket whose replica missed the announcement still closes within
-// accountRefresh rather than when its token expires.
 //
 // It fails closed, so a status it cannot read ends the connection rather than
 // serving an account whose standing is unknown. That case is reported as

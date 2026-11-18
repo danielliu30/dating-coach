@@ -30,8 +30,7 @@ const revocationGrace = 5 * time.Minute
 
 // Revocations reports since when an account's tokens must be refused: every
 // token issued at or before the returned time is revoked, and a zero time means
-// none are. Middleware depends on the interface rather than Denylist so it can
-// be exercised without a live Redis.
+// none are.
 type Revocations interface {
 	RevokedSince(ctx context.Context, userID uuid.UUID) (time.Time, error)
 }
@@ -44,22 +43,15 @@ type Denylist struct {
 	ttl time.Duration
 }
 
-// NewDenylist returns a denylist whose entries live for ttl plus a short grace
-// period. Pass the longest lifetime of any token a cutoff must outlive: access
-// tokens of either scope, and refresh tokens, which Refresh also checks: deletion marks the account row
-// before it revokes, so no later token exists and the entry can no longer make
-// a difference once the tokens that predate it have expired.
+// NewDenylist takes the longest access or refresh token lifetime a cutoff must outlive.
 func NewDenylist(rdb *redis.Client, ttl time.Duration) *Denylist {
 	return &Denylist{rdb: rdb, ttl: ttl + revocationGrace}
 }
 
 // Revoke marks every token userID will ever hold as unusable, including one
 // minted after this call by a sign-in that read the account just before it
-// was marked deleted. Account deletion calls it. It returns an error when Redis
-// is unreachable; deletion calls it on a best-effort basis and only logs a
-// failure: once the deletion is recorded, the worker revokes before it removes
-// any rows, so this call only shortens the window in which a still-valid token
-// works from the job's latency to milliseconds.
+// was marked deleted. Account deletion calls it on a best-effort basis; the
+// worker revokes before removing rows.
 //
 // It also announces the revocation on revokedChannel. That publish is best
 // effort and its failure is logged, not returned: the Redis key (and, for session
