@@ -4,7 +4,7 @@ x-backend-env: &backend-env
   APP_ENV: ${APP_ENV:-development}
   DATABASE_URL: postgres://${POSTGRES_USER:-datingcoach}:${POSTGRES_PASSWORD:-datingcoach}@postgres:5432/${POSTGRES_DB:-datingcoach}?sslmode=disable
   REDIS_URL: redis://redis:6379/0
-  RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+  RABBITMQ_URL: amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASSWORD:-guest}@rabbitmq:5672/
   JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
   JWT_TTL: ${JWT_TTL:-15m}
   VERIFY_TOKEN_TTL: ${VERIFY_TOKEN_TTL:-30m}
@@ -57,6 +57,9 @@ services:
 
   rabbitmq:
     image: rabbitmq:3-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}
     ports: ['5672:5672', '15672:15672']
     healthcheck:
       test: ['CMD', 'rabbitmq-diagnostics', '-q', 'ping']
