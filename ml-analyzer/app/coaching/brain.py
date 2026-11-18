@@ -14,7 +14,7 @@ tests that prove the brain rejects that style of advice.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Sequence, Tuple
+from typing import Dict, Optional, Sequence, Tuple
 
 # Bump whenever a pillar's principles change so scorer outputs stay traceable.
 # Changes to the enforcement gate bump ``agency.AGENCY_VERSION`` instead.
@@ -23,18 +23,23 @@ BRAIN_VERSION = "brain-v1"
 
 @dataclass(frozen=True)
 class Pillar:
-    """One pillar of the coaching brain: a name, a one-line stance and its principles.
+    """One pillar of the coaching brain: a stable key, a name, a one-line stance and its principles.
 
-    ``principles`` are complete imperative sentences addressed to the model, so
-    they can be dropped into a prompt verbatim.
+    ``key`` is the lowercase identifier clients use to pick the pillar as a
+    focus area (``AnalyzeRequest.focus_areas``, ``GoalScore.goal``); it never
+    changes once published, even if ``name`` is reworded. ``principles`` are
+    complete imperative sentences addressed to the model, so they can be
+    dropped into a prompt verbatim.
     """
 
+    key: str
     name: str
     stance: str
     principles: Tuple[str, ...]
 
 
 AGENCY = Pillar(
+    key="agency",
     name="AGENCY",
     stance="The client drives. Their words, their decisions and their dating life stay theirs.",
     principles=(
@@ -47,6 +52,7 @@ AGENCY = Pillar(
 )
 
 FEEDBACK = Pillar(
+    key="feedback",
     name="FEEDBACK",
     stance="Judge only the client's own behaviour, grounded in what actually happened next.",
     principles=(
@@ -59,6 +65,7 @@ FEEDBACK = Pillar(
 )
 
 SUPPORT = Pillar(
+    key="support",
     name="SUPPORT",
     stance="Meet the client where they are: honest, direct and on their side.",
     principles=(
@@ -70,6 +77,31 @@ SUPPORT = Pillar(
 )
 
 PILLARS: Tuple[Pillar, ...] = (AGENCY, FEEDBACK, SUPPORT)
+
+_BY_KEY: Dict[str, Pillar] = {p.key: p for p in PILLARS}
+
+# Every pillar key, in ``PILLARS`` order: the vocabulary of selectable focus areas.
+PILLAR_KEYS: Tuple[str, ...] = tuple(_BY_KEY)
+
+
+def pillar_by_key(key: str) -> Optional[Pillar]:
+    """Return the pillar whose ``key`` is ``key`` (case- and whitespace-insensitive), or ``None``."""
+    return _BY_KEY.get(key.strip().lower())
+
+
+def pillars_by_keys(keys: Sequence[str]) -> Tuple[Pillar, ...]:
+    """Return the pillars named by ``keys`` in ``PILLARS`` order, each once.
+
+    Raises ``ValueError`` naming the first key that is not a pillar key, so a
+    caller never silently drops a requested focus area.
+    """
+    wanted = set()
+    for key in keys:
+        pillar = pillar_by_key(key)
+        if pillar is None:
+            raise ValueError(f"unknown pillar key {key!r}; expected one of {', '.join(PILLAR_KEYS)}")
+        wanted.add(pillar.key)
+    return tuple(p for p in PILLARS if p.key in wanted)
 
 
 def render_pillar(pillar: Pillar) -> str:

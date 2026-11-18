@@ -443,6 +443,22 @@ def test_brain_renders_all_three_pillars() -> None:
     assert "FEEDBACK:" not in agency
 
 
+def test_pillars_are_looked_up_by_stable_key() -> None:
+    """Each pillar has a unique lowercase key; lookups normalise case and keep PILLARS order."""
+    from app.coaching import AGENCY, FEEDBACK, PILLAR_KEYS, PILLARS, SUPPORT, pillar_by_key, pillars_by_keys
+
+    assert PILLAR_KEYS == ("agency", "feedback", "support")
+    assert [p.key for p in PILLARS] == list(PILLAR_KEYS)
+    assert pillar_by_key("agency") is AGENCY
+    assert pillar_by_key(" Feedback ") is FEEDBACK
+    assert pillar_by_key("confidence") is None
+
+    assert pillars_by_keys(["support", "agency", "AGENCY"]) == (AGENCY, SUPPORT)
+    assert pillars_by_keys([]) == ()
+    with pytest.raises(ValueError, match="unknown pillar key 'confidence'"):
+        pillars_by_keys(["feedback", "confidence"])
+
+
 def test_llm_prompt_reviews_only_self_messages_and_never_drafts() -> None:
     """The LLM prompt lists only the customer's messages with their outcomes, carries preferences, and forbids drafting replies."""
     from app.config import Settings

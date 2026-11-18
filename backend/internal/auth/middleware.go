@@ -38,13 +38,29 @@ func (p Principal) IsAdmin() bool { return p.Role == RoleAdmin }
 
 // bearerToken returns the request's JWT from the Authorization header, falling
 // back to the token query parameter that WebSocket clients must use because
-// they cannot set headers. It returns "" when the request carries neither.
+// they cannot set headers. The fallback is honoured only on WebSocket upgrade
+// requests to a /ws path (the only paths nginx redacts from its access log), so
+// plain HTTP and REST calls cannot authenticate via the URL. It returns ""
+// when the request carries no usable token.
 func bearerToken(r *http.Request) string {
 	raw := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer"))
-	if raw == "" {
+	if raw == "" && strings.HasSuffix(r.URL.Path, "/ws") && isWebSocketUpgrade(r) {
 		raw = r.URL.Query().Get("token")
 	}
 	return raw
+}
+
+// isWebSocketUpgrade reports whether r asks to upgrade to the websocket
+// protocol, i.e. its Upgrade header lists "websocket" (case-insensitively).
+func isWebSocketUpgrade(r *http.Request) bool {
+	for _, v := range r.Header.Values("Upgrade") {
+		for _, proto := range strings.Split(v, ",") {
+			if strings.EqualFold(strings.TrimSpace(proto), "websocket") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Middleware rejects requests without a valid bearer token.
