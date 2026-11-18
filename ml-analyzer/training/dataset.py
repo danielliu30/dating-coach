@@ -5,17 +5,18 @@ The on-disk format is JSONL, one ``TrainingExample`` per line — see
 ``training_examples`` table stores exactly these fields, so exporting a dataset
 is a single SQL query (documented in the README).
 
-Consent filtering and a group-disjoint (user, else conversation) train/eval split
-are implemented here; de-duplication of near-identical conversations is not.
+Consent filtering, de-duplication of repeated / near-identical conversations, and
+a group-disjoint (user, else conversation) train/eval split are implemented here.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Sequence, Tuple
+from typing import Any, Dict, FrozenSet, Iterator, List, Sequence, Tuple
 
 
 @dataclass
@@ -73,7 +74,108 @@ OUTCOME_SCORE = {
 }
 
 
-def load_jsonl(path: str | Path, require_consent: bool = True) -> List[TrainingExample]:
+# Word n-gram size and Jaccard threshold for the within-user near-duplicate check.
+SHINGLE_SIZE = 3
+NEAR_DUPLICATE_JACCARD = 0.9
+
+_PUNCTUATION = re.compile(r"[^\w\s]+")
+_WHITESPACE = re.compile(r"\s+")
+
+
+def normalize_body(body: str) -> str:
+    """Lowercase, drop punctuation and collapse whitespace."""
+    return _WHITESPACE.sub(" ", _PUNCTUATION.sub(" ", body.lower())).strip()
+
+
+def _normalized_transcript(example: TrainingExample) -> str:
+    ordered = sorted(example.messages, key=lambda m: m.position)
+    return "\n".join(f"{m.sender}: {normalize_body(m.body)}" for m in ordered)
+
+
+def _shingles(text: str) -> FrozenSet[Tuple[str, ...]]:
+    tokens = text.split()
+    if len(tokens) < SHINGLE_SIZE:
+        return frozenset({tuple(tokens)})
+    return frozenset(tuple(tokens[i : i + SHINGLE_SIZE]) for i in range(len(tokens) - SHINGLE_SIZE + 1))
+
+
+def _jaccard(a: FrozenSet[Tuple[str, ...]], b: FrozenSet[Tuple[str, ...]]) -> float:
+    union = len(a | b)
+    return len(a & b) / union if union else 1.0
+
+
+def _label_rank(example: TrainingExample) -> int:
+    if example.segments:
+        return 0
+    if example.outcome in OUTCOME_SCORE or example.reply_received is not None:
+        return 1
+    return 2
+
+
+def deduplicate(examples: Sequence[TrainingExample]) -> List[TrainingExample]:
+    """Cluster exact matches globally and near matches within each user."""
+    slots: List[TrainingExample | None] = []
+    rep_order: List[int] = []
+    parent: List[int] = []
+    by_hash: Dict[str, int] = {}
+    by_user: Dict[str, List[Tuple[int, FrozenSet[Tuple[str, ...]]]]] = {}
+    seen_in_user: set[Tuple[str, str]] = set()
+
+    def root(index: int) -> int:
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    for order, example in enumerate(examples):
+        normalized = _normalized_transcript(example)
+        digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+        shingles = _shingles(normalized)
+
+        # A transcript this user already submitted has identical shingles, which
+        # were scanned and registered then: the hash alone finds its cluster.
+        repeat = example.user_id is not None and (example.user_id, digest) in seen_in_user
+        matches = set()
+        if digest in by_hash:
+            matches.add(root(by_hash[digest]))
+        if example.user_id is not None and not repeat:
+            matches.update(
+                root(index)
+                for index, other in by_user.get(example.user_id, [])
+                if _jaccard(shingles, other) >= NEAR_DUPLICATE_JACCARD
+            )
+
+        if not matches:
+            index = len(slots)
+            slots.append(example)
+            rep_order.append(order)
+            parent.append(index)
+        else:
+            # A copy matching several clusters bridges them: merge into the
+            # earliest, keeping the first copy with the best label (human, then
+            # weak, then none).
+            index = min(matches)
+            candidates = [(rep_order[r], slots[r]) for r in matches] + [(order, example)]
+            rep_order[index], slots[index] = min(
+                (c for c in candidates if c[1] is not None),
+                key=lambda c: (_label_rank(c[1]), c[0]),
+            )
+            for other_root in matches - {index}:
+                parent[other_root] = index
+                slots[other_root] = None
+
+        # Every copy, kept or dropped, joins its cluster so later copies are
+        # matched against all of them, not only the representative.
+        by_hash.setdefault(digest, index)
+        if example.user_id is not None and not repeat:
+            seen_in_user.add((example.user_id, digest))
+            by_user.setdefault(example.user_id, []).append((index, shingles))
+    return [example for example in slots if example is not None]
+
+
+def load_jsonl(
+    path: str | Path, require_consent: bool = True, dedupe: bool = True
+) -> List[TrainingExample]:
     examples: List[TrainingExample] = []
     with Path(path).open(encoding="utf-8") as handle:
         for line in handle:
@@ -84,8 +186,7 @@ def load_jsonl(path: str | Path, require_consent: bool = True) -> List[TrainingE
             if require_consent and not example.consented:
                 continue
             examples.append(example)
-    # TODO: de-duplicate near-identical conversations before training.
-    return examples
+    return deduplicate(examples) if dedupe else examples
 
 
 def transcript(messages: Sequence[LabeledMessage]) -> str:
