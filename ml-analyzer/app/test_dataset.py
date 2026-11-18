@@ -264,6 +264,20 @@ def test_copy_bridging_two_clusters_merges_them_and_keeps_a_human_label():
     assert [e.conversation_id for e in deduplicate([weak_b, human_a, human_c])] == ["human_a"]
 
 
+def test_bridge_keeps_the_first_human_label_in_input_order():
+    base = [" ".join(f"w{i}x{j}" for j in range(12)) for i in range(9)]
+    bodies_a = base + ["alpha beta gamma delta epsilon zeta eta theta"]
+    bodies_b = base + ["one two three four five six seven eight"]
+    segments = [{"start_position": 0, "end_position": 3, "engagement_score": 0.7}]
+    weak_b = TrainingExample.from_json(_payload("weak_b", bodies_b, user_id="u1"))
+    human_a = TrainingExample.from_json(_payload("human_a", bodies_a, user_id="u1", segments=segments))
+    # Labeled after human_a, but takes over weak_b's earlier slot.
+    human_b = TrainingExample.from_json(_payload("human_b", bodies_b, user_id="u1", segments=segments))
+    bridge = TrainingExample.from_json(_payload("bridge", base, user_id="u1"))
+
+    assert [e.conversation_id for e in deduplicate([weak_b, human_a, human_b, bridge])] == ["human_a"]
+
+
 def test_repeated_copies_of_one_user_skip_the_shingle_scan(monkeypatch):
     calls = []
     real_jaccard = dataset_module._jaccard

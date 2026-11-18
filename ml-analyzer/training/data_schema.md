@@ -79,10 +79,9 @@ row.
    re-submitted with one more message). Rows without `user_id` get only the exact
    check.
 
-Duplicates form clusters: a conversation that matches any earlier copy, kept or
-dropped, joins that copy's cluster, and each cluster keeps one row. That row is
-the first occurrence, unless a later copy has human `segments` and the first
-does not; then the human-labeled copy takes its place.
+A match joins or merges clusters even if the matching copy was dropped. Each
+cluster keeps its first human-labeled copy in input order, or its first copy
+when unlabeled, at the position of the cluster's first occurrence.
 
 ## Annotation guidance
 
