@@ -176,11 +176,7 @@ func (s *Service) DeleteAccount(ctx context.Context, userID uuid.UUID) error {
 // because the denylist is unreachable; the caller should retry.
 var ErrRevocationUnavailable = errors.New("session revocation unavailable")
 
-// SignOut ends every session of userID on every device: its refresh tokens are
-// deleted and every access token issued so far is denylisted, which also closes
-// the account's open sockets. It fails, rather than half-succeeding silently,
-// when the denylist cannot be written, since access tokens would otherwise keep
-// working for their remaining lifetime.
+// SignOut ends userID's sessions on every device.
 func (s *Service) SignOut(ctx context.Context, userID uuid.UUID) error {
 	if _, err := s.queries.RevokeUserRefreshTokens(ctx, userID); err != nil {
 		return fmt.Errorf("revoke refresh tokens: %w", err)

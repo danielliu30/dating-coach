@@ -79,12 +79,7 @@ func isWebSocketHandshake(r *http.Request) bool {
 // Middleware rejects requests without a valid bearer token. A WebSocket
 // handshake on a /ws route may instead carry a single-use ?ticket= minted by POST
 // /auth/ws-ticket, which tickets redeems; tickets may be nil to disable that.
-//
-// Every authenticated caller is then checked against revocations, so a token
-// issued before its account was signed out (or locked out) stops working at
-// once instead of when it expires. This fails closed: when Redis cannot answer
-// the request gets 503 rather than going through unchecked. revocations may be
-// nil only in tests.
+// Revocation checks fail closed with 503; revocations may be nil only in tests.
 func Middleware(issuer *TokenIssuer, tickets TicketRedeemer, revocations Revocations) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
