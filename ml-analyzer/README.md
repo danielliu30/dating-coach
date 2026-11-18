@@ -242,26 +242,17 @@ submitted transcripts, and `training_examples` holds labels
 `consented`). The app asks the user, after they read their analysis, what
 happened next — that is where `outcome` comes from.
 
-Export a dataset with [`scripts/export_dataset.py`](scripts/export_dataset.py).
-It runs the export query against Postgres and writes `data/labeled.jsonl`
-(gitignored), one row per consented `training_examples` row:
+From `ml-analyzer`, export consented, pseudonymised data (gitignored):
 
 ```bash
-python -m scripts.export_dataset --database-url "$DATABASE_URL"
+python -m scripts.export_dataset --database-url "$DATABASE_URL" --out data/labeled.jsonl
 # or through the compose database:
 python -m scripts.export_dataset \
     --psql "docker compose exec -T postgres psql -U datingcoach -d datingcoach"
-python -m scripts.export_dataset --print-sql   # the query, to run by hand
 ```
 
-Before anything is written, every `messages[].body` is pseudonymised. The
-conversation's `match_name` becomes `[MATCH]` and the user's `display_name`
-becomes `[SELF]`. Emails become `[EMAIL]`, links `[LINK]`, phone numbers
-`[PHONE]`, and `@handles` / "insta: jane_doe" handles `[HANDLE]`. The name
-columns are dropped, and `segments` keeps only positions and scores. Names the
-database doesn't know (a friend mentioned in passing) are not caught, so spot-check
-a sample before sharing a dataset outside the team. `--from-raw raw.jsonl`
-pseudonymises an export you ran yourself.
+Pass the URL explicitly; without it, psql uses its connection defaults.
+Unknown names are not caught, so spot-check before sharing outside the team.
 
 Ground rules: only export `consented` rows, pseudonymise names/handles/links
 before they leave the database, and keep an opt-out path that deletes a user's
@@ -273,49 +264,43 @@ and keep the eval set user-disjoint from training.
 ### 2. Label
 
 See [`training/data_schema.md`](training/data_schema.md) for the schema and the
-annotation rubric. Annotators *correct* LLM scores rather than produce them
-from scratch:
+annotation rubric.
 
-1. **Pre-label** with [`scripts/llm_prelabel.py`](scripts/llm_prelabel.py).
-   It runs `LLMScorer` once per exported conversation and writes
-   `data/prelabeled.jsonl`. Each segment gets a `suggested_score`, a
-   `suggested_comment` and an empty `engagement_score`. Conversations that
-   already have human segments are skipped, and re-runs resume where the last
-   one stopped. Rows where the LLM failed and the heuristic scorer answered
-   are marked `prelabel.fallback: true`.
+1. **Pre-label.** An LLM API key is required. Calls are sequential; reruns skip
+   saved conversations, and human-labeled conversations are skipped.
+   Heuristic fallback suggestions are marked `prelabel.fallback: true`.
 
    ```bash
    LLM_API_KEY=... python -m scripts.llm_prelabel --data data/labeled.jsonl --out data/prelabeled.jsonl
    ```
 
-2. **Annotate.** Two annotators each take a copy (for example
-   `data/annotations/alice.jsonl`) and fill in `segments[].engagement_score`
-   using the rubric, starting from `suggested_score`.
+2. **Annotate.** Two annotators each copy `data/prelabeled.jsonl` to a uniquely
+   named file in `data/annotations/` and fill in `segments[].engagement_score`
+   (finite, 0–1), using `suggested_score` as a starting point. An `annotator`
+   field overrides the file stem as their identity.
 
-3. **Review** with [`scripts/review_labels.py`](scripts/review_labels.py). It
-   reports each annotator's drift from `suggested_score` (MAE, share within
-   0.25, share left unchanged), agreement for each annotator pair (MAE, share
-   within 0.25, Pearson r) and Krippendorff's alpha. It also lists segments
-   that still need a second annotator. Segments whose scores differ by more
-   than 0.25 go to `--adjudication-out`, where an adjudicator fills in
-   `engagement_score`:
+3. **Review.** Disagreements above 0.25 go to the adjudication file; fill in
+   its `engagement_score` values. The summary also counts segments needing
+   another annotator.
 
    ```bash
    python -m scripts.review_labels data/annotations/*.jsonl --adjudication-out data/adjudicate.jsonl
    ```
 
-4. **Merge.** Rerun the review with the adjudicated file to get a training
-   set. Each segment gets its adjudicated score, or else the mean of
-   annotators who agree within 0.25. Annotated conversations replace their
-   weak-label rows from the export. Annotated conversations that are missing
-   from a fresh export (for example because the user opted out) are dropped:
+4. **Merge.** Adjudicated scores win; otherwise use the mean of at least two
+   scores with spread ≤0.25. Unresolved segments are omitted. Use a fresh base
+   export: reviewed conversations replace all their base rows (or are omitted
+   if wholly unresolved); missing/non-consented conversations are dropped.
 
    ```bash
    python -m scripts.review_labels data/annotations/*.jsonl --adjudicated data/adjudicate.jsonl \
        --final-out data/train.jsonl --base data/labeled.jsonl
    ```
 
-   Then pass `--data data/train.jsonl` to `train.py` below.
+   `--base` requires `--final-out`; without a base, only resolved annotations
+   are written and current consent cannot be checked. Keep `--adjudication-out`
+   distinct from the filled `--adjudicated` file. Pass `--data data/train.jsonl`
+   to `train.py` below.
 
 ### 3. Train
 
