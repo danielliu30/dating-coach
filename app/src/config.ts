@@ -33,7 +33,12 @@ export const API_PREFIX = '/api/v1';
  */
 export const GOOGLE_CLIENT_ID: string = (process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID ?? '').trim();
 
-export function wsURL(path: string, token: string): string {
+/**
+ * WebSocket URL for path, authenticated by a single-use ticket from
+ * POST /auth/ws-ticket rather than the access token, so the JWT never appears
+ * in a URL (and therefore never in an access log).
+ */
+export function wsURL(path: string, ticket: string): string {
   const base = API_BASE_URL.replace(/^http/, 'ws');
-  return `${base}${API_PREFIX}${path}?token=${encodeURIComponent(token)}`;
+  return `${base}${API_PREFIX}${path}?ticket=${encodeURIComponent(ticket)}`;
 }

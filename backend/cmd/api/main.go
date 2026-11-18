@@ -88,6 +88,8 @@ func run() error {
 		slog.Info("google sign-in disabled: GOOGLE_CLIENT_ID is empty")
 	}
 	authHandler := auth.NewHandler(authSvc, limiter)
+	wsTickets := auth.NewWSTickets(rdb, auth.WSTicketTTL)
+	authHandler.SetWSTickets(wsTickets, auth.NewRateLimiter(rdb, auth.WSTicketsPerMinute, time.Minute))
 	provider, err := payments.New(cfg.PaymentsEnabled)
 	if err != nil {
 		return err
@@ -100,7 +102,7 @@ func run() error {
 	chatHandler := chat.NewHandler(chat.NewService(pg.Queries, hub), hub, pg.Queries, cfg.CORSOrigins)
 	analysisHandler := analysis.NewHandler(analysis.NewService(pg.Pool, pg.Queries, queue))
 
-	router := newRouter(cfg, auth.Middleware(issuer), handlers{
+	router := newRouter(cfg, auth.Middleware(issuer, wsTickets), handlers{
 		auth:     authHandler,
 		coaching: coachingHandler,
 		chat:     chatHandler,
