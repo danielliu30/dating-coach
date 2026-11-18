@@ -39,9 +39,10 @@ a pillar's name or principles are reworded.
 The LLM `SYSTEM_PROMPT` is composed from the rendered pillars
 (`render_pillars()`), not written by hand, and `BRAIN_VERSION` is appended to
 `model_version` together with `AGENCY_VERSION` (e.g.
-`llm-openai-gpt-4o+brain-v1+agency-v3`) so every stored result is traceable to
+`llm-openai-gpt-4o+brain-v2+agency-v3`) so every stored result is traceable to
 both the philosophy revision and the enforcement policy that produced it. Bump
-`BRAIN_VERSION` (`app/coaching/brain.py`) when a pillar's principles change, and
+`BRAIN_VERSION` (`app/coaching/brain.py`) when a pillar's principles or the way
+prompts are composed from them change, and
 `AGENCY_VERSION` (`app/coaching/agency.py`) when the `enforce_agency` gate
 changes which outputs it accepts.
 
@@ -327,7 +328,8 @@ python train.py --data data/labeled.jsonl --out artifacts/segment-scorer
 
 Default recipe: DistilBERT with a single-logit head over segment transcripts,
 soft-target BCE against the 0–1 score (so serving's `sigmoid(logit)` is on the
-same scale as the labels), `mae`/`rmse` on the eval split.
+same scale as the labels), weighted per row by `training.dataset` (human
+segments 1.0; see `training/data_schema.md`), `mae`/`rmse` on the eval split.
 
 For a generative model that also writes the `comment`/`summary` text, LoRA
 fine-tune a small instruct model on `(transcript → the exact JSON the prompt
