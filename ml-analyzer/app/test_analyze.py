@@ -471,8 +471,12 @@ def test_analyze_request_focus_areas_are_normalised_pillar_keys() -> None:
 
     with pytest.raises(ValidationError, match="unknown pillar key 'confidence'"):
         AnalyzeRequest(conversation_id="c", messages=messages, focus_areas=["confidence"])
+    assert AnalyzeRequest(conversation_id="c", messages=messages, focus_areas=["agency"] * 4).focus_areas == ["agency"]
+    assert AnalyzeRequest(
+        conversation_id="c", messages=messages, focus_areas=["Agency", "agency", "AGENCY", " agency "]
+    ).focus_areas == ["agency"]
     with pytest.raises(ValidationError):
-        AnalyzeRequest(conversation_id="c", messages=messages, focus_areas=["agency"] * 4)
+        AnalyzeRequest(conversation_id="c", messages=messages, focus_areas=[1])
 
     response = client.post(
         "/analyze",

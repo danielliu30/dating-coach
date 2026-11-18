@@ -240,13 +240,9 @@ def reflection_questions(
 
 
 def _investment_ratio(messages: Sequence[Message]) -> Optional[float]:
-    """How much more the customer put in than the match, or ``None`` when there is too little to say.
+    """Return the larger customer/match message or word ratio.
 
-    The larger of the customer-to-match message-count and word-count ratios
-    (the two volume signals ``reciprocity_patterns`` compares); ``inf`` when
-    the match wrote nothing. ``None`` below ``MIN_SELF_FOR_RECIPROCITY``
-    customer messages, the same threshold that keeps ``reciprocity_patterns``
-    silent on short conversations.
+    Return ``None`` below ``MIN_SELF_FOR_RECIPROCITY``; ``inf`` for no match words.
     """
     own = [m for m in messages if m.sender == "self"]
     theirs = [m for m in messages if m.sender == "match"]
@@ -261,7 +257,7 @@ def _investment_ratio(messages: Sequence[Message]) -> Optional[float]:
 
 
 def _feedback_goal(reviews: Sequence[SelfMessageReview]) -> Optional[GoalScore]:
-    """FEEDBACK: how the customer's own messages fared, judged by what came back; ``None`` with no messages."""
+    """Mean reply-outcome score, or ``None`` with no customer messages."""
     if not reviews:
         return None
     counts = _outcome_counts(reviews)
@@ -276,12 +272,7 @@ def _feedback_goal(reviews: Sequence[SelfMessageReview]) -> Optional[GoalScore]:
 
 
 def _agency_goal(messages: Sequence[Message]) -> Optional[GoalScore]:
-    """AGENCY: whether the customer's share of the effort is something they chose, scored by its balance.
-
-    1.0 when the customer put in no more than the match; ``1 / ratio`` above
-    that (twice the messages or words scores 0.5), 0.0 when nothing came back
-    at all. ``None`` when ``_investment_ratio`` has too little to go on.
-    """
+    """Score effort balance as min(1, 1/ratio), or ``None`` with too few messages."""
     ratio = _investment_ratio(messages)
     if ratio is None:
         return None
@@ -299,16 +290,7 @@ def _agency_goal(messages: Sequence[Message]) -> Optional[GoalScore]:
 def goal_scores(
     reviews: Sequence[SelfMessageReview], messages: Sequence[Message], focus_areas: Sequence[str]
 ) -> List[GoalScore]:
-    """Score the requested focus areas that the heuristic has a signal for, in ``focus_areas`` order.
-
-    ``feedback`` is the mean outcome score of the customer's messages (the
-    overall engagement score) and ``agency`` is the balance of effort from
-    ``_investment_ratio``. ``support`` is about the coach's stance, not
-    anything visible in the customer's messages, so it is never scored here;
-    neither is a goal whose signal is missing (no customer messages, or too
-    few for a balance). Comments describe outcomes only: no drafted wording,
-    no reasons for the match's behaviour.
-    """
+    """Score requested feedback/agency areas with a signal, in request order; omit support."""
     scorers = {"feedback": lambda: _feedback_goal(reviews), "agency": lambda: _agency_goal(messages)}
     scores = [scorers[goal]() for goal in focus_areas if goal in scorers]
     return [score for score in scores if score is not None]

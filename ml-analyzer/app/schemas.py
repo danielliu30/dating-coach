@@ -7,7 +7,7 @@ so the Go backend never changes when the model behind it does.
 
 from __future__ import annotations
 
-from typing import List, Literal, Optional
+from typing import Any, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -43,10 +43,12 @@ class AnalyzeRequest(BaseModel):
         ),
     )
 
-    @field_validator("focus_areas")
+    @field_validator("focus_areas", mode="before")
     @classmethod
-    def _known_pillars(cls, value: List[str]) -> List[str]:
-        """Normalise to lowercase pillar keys in ``PILLARS`` order, deduplicated; unknown keys are rejected."""
+    def _known_pillars(cls, value: Any) -> Any:
+        """Normalise and deduplicate known keys before checking list length."""
+        if not isinstance(value, list) or not all(isinstance(key, str) for key in value):
+            return value
         return [p.key for p in pillars_by_keys(value)]
 
 
@@ -59,12 +61,7 @@ class Segment(BaseModel):
 
 
 class GoalScore(BaseModel):
-    """How the customer's own messages did on one focus area they chose to work on.
-
-    ``goal`` is a coaching-brain pillar key from ``AnalyzeRequest.focus_areas``.
-    ``comment`` is held to the same agency rules as the rest of the feedback:
-    it describes, it never drafts a reply or reads the match's mind.
-    """
+    """A requested pillar's score and agency-safe comment on the customer's messages."""
 
     goal: str
     score: float = Field(ge=0.0, le=1.0)
@@ -73,7 +70,7 @@ class GoalScore(BaseModel):
     @field_validator("goal")
     @classmethod
     def _known_pillar(cls, value: str) -> str:
-        """Normalise ``goal`` to its pillar key; anything that is not a pillar key is rejected."""
+        """Normalise a known pillar key; reject unknown keys."""
         return pillars_by_keys([value])[0].key
 
 
@@ -84,9 +81,7 @@ class Overall(BaseModel):
     non-directive questions the customer can sit with ("did I like them?") and
     recurring behaviour named as an observation to reflect on. Neither ever
     contains a drafted reply. Both default to empty so existing clients are
-    unaffected. ``goal_scores`` holds at most one entry per requested focus
-    area and is empty when none were requested (or a scorer has no signal for
-    them).
+    unaffected. ``goal_scores`` includes only requested areas with a signal.
     """
 
     engagement_score: float = Field(ge=0.0, le=1.0)
