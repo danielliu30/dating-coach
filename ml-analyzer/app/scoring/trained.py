@@ -91,8 +91,6 @@ class TrainedScorer(Scorer):
         return [float(score) for score in scores]
 
     async def analyze(self, request: AnalyzeRequest) -> AnalyzeResponse:
-        self._load()
-
         reviews = review_self_messages(request.messages)
         by_position = {r.message.position: r for r in reviews}
         windows = [
@@ -100,7 +98,11 @@ class TrainedScorer(Scorer):
             for start, end, window in chunk(request.messages, self.settings.segment_size)
         ]
         scored = [window for _, _, window, window_reviews in windows if window_reviews]
-        model_scores = iter(self._predict([transcript(window, meta=True) for window in scored]) if scored else [])
+        scores = []
+        if scored:
+            self._load()
+            scores = self._predict([transcript(window, meta=True) for window in scored])
+        model_scores = iter(scores)
 
         segments: List[Segment] = []
         for start, end, _, window_reviews in windows:
@@ -127,7 +129,7 @@ class TrainedScorer(Scorer):
 
         prose = [s.comment for s in segments] + [overall.summary]
         prose += overall.strengths + overall.improvements + overall.reflection_questions + overall.patterns
-        prose = [_without_user_text(text, request, reviews) for text in prose]
+        prose = _without_user_text(prose, request, reviews)
         try:
             enforce_agency(prose, citation_sources(request.messages), request.match_name)
         except ValueError:
@@ -139,15 +141,11 @@ class TrainedScorer(Scorer):
         return AnalyzeResponse(model_version=self.version, segments=align_segments(segments), overall=overall)
 
 
-def _without_user_text(text: str, request: AnalyzeRequest, reviews: Sequence[SelfMessageReview]) -> str:
-    """Blank what the heuristic echoes verbatim (stated preferences, message excerpts) so the gate scans only its wording.
-
-    The customer's own words are theirs to choose; a preference like "find
-    someone who shares my values" must not read as the analyzer prescribing.
-    """
+def _without_user_text(prose: List[str], request: AnalyzeRequest, reviews: Sequence[SelfMessageReview]) -> List[str]:
+    """Exclude verbatim preferences and message excerpts from the agency check."""
     echoed = [_excerpt(m) for m in request.messages] + [_excerpt(r.reply) for r in reviews if r.reply is not None]
     if request.preferences and request.preferences.strip():
         echoed.append(request.preferences.strip()[:200])
     for snippet in sorted(set(echoed), key=len, reverse=True):
-        text = text.replace(snippet, " ")
-    return text
+        prose = [text.replace(snippet, " ") for text in prose]
+    return prose
