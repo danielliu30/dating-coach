@@ -1,5 +1,8 @@
 import json
+import sys
 from pathlib import Path
+
+import pytest
 
 import train
 from app.schemas import Message
@@ -183,40 +186,33 @@ def _lines(positions):
     return "\n".join(f"[{i}] {'self' if i % 2 == 0 else 'match'}: {LONG_BODIES[i]}" for i in positions)
 
 
-def test_weak_label_rows_are_windowed_with_full_weight_only_on_the_final_window():
-    example = TrainingExample.from_json(_payload("a", LONG_BODIES, outcome="date_set"))
+@pytest.mark.parametrize(
+    "length,outcome,options,score,windows_and_weights",
+    [
+        (10, "date_set", {}, OUTCOME_SCORE["date_set"], [(0, 4, 0.5), (4, 8, 0.5), (8, 10, 1.0)]),
+        (10, "ghosted", {"earlier_window_weight": 0.0}, OUTCOME_SCORE["ghosted"], [(8, 10, 1.0)]),
+        (6, None, {}, 0.2, [(0, 4, 0.5), (4, 6, 1.0)]),
+        (3, "kept_talking", {}, OUTCOME_SCORE["kept_talking"], [(0, 3, 1.0)]),
+    ],
+)
+def test_weak_label_window_weights(length, outcome, options, score, windows_and_weights):
+    payload = _payload("a", LONG_BODIES[:length], outcome=outcome)
+    if outcome is None:
+        payload["reply_received"] = False
+    example = TrainingExample.from_json(payload)
 
-    rows = list(to_segment_rows([example], window_size=4))
-
-    assert rows == [
-        (_lines(range(0, 4)), OUTCOME_SCORE["date_set"], 0.5),
-        (_lines(range(4, 8)), OUTCOME_SCORE["date_set"], 0.5),
-        (_lines(range(8, 10)), OUTCOME_SCORE["date_set"], 1.0),
+    assert list(to_segment_rows([example], **options)) == [
+        (_lines(range(start, end)), score, weight) for start, end, weight in windows_and_weights
     ]
 
 
-def test_weak_label_only_on_final_window_when_earlier_weight_is_zero():
-    example = TrainingExample.from_json(_payload("a", LONG_BODIES, outcome="ghosted"))
-
-    rows = list(to_segment_rows([example], window_size=4, earlier_window_weight=0.0))
-
-    assert rows == [(_lines(range(8, 10)), OUTCOME_SCORE["ghosted"], 1.0)]
-
-
-def test_reply_received_fallback_is_windowed_like_outcome():
-    payload = _payload("a", LONG_BODIES[:6], outcome=None)
-    payload["reply_received"] = False
-    example = TrainingExample.from_json(payload)
-
-    rows = list(to_segment_rows([example], window_size=4))
-
-    assert [(score, weight) for _, score, weight in rows] == [(0.2, 0.5), (0.2, 1.0)]
-
-
-def test_short_weak_labeled_conversation_is_one_full_weight_row():
-    example = TrainingExample.from_json(_payload("a", BODIES[:3], outcome="kept_talking"))
-
-    assert list(to_segment_rows([example])) == [(_lines(range(3)), OUTCOME_SCORE["kept_talking"], 1.0)]
+@pytest.mark.parametrize("weight", ["nan", "inf", "-inf"])
+def test_train_rejects_nonfinite_weak_earlier_weight(monkeypatch, capsys, weight):
+    monkeypatch.setattr(sys, "argv", ["train.py", "--data", "unused.jsonl", f"--weak-earlier-weight={weight}"])
+    with pytest.raises(SystemExit) as exc:
+        train.parse_args()
+    assert exc.value.code == 2
+    assert "--weak-earlier-weight must be finite" in capsys.readouterr().err
 
 
 def test_human_segments_ignore_window_settings():
@@ -282,6 +278,7 @@ def test_bridge_keeps_the_first_human_label_in_input_order():
     bridge = TrainingExample.from_json(_payload("bridge", base, user_id="u1"))
 
     assert [e.conversation_id for e in deduplicate([weak_b, human_a, human_b, bridge])] == ["human_a"]
+
 
 def test_repeated_copies_of_one_user_skip_the_shingle_scan(monkeypatch):
     calls = []
@@ -365,8 +362,32 @@ def test_report_holdout_prints_stats_and_excludes_overlap(tmp_path: Path, capsys
     assert "label_mean=0.500 label_std=0.300 excluded_from_training=1" in out
 
 
-def test_report_holdout_without_file_keeps_everything(tmp_path: Path, capsys) -> None:
-    """A missing holdout file is reported and excludes nothing."""
-    examples = [_example("c1")]
-    assert train.report_holdout(tmp_path / "missing.jsonl", examples) == examples
-    assert "no frozen eval file" in capsys.readouterr().out
+def test_report_holdout_excludes_ids_even_when_rows_are_not_reported(tmp_path: Path, capsys) -> None:
+    holdout = _write(tmp_path, [
+        _payload("h1", ["hey"], user_id="u1"),
+        _payload("h2", ["hey"], user_id="u2"),
+        dict(_payload("h3", ["hello"], user_id="u3"), consented=False),
+    ])
+    examples = [_example("h2"), _example("new", "u2"), _example("other", "u3"), _example("keep")]
+    assert [e.conversation_id for e in train.report_holdout(holdout, examples)] == ["keep"]
+    assert "conversations=1" in capsys.readouterr().out
+
+
+def test_train_excludes_holdout_before_deduping_training_rows(tmp_path: Path, monkeypatch, capsys) -> None:
+    held = _payload("held", ["hey"], user_id="u1",
+                    segments=[{"start_position": 0, "end_position": 0, "engagement_score": 0.8}])
+    holdout = tmp_path / "holdout.jsonl"
+    holdout.write_text(json.dumps(held), encoding="utf-8")
+    data = _write(tmp_path, [held, _payload("keep", ["hey"], user_id="u2")])
+    monkeypatch.setattr(sys, "argv", ["train.py", "--data", str(data), "--eval-file", str(holdout), "--dry-run"])
+
+    train.main()
+
+    out = capsys.readouterr().out
+    assert "excluded_from_training=1" in out
+    assert "conversations=1 segments=1 train=1 eval=0" in out
+
+
+def test_report_holdout_fails_when_file_is_missing(tmp_path: Path) -> None:
+    with pytest.raises(SystemExit, match="no frozen eval file"):
+        train.report_holdout(tmp_path / "missing.jsonl", [_example("c1")])

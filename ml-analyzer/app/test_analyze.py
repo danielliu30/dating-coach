@@ -339,6 +339,7 @@ def test_trained_scores_only_windows_with_self_messages(monkeypatch: pytest.Monk
 def test_trained_skips_the_model_when_none_of_the_messages_are_yours(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     """A match-only conversation is neutral throughout and never reaches the model."""
     scorer, calls = _stub_trained_scorer(monkeypatch, [], tmp_path)
+    monkeypatch.setattr(scorer, "_load", lambda: pytest.fail("match-only input must not load a checkpoint"))
     request = AnalyzeRequest(
         conversation_id="trained-2",
         messages=[Message(position=0, sender="match", body="Hey there"), Message(position=1, sender="match", body="Hello?")],
@@ -371,7 +372,17 @@ def test_trained_honors_preferences(monkeypatch: pytest.MonkeyPatch, tmp_path) -
 
 def test_trained_agency_gate_ignores_echoed_preferences_and_messages(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     """Preferences and message excerpts the heuristic echoes are the customer's words, so they never trigger the fallback."""
+    import app.scoring.trained as trained
+
     scorer, _ = _stub_trained_scorer(monkeypatch, [0.9], tmp_path)
+    excerpt = trained._excerpt
+    excerpt_positions = []
+
+    def record_excerpt(message):
+        excerpt_positions.append(message.position)
+        return excerpt(message)
+
+    monkeypatch.setattr(trained, "_excerpt", record_excerpt)
     request = AnalyzeRequest(
         conversation_id="trained-5",
         preferences="find someone who shares my values",
@@ -385,6 +396,7 @@ def test_trained_agency_gate_ignores_echoed_preferences_and_messages(monkeypatch
     assert response.model_version == scorer.version
     assert response.segments[0].engagement_score == 0.9
     assert "find someone who shares my values" in response.overall.summary
+    assert excerpt_positions == [0, 1, 1]
 
 
 def test_trained_falls_back_to_heuristic_when_prose_breaks_agency(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:

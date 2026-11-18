@@ -28,6 +28,7 @@ from training.dataset import (
     WEAK_EARLIER_WINDOW_WEIGHT,
     Row,
     TrainingExample,
+    deduplicate,
     exclude_holdout,
     load_jsonl,
     split,
@@ -73,18 +74,21 @@ def parse_args() -> argparse.Namespace:
         help="Drop segment windows with no 'self' message, as HeuristicScorer judges only the customer (default: on)",
     )
     parser.add_argument("--dry-run", action="store_true", help="Report dataset stats and exit")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if not math.isfinite(args.weak_earlier_weight):
+        parser.error("--weak-earlier-weight must be finite")
+    return args
 
 
 def report_holdout(
     path: Path, examples: list[TrainingExample], include_unconsented: bool = False
 ) -> list[TrainingExample]:
     """Print frozen-holdout stats and return ``examples`` without any holdout overlap."""
-    if not path.exists():
-        print(f"holdout: no frozen eval file at {path}; nothing excluded")
-        return examples
-    holdout = load_jsonl(path, require_consent=not include_unconsented)
-    kept, dropped = exclude_holdout(examples, holdout)
+    if not path.is_file():
+        raise SystemExit(f"holdout: no frozen eval file at {path}")
+    originals = load_jsonl(path, require_consent=False, dedupe=False)
+    kept, dropped = exclude_holdout(examples, originals)
+    holdout = deduplicate([e for e in originals if include_unconsented or e.consented])
     scores = [score for _, score, _ in to_segment_rows(holdout)]
     counts = " ".join(f"{label}={count}" for label, count in label_counts(scores).items())
     stats = distribution(scores)
@@ -135,9 +139,10 @@ def write_eval_predictions(path: Path, rows: list[Row], preds: list[float]) -> N
 def main() -> None:
     args = parse_args()
 
-    examples = load_jsonl(args.data, require_consent=not args.include_unconsented)
+    examples = load_jsonl(args.data, require_consent=not args.include_unconsented, dedupe=False)
     if args.eval_file:
         examples = report_holdout(Path(args.eval_file), examples, args.include_unconsented)
+    examples = deduplicate(examples)
     train_rows, eval_rows = split(
         examples,
         window_size=args.segment_size,

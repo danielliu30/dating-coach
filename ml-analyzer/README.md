@@ -240,8 +240,8 @@ vision endpoint of the configured provider (Anthropic or OpenAI-compatible);
   (a violation falls back to the heuristic scorer). Each segment is scored on the
   same text training rows use: the transcript, prefixed with a `[meta]` line of
   `sent_at` latency/count features when timestamps exist (see
-  [`training/data_schema.md`](training/data_schema.md#model-input)), so
-  checkpoints trained before that line existed should be retrained.
+  [`training/data_schema.md`](training/data_schema.md#model-input)). Retrain
+  pre-`[meta]` checkpoints before serving timestamped inputs.
 
 ## Training your own model
 
@@ -281,22 +281,17 @@ Export a dataset:
 Ground rules: only export `consented` rows, pseudonymise names/handles/links
 before they leave the database, and keep an opt-out path that deletes a user's
 training rows. `outcome`/`reply_received` are weak labels — cheap and plentiful;
-human `segments` labels are scarce and authoritative. Weak labels are applied
-per segment window, at full weight only on the final window (see "Label
-precedence" in `training/data_schema.md`). Aim for a few thousand
+human `segments` labels are scarce and authoritative. Aim for a few thousand
 weak-labeled conversations plus a few hundred hand-labeled ones as the eval set,
 and keep the eval set user-disjoint from training.
 
-**Frozen eval holdout.** `data/eval_holdout.jsonl` (same schema) is the fixed
-eval set the serving gate is measured on. It is **never trained on**: `train.py`
-loads it (`--eval-file`, default `data/eval_holdout.jsonl`) and drops every
-`--data` row that shares a `conversation_id` or `user_id` with it before the
-train/eval split, reporting the count as `excluded_from_training`. Do not
-change it between runs you want to compare. The committed file is a small seed
-of synthetic, rubric-labeled conversations whose `segments` sit on the default
-`ML_SEGMENT_SIZE=4` boundaries; replace it with a few hundred real hand-labeled,
-user-disjoint conversations before relying on the gate. Everything else under
-`data/` (e.g. `labeled.jsonl`) is gitignored.
+**Frozen eval holdout.** `--eval-file` defaults to the committed synthetic fixture
+`data/eval_holdout.jsonl`. Training excludes any row with a conversation or
+user ID in that file before deduplication and reports `excluded_from_training`.
+A missing file stops training; pass `--eval-file ''` to opt out. Keep the
+holdout fixed across runs you want to compare, and use a representative,
+hand-labeled, user-disjoint holdout before relying on the gate. Other files in
+`data/` are gitignored.
 
 ### 2. Label
 
@@ -313,13 +308,14 @@ python train.py --data data/labeled.jsonl --out artifacts/segment-scorer
 ```
 
 By default (`--self-only`) segment windows with no `self` message are dropped,
-matching the heuristic scorer's rule that only the customer's messages are
-judged; pass `--no-self-only` to keep match-only windows.
+matching the heuristic scorer; pass `--no-self-only` to keep them. With
+`--weak-earlier-weight 0`, a weakly labeled conversation whose final window is
+match-only produces no rows.
 
 Default recipe: DistilBERT with a single-logit head over segment transcripts,
 soft-target BCE against the 0–1 score (so serving's `sigmoid(logit)` is on the
-same scale as the labels), weighted per row by `training.dataset` (human
-segments 1.0; see `training/data_schema.md`), `mae`/`rmse` (and their
+same scale as the labels), with [per-row weights](training/data_schema.md#weak-label-weighting),
+`mae`/`rmse` (and their
 row-weighted `weighted_mae`/`weighted_rmse`) on the eval split plus the spread
 of predictions next to labels (`pred_mean`/`pred_std`/`pred_min`/`pred_max` vs
 `label_mean`/`label_std`). A `pred_std` far below `label_std`, or predictions
