@@ -36,9 +36,9 @@ interface Handlers {
  * backgrounded phone or a redeployed API does not silently break the chat, and
  * gives up once the thread is gone or after maxAttempts failed tries.
  *
- * The access token is read per attempt rather than captured once: it lives for
- * minutes, and the handshake carries it, so a socket holding the value it was
- * built with would reconnect on an expired credential forever.
+ * Each attempt first exchanges the current session for a single-use ticket
+ * (api.wsTicket) and the handshake carries that, never the access token. token
+ * is only consulted to tell whether anyone is still signed in.
  */
 export class ChatSocket {
   private socket: WebSocket | null = null;
@@ -57,16 +57,33 @@ export class ChatSocket {
     private readonly handlers: Handlers,
   ) {}
 
-  connect(): void {
+  async connect(): Promise<void> {
     if (this.closed) return;
-    const token = this.token();
-    if (!token) {
+    if (!this.token()) {
       this.handlers.onStatus?.('closed');
       return;
     }
     this.handlers.onStatus?.('connecting');
 
-    const socket = new WebSocket(wsURL(`/chat/threads/${this.threadID}/ws`, token));
+    let ticket: string;
+    try {
+      ticket = await api.wsTicket();
+    } catch {
+      // Unreachable API or a session the renewal could not save: back off and
+      // retry; a signed-out session leaves token() empty and stops the loop.
+      if (this.closed) return;
+      this.handlers.onStatus?.('closed');
+      if (this.attempts >= maxAttempts) {
+        this.end();
+        return;
+      }
+      this.attempts += 1;
+      this.retry = setTimeout(() => void this.connect(), Math.min(1000 * this.attempts, 10_000));
+      return;
+    }
+    if (this.closed) return;
+
+    const socket = new WebSocket(wsURL(`/chat/threads/${this.threadID}/ws`, ticket));
     this.socket = socket;
 
     socket.onopen = () => {
@@ -132,7 +149,7 @@ export class ChatSocket {
     }
     this.attempts += 1;
     const delay = Math.min(1000 * this.attempts, 10_000);
-    this.retry = setTimeout(() => this.connect(), delay);
+    this.retry = setTimeout(() => void this.connect(), delay);
   }
 
   /**

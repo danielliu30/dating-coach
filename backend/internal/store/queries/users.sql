@@ -37,6 +37,23 @@ SET dating_styles = $2,
     phases_strong = $3,
     phases_working_on = $4,
     dating_preferences = $5,
+    coaching_goals = COALESCE($6::text[], coaching_goals),
     updated_at = now()
 WHERE id = $1 AND deleted_at IS NULL
 RETURNING *;
+
+-- name: RecordSessionRevocation :exec
+-- Never moves a cutoff back, so a delayed write cannot re-admit tokens.
+UPDATE users
+SET sessions_revoked_at = GREATEST(COALESCE(sessions_revoked_at, '-infinity'::timestamptz), @revoked_at::timestamptz)
+WHERE id = @id;
+
+-- name: ListSessionRevocationsSince :many
+SELECT id, sessions_revoked_at
+FROM users
+WHERE sessions_revoked_at > @since::timestamptz;
+
+-- name: LockUserForRefresh :one
+-- Serialises a refresh-token rotation against a concurrent reuse revocation,
+-- which updates the same row before deleting the user's refresh tokens.
+SELECT * FROM users WHERE id = $1 AND deleted_at IS NULL FOR UPDATE;
