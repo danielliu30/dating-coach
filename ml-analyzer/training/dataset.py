@@ -120,22 +120,8 @@ def _jaccard(a: FrozenSet[Tuple[str, ...]], b: FrozenSet[Tuple[str, ...]]) -> fl
 
 
 def deduplicate(examples: Sequence[TrainingExample]) -> List[TrainingExample]:
-    """Drop repeated and near-identical conversations, keeping input order.
-
-    Exact duplicates (same normalized transcript hash) are dropped across the
-    whole dataset. Near-duplicates (word-shingle Jaccard >= NEAR_DUPLICATE_JACCARD)
-    are only searched within the same ``user_id``, which keeps the check cheap and
-    targets the common case: one user re-submitting a slightly longer or edited
-    copy of the same thread.
-
-    Duplicates form clusters with one kept representative: a conversation that
-    matches any earlier copy (kept or dropped) joins that copy's cluster, and one
-    that matches several clusters merges them. The representative is the first
-    copy with human ``segments``, else the first copy; it keeps the position of
-    the cluster's first copy in the output.
-    """
+    """Cluster exact matches globally and near matches within each user."""
     slots: List[TrainingExample | None] = []
-    # Input index of each slot's representative, so merges pick the first labeled copy in input order.
     rep_order: List[int] = []
     parent: List[int] = []
     by_hash: Dict[str, int] = {}
