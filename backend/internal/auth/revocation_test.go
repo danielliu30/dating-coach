@@ -19,6 +19,7 @@ import (
 func TestDenylistRevokedSince(t *testing.T) {
 	ctx := context.Background()
 	mr := miniredis.RunT(t)
+	mr.Set(revocationsReadyKey, "1")
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	t.Cleanup(func() { _ = rdb.Close() })
 	d := NewDenylist(rdb, time.Minute)
@@ -173,6 +174,93 @@ func TestReplayRevocationsRestoresLostCutoffs(t *testing.T) {
 
 	if msg, err := announcements.ReceiveTimeout(ctx, 200*time.Millisecond); err == nil {
 		t.Fatalf("unexpected announcement %v: replays must not drop sockets opened after the cutoff", msg)
+	}
+}
+
+func TestRevocationsFailClosedUntilReplayAfterFlush(t *testing.T) {
+	ctx := context.Background()
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+	d := NewDenylist(rdb, time.Minute)
+	issuer := NewTokenIssuer("test-secret")
+	revoked, valid := uuid.New(), uuid.New()
+	tokens := make(map[uuid.UUID]string)
+	for _, user := range []uuid.UUID{revoked, valid} {
+		token, _, err := issuer.Issue(user, "a@example.com", RoleUser, ScopeSession, time.Minute)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tokens[user] = token
+	}
+	status := func(user uuid.UUID) int {
+		req := httptest.NewRequest(http.MethodGet, "/me", nil)
+		req.Header.Set("Authorization", "Bearer "+tokens[user])
+		rec := httptest.NewRecorder()
+		Middleware(issuer, nil, d)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		})).ServeHTTP(rec, req)
+		return rec.Code
+	}
+	if got := status(valid); got != http.StatusServiceUnavailable {
+		t.Fatalf("fresh Redis status = %d, want 503", got)
+	}
+	if err := d.ReplayRevocations(ctx, stubRevocationLister{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := status(valid); got != http.StatusNoContent {
+		t.Fatalf("empty replay status = %d, want 204", got)
+	}
+	cutoff := time.Now().Truncate(time.Microsecond)
+	lister := stubRevocationLister{{ID: revoked, SessionsRevokedAt: &cutoff}}
+	if err := d.ReplayRevocations(ctx, lister); err != nil {
+		t.Fatal(err)
+	}
+	mr.FlushAll()
+	for _, user := range []uuid.UUID{revoked, valid} {
+		if got := status(user); got != http.StatusServiceUnavailable {
+			t.Fatalf("after flush status = %d, want 503", got)
+		}
+	}
+	if err := d.ReplayRevocations(ctx, lister); err != nil {
+		t.Fatal(err)
+	}
+	if got := status(revoked); got != http.StatusUnauthorized {
+		t.Fatalf("revoked status after replay = %d, want 401", got)
+	}
+	if got := status(valid); got != http.StatusNoContent {
+		t.Fatalf("valid status after replay = %d, want 204", got)
+	}
+}
+
+type revocationListerFunc func(context.Context, time.Time) ([]db.ListSessionRevocationsSinceRow, error)
+
+func (f revocationListerFunc) ListSessionRevocationsSince(ctx context.Context, since time.Time) ([]db.ListSessionRevocationsSinceRow, error) {
+	return f(ctx, since)
+}
+
+func TestFailedReplayDoesNotMarkRedisReady(t *testing.T) {
+	for _, flush := range []bool{false, true} {
+		t.Run(strconv.FormatBool(flush), func(t *testing.T) {
+			ctx := context.Background()
+			mr := miniredis.RunT(t)
+			rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+			t.Cleanup(func() { _ = rdb.Close() })
+			d := NewDenylist(rdb, time.Minute)
+			err := d.ReplayRevocations(ctx, revocationListerFunc(func(context.Context, time.Time) ([]db.ListSessionRevocationsSinceRow, error) {
+				if flush {
+					mr.FlushAll()
+					return nil, nil
+				}
+				return nil, errors.New("database unavailable")
+			}))
+			if err == nil {
+				t.Fatal("replay succeeded")
+			}
+			if _, err := d.RevokedSince(ctx, uuid.New()); !errors.Is(err, ErrRevocationUnavailable) {
+				t.Fatalf("revocation check = %v, want unavailable", err)
+			}
+		})
 	}
 }
 

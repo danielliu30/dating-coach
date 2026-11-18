@@ -87,6 +87,9 @@ func newTestService(t *testing.T) (*Service, *TokenIssuer, *pgxpool.Pool) {
 	codes, mr := newTestCache(t)
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	t.Cleanup(func() { _ = rdb.Close() })
+	if err := rdb.Set(ctx, revocationsReadyKey, "1", 0).Err(); err != nil {
+		t.Fatal(err)
+	}
 	issuer := NewTokenIssuer("test-secret")
 	svc := NewService(pool, db.New(pool), issuer, silentNotifier{}, bcrypt.MinCost, "http://app.test", codes, NewDenylist(rdb, 15*time.Minute), nil, 15*time.Minute, 30*time.Minute, 24*time.Hour)
 	return svc, issuer, pool
