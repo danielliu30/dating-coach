@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Review annotated pre-label files: suggestion drift, agreement, adjudication.
+"""Review annotated pre-label files and merge resolved scores for training.
 
     cd ml-analyzer
     python -m scripts.review_labels data/annotations/alice.jsonl data/annotations/bob.jsonl \\
@@ -11,35 +11,28 @@ Each positional file is one annotator's copy of ``data/prelabeled.jsonl``
 the annotator is the row's ``annotator`` field, else the file name. Segments
 are matched on ``(conversation_id, start_position, end_position)``.
 
-Reports, per ``training/data_schema.md`` (two annotators per conversation,
-adjudicate disagreement above 0.25):
-
-* each annotator vs ``suggested_score``: how far annotators move the LLM's
-  suggestion (MAE, share within 0.25, share left unchanged);
-* each annotator pair: MAE, share within 0.25 and Pearson r, plus
-  Krippendorff's alpha (interval) over all annotators;
-* segments with fewer than two scores, and segments whose scores spread by more
-  than 0.25, which are written to ``--adjudication-out`` with
-  ``annotator_scores`` and an empty ``engagement_score`` for the adjudicator.
+Segments whose scores spread by more than 0.25 are written to
+``--adjudication-out`` with annotator scores and an empty engagement score.
 
 ``--adjudicated`` reads that file back once filled in. ``--final-out`` writes
 training rows (``label_source = "annotator"``) holding every resolved segment:
 the adjudicated score, else the annotators' mean when at least two agree within
 0.25. With ``--base`` the output is the base export with each annotated
 conversation's rows replaced by its annotator row, ready for ``train.py``.
+Unresolved conversations are omitted rather than retaining weak labels.
+Annotations absent from or no longer consented in the base are dropped.
 """
 
 from __future__ import annotations
 
 import argparse
-import itertools
 import json
 import math
 import sys
 from collections import defaultdict
 from pathlib import Path
 from statistics import mean
-from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, Iterator, List, Optional, Tuple
 
 THRESHOLD = 0.25
 # Tolerate float noise so a 0.25 spread (e.g. 0.6 vs 0.85) counts as agreement.
@@ -68,27 +61,21 @@ def disagrees(a: float, b: float) -> bool:
 
 
 class Annotations:
-    """Every annotator's score, and the LLM suggestion, per segment."""
+    """Every annotator's score per segment."""
 
     def __init__(self) -> None:
         self.scores: Dict[Key, Dict[str, float]] = defaultdict(dict)
-        self.suggested: Dict[Key, float] = {}
         self.segments: set = set()
         self.rows: Dict[str, Dict] = {}
-        self.annotators: List[str] = []
 
     def add_file(self, path: Path) -> None:
         for row in jsonl_rows(path):
             annotator = row.get("annotator") or path.stem
-            if annotator not in self.annotators:
-                self.annotators.append(annotator)
             cid = row["conversation_id"]
             self.rows.setdefault(cid, {k: row.get(k) for k in ROW_FIELDS})
             for seg in row.get("segments") or []:
                 key = (cid, int(seg["start_position"]), int(seg["end_position"]))
                 self.segments.add(key)
-                if seg.get("suggested_score") is not None:
-                    self.suggested.setdefault(key, float(seg["suggested_score"]))
                 if seg.get("engagement_score") is not None:
                     self.scores[key][annotator] = parse_score(seg["engagement_score"], f"{path}: {key}")
 
@@ -100,76 +87,13 @@ class Annotations:
         return len(values) >= 2 and disagrees(max(values), min(values))
 
 
-def pearson(xs: Sequence[float], ys: Sequence[float]) -> Optional[float]:
-    if len(xs) < 2:
-        return None
-    mx, my = mean(xs), mean(ys)
-    sx = math.sqrt(sum((x - mx) ** 2 for x in xs))
-    sy = math.sqrt(sum((y - my) ** 2 for y in ys))
-    if sx == 0 or sy == 0:
-        return None
-    return sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / (sx * sy)
-
-
-def krippendorff_alpha(units: Iterable[Sequence[float]]) -> Optional[float]:
-    """Interval-metric alpha; units with fewer than two scores are ignored."""
-    units = [list(u) for u in units if len(u) >= 2]
-    values = [v for u in units for v in u]
-    n = len(values)
-    if n < 2:
-        return None
-    observed = sum(
-        sum((a - b) ** 2 for i, a in enumerate(u) for j, b in enumerate(u) if i != j) / (len(u) - 1) for u in units
-    ) / n
-    expected = sum((a - b) ** 2 for a in values for b in values) / (n * (n - 1))
-    if expected == 0:
-        return None
-    return 1.0 - observed / expected
-
-
-def _fmt(value: Optional[float]) -> str:
-    return "n/a" if value is None else f"{value:.3f}"
-
-
 def report(ann: Annotations) -> List[str]:
-    lines = [f"annotators: {', '.join(ann.annotators) or 'none'}; segments: {len(ann.keys())}"]
-
-    lines.append("\nsuggested_score vs annotator engagement_score")
-    for name in ann.annotators:
-        diffs = [s[name] - ann.suggested[k] for k, s in ann.scores.items() if name in s and k in ann.suggested]
-        if not diffs:
-            lines.append(f"  {name}: no scored segments with a suggestion")
-            continue
-        abs_diffs = [abs(d) for d in diffs]
-        lines.append(
-            f"  {name}: n={len(diffs)} mae={mean(abs_diffs):.3f} mean_shift={mean(diffs):+.3f} "
-            f"within_{THRESHOLD}={sum(not disagrees(d, 0) for d in diffs) / len(diffs):.0%} "
-            f"unchanged={sum(d <= EPSILON for d in abs_diffs) / len(diffs):.0%}"
-        )
-
-    lines.append("\ninter-annotator agreement")
-    for a, b in itertools.combinations(ann.annotators, 2):
-        pairs = [(s[a], s[b]) for s in ann.scores.values() if a in s and b in s]
-        if not pairs:
-            lines.append(f"  {a} vs {b}: no shared segments")
-            continue
-        xs, ys = [p[0] for p in pairs], [p[1] for p in pairs]
-        lines.append(
-            f"  {a} vs {b}: n={len(pairs)} mae={mean(abs(x - y) for x, y in pairs):.3f} "
-            f"within_{THRESHOLD}={sum(not disagrees(x, y) for x, y in pairs) / len(pairs):.0%} "
-            f"pearson_r={_fmt(pearson(xs, ys))}"
-        )
-    lines.append(f"  krippendorff_alpha (interval)={_fmt(krippendorff_alpha(s.values() for s in ann.scores.values()))}")
-
     keys = ann.keys()
-    single = [k for k in keys if len(ann.scores.get(k, {})) < 2]
-    flagged = [k for k in keys if ann.needs_adjudication(k)]
-    lines.append(f"\nneeds a second annotator: {len(single)} segment(s)")
-    lines.append(f"adjudicate (spread > {THRESHOLD}): {len(flagged)} segment(s)")
-    for cid, start, end in flagged:
-        scores = ", ".join(f"{n}={v:.2f}" for n, v in ann.scores[(cid, start, end)].items())
-        lines.append(f"  {cid} [{start}-{end}]: {scores}")
-    return lines
+    return [
+        f"segments: {len(keys)}",
+        f"needs a second annotator: {sum(len(ann.scores.get(k, {})) < 2 for k in keys)} segment(s)",
+        f"adjudicate (spread > {THRESHOLD}): {sum(ann.needs_adjudication(k) for k in keys)} segment(s)",
+    ]
 
 
 def adjudication_rows(ann: Annotations) -> List[Dict]:
@@ -181,7 +105,6 @@ def adjudication_rows(ann: Annotations) -> List[Dict]:
                 {
                     "start_position": start,
                     "end_position": end,
-                    "suggested_score": ann.suggested.get(key),
                     "annotator_scores": ann.scores[key],
                     "engagement_score": None,
                 }
@@ -234,13 +157,13 @@ def write_jsonl(rows: Iterable[Dict], out: Path) -> int:
     return count
 
 
-def merge_into_base(base: Iterable[Dict], annotated: List[Dict]) -> Iterator[Dict]:
+def merge_into_base(base: Iterable[Dict], annotated: List[Dict], reviewed: Iterable[str]) -> Iterator[Dict]:
     """Swap annotated rows into ``base``; conversations no longer consented there are dropped."""
     base = list(base)
     current = {row["conversation_id"] for row in base if row.get("consented")}
-    replaced = {row["conversation_id"] for row in annotated}
+    replaced = set(reviewed)
     for row in base:
-        if row["conversation_id"] not in replaced:
+        if row.get("consented") and row["conversation_id"] not in replaced:
             yield row
     # An annotation outlives a user's opt-out; the fresh export is the authority.
     yield from (row for row in annotated if row["conversation_id"] in current)
@@ -274,9 +197,9 @@ def main(argv: Optional[List[str]] = None) -> None:
     if args.final_out:
         adjudicated = read_adjudicated(args.adjudicated) if args.adjudicated else {}
         annotated = final_rows(ann, adjudicated)
-        rows = merge_into_base(jsonl_rows(args.base), annotated) if args.base else annotated
+        rows = merge_into_base(jsonl_rows(args.base), annotated, ann.rows) if args.base else annotated
         n = write_jsonl(rows, args.final_out)
-        print(f"wrote {n} row(s) ({len(annotated)} annotated) to {args.final_out}", file=sys.stderr)
+        print(f"wrote {n} row(s) to {args.final_out}", file=sys.stderr)
 
 
 if __name__ == "__main__":
