@@ -124,3 +124,10 @@ def test_empty_export(tmp_path):
     out = tmp_path / "labeled.jsonl"
     assert write_dataset([], out) == 0
     assert out.read_text() == ""
+
+
+def test_write_dataset_is_owner_only_and_leaves_no_staging_file(tmp_path):
+    out = tmp_path / "labeled.jsonl"
+    write_dataset([{"consented": True, "messages": []}], out)
+    assert out.stat().st_mode & 0o777 == 0o600
+    assert [p.name for p in tmp_path.iterdir()] == ["labeled.jsonl"]

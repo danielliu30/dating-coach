@@ -17,8 +17,10 @@ import argparse
 import json
 import re
 import shlex
+import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Optional
 
@@ -180,14 +182,19 @@ def write_dataset(rows: Iterable[Dict], out: Path) -> int:
     """Pseudonymise ``rows`` into ``out`` atomically; return the row count."""
     count = 0
     out.parent.mkdir(parents=True, exist_ok=True)
-    tmp = out.with_suffix(out.suffix + ".tmp")
-    with tmp.open("w", encoding="utf-8") as handle:
-        for row in rows:
-            if not row.get("consented"):
-                continue
-            handle.write(json.dumps(pseudonymise_row(row), ensure_ascii=False) + "\n")
-            count += 1
-    tmp.replace(out)
+    # mkstemp gives each export its own owner-only (0600) staging file.
+    fd, tmp = tempfile.mkstemp(dir=out.parent, prefix=out.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            for row in rows:
+                if not row.get("consented"):
+                    continue
+                handle.write(json.dumps(pseudonymise_row(row), ensure_ascii=False) + "\n")
+                count += 1
+        os.replace(tmp, out)
+    except BaseException:
+        os.unlink(tmp)
+        raise
     return count
 
 
