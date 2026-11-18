@@ -64,6 +64,10 @@ def message_range(segment: Segment) -> str:
     return f"Messages {segment.start_position + 1}-{segment.end_position + 1}"
 
 
+# Model-input format of ``transcript(..., meta=True)``; bump whenever ``meta_line`` or the line layout changes.
+TRANSCRIPT_VERSION = "transcript-v2"
+
+
 class TranscriptMessage(Protocol):
     @property
     def position(self) -> int: ...

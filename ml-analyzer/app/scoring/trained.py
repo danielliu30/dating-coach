@@ -16,7 +16,7 @@ from typing import Any, List
 
 from ..config import Settings
 from ..schemas import AnalyzeRequest, AnalyzeResponse, Overall, Segment
-from .base import Scorer, align_segments, chunk, clamp, message_range, transcript
+from .base import TRANSCRIPT_VERSION, Scorer, align_segments, chunk, clamp, message_range, transcript
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +27,7 @@ class TrainedScorer(Scorer):
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.model_dir = Path(settings.model_dir)
-        self.version = f"trained-{self.model_dir.name}"
+        self.version = f"trained-{self.model_dir.name}+{TRANSCRIPT_VERSION}"
         self._model: Any | None = None
         self._tokenizer: Any | None = None
 
@@ -57,7 +57,7 @@ class TrainedScorer(Scorer):
         import torch  # noqa: PLC0415  (installed alongside transformers)
 
         windows = chunk(request.messages, self.settings.segment_size)
-        texts = [transcript(window) for _, _, window in windows]
+        texts = [transcript(window, meta=True) for _, _, window in windows]
 
         assert self._tokenizer is not None and self._model is not None
         batch = self._tokenizer(texts, truncation=True, padding=True, max_length=512, return_tensors="pt")
