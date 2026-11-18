@@ -19,6 +19,7 @@ const baseUser: Profile = {
   phases_strong: ['opening'],
   phases_working_on: ['flirting'],
   dating_preferences: 'Something serious',
+  coaching_goals: ['feedback'],
 };
 
 type AuthStub = {
@@ -117,10 +118,45 @@ describe('AccountScreen dating profile', () => {
         phases_strong: ['opening', 'first_messages'],
         phases_working_on: ['flirting'],
         dating_preferences: 'Someone outdoorsy',
+        coaching_goals: ['feedback'],
       }),
     );
     rerender(<AccountScreen />);
     await screen.findByText('Saved.');
+    expect(saveButton()).toBeDisabled();
+  });
+
+  it('saves coaching goals in vocabulary order regardless of tap order', async () => {
+    const stub = authStub();
+    stub.updateDatingProfile.mockResolvedValue(baseUser);
+    mount(stub);
+    expect(chip('Reading feedback')).toBeChecked();
+    fireEvent.press(chip('Support'));
+    fireEvent.press(chip('Agency'));
+    fireEvent.press(chip('Reading feedback'));
+    fireEvent.press(saveButton());
+
+    await waitFor(() =>
+      expect(stub.updateDatingProfile).toHaveBeenCalledWith(
+        expect.objectContaining({ coaching_goals: ['agency', 'support'] }),
+      ),
+    );
+  });
+
+  it('toggling a coaching goal back to the saved set leaves Save disabled', () => {
+    mount(authStub());
+    fireEvent.press(chip('Agency'));
+    expect(saveButton()).toBeEnabled();
+    fireEvent.press(chip('Agency'));
+    expect(saveButton()).toBeDisabled();
+  });
+
+  it('a snapshot without coaching_goals refreshes before allowing Save', async () => {
+    const { coaching_goals: _omitted, ...legacy } = baseUser;
+    const stub = authStub(legacy);
+    mount(stub);
+    expect(stub.refresh).toHaveBeenCalledTimes(1);
+    expect(chip('Agency')).toBeDisabled();
     expect(saveButton()).toBeDisabled();
   });
 

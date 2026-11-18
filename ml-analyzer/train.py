@@ -176,8 +176,8 @@ def main() -> None:
 
         Plain MSE against labels in [0, 1] fits the logit itself, and the sigmoid
         that serving applies would then squash every prediction into [0.5, 0.73].
-        BCE keeps training and inference on the same scale. The row weight from
-        ``training.dataset`` down-weights noisy weak labels.
+        BCE keeps training and inference on the same scale. Each row's loss is
+        scaled by the weight ``training.dataset`` attaches to it.
         """
 
         def compute_loss(self, model, inputs, return_outputs=False, **kwargs):  # noqa: ANN001, ANN201

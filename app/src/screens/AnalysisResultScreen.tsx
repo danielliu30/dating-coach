@@ -8,6 +8,7 @@ import type { AnalysisResult, Outcome } from '../api/types';
 import { Divider, EmptyState, IconDisc, SectionHeader, Skeleton, SkeletonCard, StatusPill } from '../components/kit';
 import { Badge, Button, Loading, Screen, ScoreBar, type IconName } from '../components/ui';
 import type { AnalysisStackParams } from '../navigation/types';
+import { COACHING_GOAL_LABELS } from '../lib/coachingGoals';
 import { colors, fonts, radii, scoreColor, shared, type } from '../theme';
 
 const OUTCOMES: { value: Outcome; label: string; icon: IconName }[] = [
@@ -242,6 +243,26 @@ export default function AnalysisResultScreen({
             ))}
           </View>
         ) : null}
+        {overall?.goal_scores?.length ? (
+          <View style={[styles.list, { backgroundColor: colors.surfaceAlt }]}>
+            <View style={shared.row}>
+              <Ionicons name="trending-up-outline" size={16} color={colors.sageDeep} />
+              <Text style={[type.eyebrow, { color: colors.sageDeep }]}>Your goals</Text>
+            </View>
+            {overall.goal_scores.map((item) => (
+              <View key={item.goal} style={styles.goal}>
+                <View style={[shared.row, { justifyContent: 'space-between' }]}>
+                  <Text style={styles.goalTitle}>{COACHING_GOAL_LABELS[item.goal]?.title ?? item.goal}</Text>
+                  <Text style={[styles.goalValue, { color: scoreColor(item.score) }]}>
+                    {`${Math.round(item.score * 100)}%`}
+                  </Text>
+                </View>
+                <ScoreBar score={item.score} />
+                <Text style={type.body}>{item.comment}</Text>
+              </View>
+            ))}
+          </View>
+        ) : null}
         <Divider />
         <View style={shared.row}>
           <Ionicons name="hardware-chip-outline" size={14} color={colors.muted} />
@@ -335,6 +356,9 @@ const styles = StyleSheet.create({
   ringValue: { fontFamily: fonts.sansBlack, fontSize: 30, letterSpacing: -1 },
   ringUnit: { fontFamily: fonts.sansBold, fontSize: 13, color: colors.muted, marginTop: 8 },
   list: { gap: 8, padding: 12, borderRadius: radii.md },
+  goal: { gap: 6 },
+  goalTitle: { fontFamily: fonts.sansSemi, fontSize: 15, color: colors.text },
+  goalValue: { fontFamily: fonts.sansBold, fontSize: 14 },
   bullet: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
   segIndex: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
   segIndexText: { fontFamily: fonts.sansBlack, fontSize: 14 },

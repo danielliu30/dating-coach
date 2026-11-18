@@ -351,8 +351,11 @@ func (s *Service) Label(ctx context.Context, conversationID, userID uuid.UUID, i
 	if in.EngagementScore != nil && (*in.EngagementScore < 0 || *in.EngagementScore > 1) {
 		return db.TrainingExample{}, fmt.Errorf("%w: engagement_score must be between 0 and 1", ErrInvalidInput)
 	}
+	// The app sends an explicit `null` when it has no per-segment labels;
+	// storing that as jsonb null would export `"segments": null`, which the
+	// training loader cannot read, so both absent and null mean "none".
 	segmentLabels := in.SegmentLabels
-	if len(segmentLabels) == 0 {
+	if trimmed := strings.TrimSpace(string(segmentLabels)); trimmed == "" || trimmed == "null" {
 		segmentLabels = json.RawMessage(`[]`)
 	}
 
