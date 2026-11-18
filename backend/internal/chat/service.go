@@ -224,7 +224,12 @@ func (s *Service) Send(ctx context.Context, threadID, senderID uuid.UUID, body, 
 		return Message{}, err
 	}
 
+	// The insert re-checks the status itself, so a close that lands after the
+	// read above still rejects the send instead of storing it.
 	row, err := s.queries.CreateChatMessage(ctx, db.CreateChatMessageParams{ThreadID: threadID, SenderID: senderID, Body: body})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Message{}, ErrClosed
+	}
 	if err != nil {
 		return Message{}, fmt.Errorf("create message: %w", err)
 	}
