@@ -314,16 +314,12 @@ match-only produces no rows.
 
 Default recipe: DistilBERT with a single-logit head over segment transcripts,
 soft-target BCE against the 0–1 score (so serving's `sigmoid(logit)` is on the
-same scale as the labels), with [per-row weights](training/data_schema.md#weak-label-weighting),
-`mae`/`rmse` (and their
-row-weighted `weighted_mae`/`weighted_rmse`) on the eval split plus the spread
-of predictions next to labels (`pred_mean`/`pred_std`/`pred_min`/`pred_max` vs
-`label_mean`/`label_std`). A `pred_std` far below `label_std`, or predictions
-stuck in a narrow band such as [0.5, 0.73], means the head is squashed even if
-MAE looks fine. Per-segment eval predictions (`text`, `label`, `prediction` and
-their `label_for` buckets) are written to `<out>/eval_predictions.jsonl` for
-inspection; like the checkpoint, `artifacts/` is gitignored because it holds
-user text.
+same scale as the labels), with [per-row weights](training/data_schema.md#weak-label-weighting).
+Eval reports weighted and unweighted MAE/RMSE plus score spread; a much lower
+`pred_std` than `label_std` suggests a squashed head. `<out>/eval_predictions.jsonl`
+contains per-segment scores and buckets, without transcripts by default.
+`--include-eval-text` adds the text; keep those files private (the default
+`artifacts/` directory is gitignored).
 
 For a generative model that also writes the `comment`/`summary` text, LoRA
 fine-tune a small instruct model on `(transcript → the exact JSON the prompt

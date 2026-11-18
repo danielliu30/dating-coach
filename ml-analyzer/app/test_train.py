@@ -1,5 +1,6 @@
 import json
 import math
+import sys
 from pathlib import Path
 
 import pytest
@@ -33,22 +34,24 @@ def test_prediction_metrics_empty_is_nan() -> None:
     assert all(math.isnan(v) for v in train.prediction_metrics([], []).values())
 
 
-def test_write_eval_predictions_writes_one_line_per_segment(tmp_path: Path) -> None:
+@pytest.mark.parametrize("flag", [[], ["--include-eval-text"]])
+def test_write_eval_predictions_writes_one_line_per_segment(tmp_path: Path, monkeypatch, flag) -> None:
     """Each eval segment becomes a JSONL record with its label, prediction and label_for buckets."""
     path = tmp_path / "segment-scorer" / "eval_predictions.jsonl"
     rows = [("[0] self: hey", 0.1, 1.0), ("[0] self: what was the last thing you baked?", 0.8, 0.5)]
-    train.write_eval_predictions(path, rows, [0.55, 0.7])
+    monkeypatch.setattr(sys, "argv", ["train.py", "--data", "unused.jsonl", *flag])
+    train.write_eval_predictions(path, rows, [0.55, 0.7], include_text=train.parse_args().include_eval_text)
     records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
     assert records == [
         {
-            "text": "[0] self: hey",
+            **({"text": rows[0][0]} if flag else {}),
             "label": 0.1,
             "prediction": 0.55,
             "label_bucket": "flat",
             "prediction_bucket": "neutral",
         },
         {
-            "text": "[0] self: what was the last thing you baked?",
+            **({"text": rows[1][0]} if flag else {}),
             "label": 0.8,
             "prediction": 0.7,
             "label_bucket": "engaging",

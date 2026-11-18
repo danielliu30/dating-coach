@@ -67,6 +67,7 @@ def parse_args() -> argparse.Namespace:
         help="Loss weight of weak-label windows before the final one (0 = final window only)",
     )
     parser.add_argument("--include-unconsented", action="store_true")
+    parser.add_argument("--include-eval-text", action="store_true", help="Include transcripts in eval_predictions.jsonl")
     parser.add_argument(
         "--self-only",
         action=argparse.BooleanOptionalAction,
@@ -119,20 +120,21 @@ def prediction_metrics(preds: list[float], labels: list[float]) -> dict[str, flo
     }
 
 
-def write_eval_predictions(path: Path, rows: list[Row], preds: list[float]) -> None:
-    """One JSON line per eval segment: transcript, label, prediction and both buckets."""
+def write_eval_predictions(path: Path, rows: list[Row], preds: list[float], *, include_text: bool = False) -> None:
+    """One JSON line per eval segment with scores, buckets and optional text."""
     if len(rows) != len(preds):
         raise ValueError(f"{len(rows)} eval rows but {len(preds)} predictions")
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as handle:
         for (text, label, _), pred in zip(rows, preds):
             record = {
-                "text": text,
                 "label": label,
                 "prediction": pred,
                 "label_bucket": label_for(label),
                 "prediction_bucket": label_for(pred),
             }
+            if include_text:
+                record["text"] = text
             handle.write(json.dumps(record) + "\n")
 
 
@@ -253,7 +255,7 @@ def main() -> None:
         preds = served_scores(trainer.predict(eval_dataset).predictions)
         labels = [score for _, score, _ in eval_rows]
         print("eval " + " ".join(f"{k}={v:.3f}" for k, v in prediction_metrics(preds, labels).items()))
-        write_eval_predictions(out_dir / "eval_predictions.jsonl", eval_rows, preds)
+        write_eval_predictions(out_dir / "eval_predictions.jsonl", eval_rows, preds, include_text=args.include_eval_text)
         print(f"wrote {len(preds)} eval predictions to {out_dir / 'eval_predictions.jsonl'}")
     (out_dir / "training_meta.json").write_text(
         json.dumps(
