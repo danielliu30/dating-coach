@@ -52,6 +52,12 @@ def parse_args() -> argparse.Namespace:
         help="Loss weight of weak-label windows before the final one (0 = final window only)",
     )
     parser.add_argument("--include-unconsented", action="store_true")
+    parser.add_argument(
+        "--self-only",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Drop segment windows with no 'self' message, as HeuristicScorer judges only the customer (default: on)",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Report dataset stats and exit")
     args = parser.parse_args()
     if not math.isfinite(args.weak_earlier_weight):
@@ -64,7 +70,10 @@ def main() -> None:
 
     examples = load_jsonl(args.data, require_consent=not args.include_unconsented)
     train_rows, eval_rows = split(
-        examples, window_size=args.segment_size, earlier_window_weight=args.weak_earlier_weight
+        examples,
+        window_size=args.segment_size,
+        earlier_window_weight=args.weak_earlier_weight,
+        self_only=args.self_only,
     )
     if not train_rows:
         raise SystemExit(f"no usable labeled segments in {args.data}")
