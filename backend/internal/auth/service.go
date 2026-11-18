@@ -233,9 +233,8 @@ var DatingPhases = []string{
 // PILLAR_KEYS, which rejects any other focus area.
 var CoachingGoals = []string{"agency", "feedback", "support"}
 
-// DatingProfileInput is the decoded PATCH /auth/me body. Every list replaces the
-// stored one wholesale; a nil list is treated as empty. DatingPreferences
-// likewise replaces the stored text; blank clears it.
+// DatingProfileInput is the decoded PATCH /auth/me body. Nil CoachingGoals
+// preserves saved goals; other lists and DatingPreferences replace stored values.
 type DatingProfileInput struct {
 	DatingStyles      []string `json:"dating_styles"`
 	PhasesStrong      []string `json:"phases_strong"`
@@ -319,6 +318,9 @@ func (s *Service) UpdateDatingProfile(ctx context.Context, principal Principal, 
 	goals, err := normaliseChoices("coaching_goals", in.CoachingGoals, CoachingGoals)
 	if err != nil {
 		return Profile{}, err
+	}
+	if in.CoachingGoals == nil {
+		goals = nil
 	}
 	preferences := strings.TrimSpace(in.DatingPreferences)
 	if utf8.RuneCountInString(preferences) > MaxDatingPreferencesLen {
