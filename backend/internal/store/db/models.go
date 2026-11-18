@@ -188,5 +188,6 @@ type User struct {
 	PhasesStrong      []string   `json:"phases_strong"`
 	PhasesWorkingOn   []string   `json:"phases_working_on"`
 	DatingPreferences string     `json:"dating_preferences"`
+	CoachingGoals     []string   `json:"coaching_goals"`
 	SessionsRevokedAt *time.Time `json:"sessions_revoked_at"`
 }
