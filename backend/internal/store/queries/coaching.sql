@@ -92,6 +92,9 @@ INSERT INTO coaching_sessions (user_id, coach_id, scheduled_time, duration_minut
 VALUES ($1, $2, $3, $4, $5, 'pending', $6, $7)
 RETURNING *;
 
+-- name: LockCoachForBooking :exec
+SELECT user_id FROM coaches WHERE user_id = $1 FOR NO KEY UPDATE;
+
 -- name: CreatePendingPaymentSession :one
 INSERT INTO coaching_sessions (user_id, coach_id, scheduled_time, duration_minutes, topic,
                                status, payment_status, amount_cents, currency, hold_expires_at)
