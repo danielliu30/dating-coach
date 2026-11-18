@@ -5,7 +5,7 @@ from __future__ import annotations
 import statistics
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
-from typing import List, Optional, Sequence, Tuple
+from typing import List, Optional, Protocol, Sequence, Tuple
 
 from ..schemas import AnalyzeRequest, AnalyzeResponse, Message, Segment, SegmentLabel
 
@@ -64,6 +64,20 @@ def message_range(segment: Segment) -> str:
     return f"Messages {segment.start_position + 1}-{segment.end_position + 1}"
 
 
+class TranscriptMessage(Protocol):
+    @property
+    def position(self) -> int: ...
+
+    @property
+    def sender(self) -> str: ...
+
+    @property
+    def body(self) -> str: ...
+
+    @property
+    def sent_at(self) -> Optional[str]: ...
+
+
 def _parse_sent_at(value: Optional[str]) -> Optional[datetime]:
     """RFC3339 ``sent_at`` as an aware datetime (naive values read as UTC); ``None`` when absent, date-only or unparseable."""
     if not value or not any(sep in value for sep in "Tt "):
@@ -79,7 +93,7 @@ def _median_minutes(deltas: List[float]) -> str:
     return str(round(statistics.median(deltas) / 60)) if deltas else "na"
 
 
-def meta_line(messages: Sequence[Message]) -> Optional[str]:
+def meta_line(messages: Sequence[TranscriptMessage]) -> Optional[str]:
     """Structured features of a window that its text does not carry, as one ``[meta]`` line.
 
     ``match_latency_min`` / ``self_latency_min`` are the median minutes a
@@ -111,7 +125,7 @@ def meta_line(messages: Sequence[Message]) -> Optional[str]:
     )
 
 
-def transcript(messages: Sequence[Message], meta: bool = False) -> str:
+def transcript(messages: Sequence[TranscriptMessage], meta: bool = False) -> str:
     """One ``[position] sender: body`` line per message; ``meta=True`` prepends ``meta_line`` when it has timestamps."""
     lines = [f"[{m.position}] {m.sender}: {m.body}" for m in sorted(messages, key=lambda m: m.position)]
     header = meta_line(messages) if meta else None
