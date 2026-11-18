@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from typing import Any, Dict, List, Optional, Sequence
 
 import httpx
@@ -244,14 +245,7 @@ class LLMScorer(Scorer):
 
 
 def focus_area_spec(focus_areas: Sequence[str]) -> str:
-    """Prompt block naming the focus areas the customer chose, each with its pillar's principles.
-
-    Each area is listed by its key (what ``goal_scores[].goal`` must echo)
-    followed by the rendered pillar, so the model scores against the brain's
-    own wording. Returns ``""`` when no focus areas were requested, leaving the
-    prompt as it was before focus areas existed apart from the system prompt's
-    ``goal_scores: []`` rule.
-    """
+    """Render requested pillar keys and principles, or an empty string for no areas."""
     pillars = pillars_by_keys(focus_areas)
     if not pillars:
         return ""
@@ -264,17 +258,11 @@ def focus_area_spec(focus_areas: Sequence[str]) -> str:
 
 
 def _goal_scores(overall: Dict[str, Any], focus_areas: Sequence[str]) -> List[GoalScore]:
-    """Validate ``overall["goal_scores"]`` against the requested ``focus_areas``.
+    """Validate unique requested goals with finite scores and nonblank comments.
 
-    With no focus areas requested the key is ignored (the contract asks for
-    ``[]``) and ``[]`` is returned. Otherwise the value must be a JSON array of
-    objects with at most one entry per requested area; an area the model had no
-    evidence for is left out, as the heuristic scorer does, but the key itself
-    must be present: leaving it out ignores the contract. A duplicate or
-    unrequested ``goal``, a non-numeric ``score`` or a missing or blank
-    ``comment`` raises ``ValueError`` so the caller falls back to the heuristic scorer, as
-    it does for missing segments. Scores are clamped to 0-1, comments cut to
-    300 characters, and the result follows ``focus_areas`` order.
+    Ignore the key with no requested areas; otherwise require a list, allowing omissions.
+    Raise ValueError for malformed entries; clamp scores, truncate comments to 300
+    characters, and return entries in pillar order.
     """
     wanted = [p.key for p in pillars_by_keys(focus_areas)]
     if not wanted:
@@ -295,6 +283,7 @@ def _goal_scores(overall: Dict[str, Any], focus_areas: Sequence[str]) -> List[Go
         if (
             isinstance(score, bool)
             or not isinstance(score, (int, float))
+            or not math.isfinite(score)
             or not isinstance(comment, str)
             or not comment.strip()
         ):

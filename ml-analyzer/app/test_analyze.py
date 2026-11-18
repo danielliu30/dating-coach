@@ -717,6 +717,9 @@ def test_llm_parse_validates_goal_scores_against_focus_areas() -> None:
         "not objects": ["feedback"],
         "string score": [good[1], {"goal": "feedback", "score": "high", "comment": "c"}],
         "bool score": [good[1], {"goal": "feedback", "score": True, "comment": "c"}],
+        "nan score": [{"goal": "feedback", "score": float("nan"), "comment": "c"}],
+        "infinite score": [{"goal": "feedback", "score": float("inf"), "comment": "c"}],
+        "negative infinite score": [{"goal": "feedback", "score": float("-inf"), "comment": "c"}],
         "no score": [good[1], {"goal": "feedback", "comment": "c"}],
         "comment not a string": [good[1], {"goal": "feedback", "score": 0.5, "comment": ["c"]}],
         "no comment": [good[1], {"goal": "feedback", "score": 0.5}],
@@ -742,8 +745,9 @@ def test_llm_goal_score_comments_pass_the_agency_gate() -> None:
             scorer._parse(raw, boundaries, focus_areas=["agency"])
 
 
-def test_llm_goal_score_failure_falls_back_to_heuristic_goal_scores(monkeypatch) -> None:
-    """When a goal score is malformed (here: no comment), the fallback still answers with heuristic goal_scores."""
+@pytest.mark.parametrize("score, comment", [(0.9, ""), (float("nan"), "c"), (float("inf"), "c"), (float("-inf"), "c")])
+def test_llm_goal_score_failure_falls_back_to_heuristic_goal_scores(monkeypatch, score, comment) -> None:
+    """Malformed goal scores fall back to heuristic goal_scores."""
     scorer = _focus_scorer()
     messages = [
         Message(position=0, sender="self", body="How was your weekend?"),
@@ -754,7 +758,7 @@ def test_llm_goal_score_failure_falls_back_to_heuristic_goal_scores(monkeypatch)
         return json.dumps(
             {
                 "segments": [{"start_position": 0, "end_position": 1, "engagement_score": 0.8, "comment": "Fine."}],
-                "overall": {"engagement_score": 0.8, "goal_scores": [{"goal": "feedback", "score": 0.9, "comment": ""}]},
+                "overall": {"engagement_score": 0.8, "goal_scores": [{"goal": "feedback", "score": score, "comment": comment}]},
             }
         )
 
