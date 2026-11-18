@@ -119,7 +119,7 @@ def test_main_round_trip_produces_a_trainable_dataset(files, tmp_path):
     assert sorted(e.conversation_id for e in examples) == ["c1", "c3"]
     c1 = next(e for e in examples if e.conversation_id == "c1")
     assert [s.engagement_score for s in c1.segments] == [0.75, 0.45]
-    assert [score for _, score in to_segment_rows([c1])] == [0.75, 0.45]
+    assert [(score, weight) for _, score, weight in to_segment_rows([c1])] == [(0.75, 1.0), (0.45, 1.0)]
 
 
 @pytest.mark.parametrize("opted_out", [False, True])
