@@ -3,7 +3,10 @@ package auth
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -170,11 +173,74 @@ func TestRefreshRotatesAndDetectsReuse(t *testing.T) {
 		t.Fatal("refresh must rotate the token, not hand the same one back")
 	}
 
+	announcements := svc.denylist.rdb.Subscribe(ctx, revokedChannel)
+	t.Cleanup(func() { _ = announcements.Close() })
+	if _, err := announcements.Receive(ctx); err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+
 	if _, err := svc.Refresh(ctx, first.RefreshToken); !errors.Is(err, ErrInvalidRefreshToken) {
 		t.Fatalf("reusing a spent token: error = %v, want %v", err, ErrInvalidRefreshToken)
 	}
 	if _, err := svc.Refresh(ctx, second.RefreshToken); !errors.Is(err, ErrInvalidRefreshToken) {
 		t.Fatalf("after detected reuse: error = %v, want %v", err, ErrInvalidRefreshToken)
+	}
+
+	// Reuse also kills the access tokens already minted and announces it, so
+	// open sockets close on every replica.
+	claims, err := issuer.Parse(first.Token)
+	if err != nil {
+		t.Fatalf("parse access token: %v", err)
+	}
+	msg, err := announcements.ReceiveMessage(ctx)
+	if err != nil || msg.Payload != claims.Subject {
+		t.Fatalf("revocation announcement = %v, %v; want %s", msg, err, claims.Subject)
+	}
+	for name, token := range map[string]string{"first": first.Token, "second": second.Token} {
+		req := httptest.NewRequest(http.MethodGet, "/me", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		Middleware(issuer, nil, svc.denylist)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		})).ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("%s access token after reuse: status = %d, want 401", name, rec.Code)
+		}
+	}
+}
+
+// TestRefreshRefusesTokensIssuedBeforeARevocation covers a refresh token that
+// outlives a sign-out's delete, as one rotated concurrently with it can: the
+// revocation time alone must stop it, while a later sign-in still refreshes.
+func TestRefreshRefusesTokensIssuedBeforeARevocation(t *testing.T) {
+	svc, _, pool := newTestService(t)
+	ctx := context.Background()
+
+	user := verifiedUser(t, svc, pool)
+	stale, err := svc.SignIn(ctx, user.email, user.password)
+	if err != nil {
+		t.Fatalf("sign in: %v", err)
+	}
+	claims, err := svc.issuer.Parse(stale.Token)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	userID, _ := claims.UserID()
+	time.Sleep(10 * time.Millisecond)
+	if err := svc.denylist.RevokeSessions(ctx, userID); err != nil {
+		t.Fatalf("revoke sessions: %v", err)
+	}
+	if _, err := svc.Refresh(ctx, stale.RefreshToken); !errors.Is(err, ErrInvalidRefreshToken) {
+		t.Fatalf("refresh token from before the revocation: error = %v, want %v", err, ErrInvalidRefreshToken)
+	}
+
+	time.Sleep(10 * time.Millisecond)
+	fresh, err := svc.SignIn(ctx, user.email, user.password)
+	if err != nil {
+		t.Fatalf("sign in again: %v", err)
+	}
+	if _, err := svc.Refresh(ctx, fresh.RefreshToken); err != nil {
+		t.Fatalf("refresh token from after the revocation: %v", err)
 	}
 }
 
@@ -272,6 +338,36 @@ func verifiedUser(t *testing.T, svc *Service, pool *pgxpool.Pool) credentials {
 		t.Fatalf("verify test user: %v", err)
 	}
 	return user
+}
+
+// TestVerifyEmailRefusesARevokedBearer covers the public verify route, which
+// mints a session for a verified account's own bearer: a token revoked by
+// sign-out must not be exchanged for a fresh one.
+func TestVerifyEmailRefusesARevokedBearer(t *testing.T) {
+	svc, _, pool := newTestService(t)
+	ctx := context.Background()
+
+	user := verifiedUser(t, svc, pool)
+	session, err := svc.SignIn(ctx, user.email, user.password)
+	if err != nil {
+		t.Fatalf("sign in: %v", err)
+	}
+	claims, err := svc.issuer.Parse(session.Token)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	userID, _ := claims.UserID()
+	time.Sleep(10 * time.Millisecond)
+	if err := svc.denylist.RevokeSessions(ctx, userID); err != nil {
+		t.Fatalf("revoke sessions: %v", err)
+	}
+	got, err := svc.VerifyEmail(ctx, user.email, "", session.Token)
+	if err != nil {
+		t.Fatalf("verify email: %v", err)
+	}
+	if got.Token != "" || got.RefreshToken != "" {
+		t.Fatalf("verify email with a revoked bearer issued a session")
+	}
 }
 
 // TestSignInRefusesAccountPendingDeletion covers the window between requesting
@@ -536,5 +632,68 @@ func TestSignInRefusesAccountWithoutPassword(t *testing.T) {
 		if _, err := svc.SignIn(ctx, email, password); !errors.Is(err, ErrInvalidCredentials) {
 			t.Fatalf("sign in with password %q = %v, want %v", password, err, ErrInvalidCredentials)
 		}
+	}
+}
+
+func TestUpdateDatingProfileRejectsUnknownCoachingGoal(t *testing.T) {
+	svc := &Service{}
+	_, err := svc.UpdateDatingProfile(context.Background(), Principal{}, DatingProfileInput{
+		CoachingGoals: []string{"agency", "confidence"},
+	})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("got %v, want ErrInvalidInput", err)
+	}
+}
+
+func TestUpdateDatingProfileStoresCoachingGoals(t *testing.T) {
+	svc, _, pool := newTestService(t)
+	ctx := context.Background()
+
+	email := "coaching-goals-test-" + uuid.NewString() + "@example.com"
+	t.Cleanup(func() {
+		if _, err := pool.Exec(context.Background(), "DELETE FROM users WHERE email = $1", email); err != nil {
+			t.Errorf("delete test user: %v", err)
+		}
+	})
+	signUp, err := svc.SignUp(ctx, SignUpInput{Email: email, Password: "correct-horse", DisplayName: "Goals Test"})
+	if err != nil {
+		t.Fatalf("sign up: %v", err)
+	}
+	if got := signUp.User.CoachingGoals; got == nil || len(got) != 0 {
+		t.Fatalf("new account coaching_goals = %#v, want []", got)
+	}
+	principal := Principal{UserID: uuid.MustParse(signUp.User.ID)}
+
+	profile, err := svc.UpdateDatingProfile(ctx, principal, DatingProfileInput{
+		CoachingGoals:     []string{" Support", "agency", "support"},
+		DatingPreferences: "Someone kind",
+	})
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if want := []string{"agency", "support"}; !slices.Equal(profile.CoachingGoals, want) {
+		t.Fatalf("coaching_goals = %v, want %v", profile.CoachingGoals, want)
+	}
+	row, err := db.New(pool).GetUserByID(ctx, principal.UserID)
+	if err != nil {
+		t.Fatalf("get user: %v", err)
+	}
+	if want := []string{"agency", "support"}; !slices.Equal(row.CoachingGoals, want) {
+		t.Fatalf("stored coaching_goals = %v, want %v", row.CoachingGoals, want)
+	}
+
+	profile, err = svc.UpdateDatingProfile(ctx, principal, DatingProfileInput{DatingPreferences: "Someone kind"})
+	if err != nil {
+		t.Fatalf("update without goals: %v", err)
+	}
+	if want := []string{"agency", "support"}; !slices.Equal(profile.CoachingGoals, want) {
+		t.Fatalf("omitted coaching_goals = %v, want %v", profile.CoachingGoals, want)
+	}
+	profile, err = svc.UpdateDatingProfile(ctx, principal, DatingProfileInput{CoachingGoals: []string{}})
+	if err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	if len(profile.CoachingGoals) != 0 || profile.CoachingGoals == nil {
+		t.Fatalf("cleared coaching_goals = %#v, want []", profile.CoachingGoals)
 	}
 }
