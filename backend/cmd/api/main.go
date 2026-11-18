@@ -88,11 +88,13 @@ func run() error {
 		slog.Info("google sign-in disabled: GOOGLE_CLIENT_ID is empty")
 	}
 	authHandler := auth.NewHandler(authSvc, limiter)
+	wsTickets := auth.NewWSTickets(rdb, auth.WSTicketTTL)
+	authHandler.SetWSTickets(wsTickets, auth.NewRateLimiter(rdb, auth.WSTicketsPerMinute, time.Minute))
 	provider, err := payments.New(cfg.PaymentsEnabled)
 	if err != nil {
 		return err
 	}
-	coachingHandler := coaching.NewHandler(coaching.NewService(pg.Pool, pg.Queries, provider, cfg.PaymentHoldTTL, cfg.PublicAppURL, cfg.MailFrom, analysis.NewMLClient(cfg.MLServiceURL, cfg.MLServiceTimeout)))
+	coachingHandler := coaching.NewHandler(coaching.NewService(pg.Pool, pg.Queries, provider, cfg.PaymentHoldTTL, cfg.PublicAppURL, cfg.MailFrom, analysis.NewMLClient(cfg.MLServiceURL, cfg.MLServiceTimeout)), limiter)
 	hub := chat.NewHub(rdb)
 	// Sockets authenticated before a deletion would otherwise keep running
 	// until their next scheduled re-check; this closes them as it happens.
@@ -100,7 +102,7 @@ func run() error {
 	chatHandler := chat.NewHandler(chat.NewService(pg.Queries, hub), hub, pg.Queries, cfg.CORSOrigins)
 	analysisHandler := analysis.NewHandler(analysis.NewService(pg.Pool, pg.Queries, queue))
 
-	router := newRouter(cfg, auth.Middleware(issuer), handlers{
+	router := newRouter(cfg, auth.Middleware(issuer, wsTickets), handlers{
 		auth:     authHandler,
 		coaching: coachingHandler,
 		chat:     chatHandler,
