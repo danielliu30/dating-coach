@@ -44,6 +44,16 @@ def test_names_match_across_unicode_case_folding():
     assert Pseudonymiser({"Işıl": "[MATCH]"})("hi ışıl, IŞIL") == "hi [MATCH], [MATCH]"
 
 
+def test_segments_with_non_numeric_values_are_dropped():
+    segments = [
+        {"start_position": 0, "end_position": 1, "engagement_score": 0.5},
+        {"start_position": 2, "end_position": 3, "engagement_score": "call jane 4155550134"},
+        "free text",
+    ]
+    out = pseudonymise_row({"consented": True, "messages": [], "segments": segments})
+    assert out["segments"] == [{"start_position": 0, "end_position": 1, "engagement_score": 0.5}]
+
+
 def test_row_drops_name_columns_and_normalises_null_segments():
     row = {
         "conversation_id": "c1",

@@ -142,6 +142,10 @@ class Pseudonymiser:
         return self._placeholders[match.lastindex - 1]
 
 
+def _is_number(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
 def pseudonymise_row(row: Dict) -> Dict:
     """Return the exported row with bodies rewritten and name columns dropped."""
     pseudonymiser = Pseudonymiser({row.get("match_name") or "": "[MATCH]", row.get("display_name") or "": "[SELF]"})
@@ -149,7 +153,12 @@ def pseudonymise_row(row: Dict) -> Dict:
     out["messages"] = [{**m, "body": pseudonymiser(m.get("body") or "")} for m in row.get("messages") or []]
     # Keep only the schema's fields: free-text keys (e.g. a coach's comment)
     # would bypass pseudonymisation and break the training loader.
-    out["segments"] = [{k: seg[k] for k in SEGMENT_FIELDS if k in seg} for seg in row.get("segments") or []]
+    # Values are raw client JSON; only numbers can't carry text.
+    out["segments"] = [
+        {k: seg[k] for k in SEGMENT_FIELDS if k in seg}
+        for seg in row.get("segments") or []
+        if isinstance(seg, dict) and all(_is_number(seg.get(k)) for k in SEGMENT_FIELDS)
+    ]
     return out
 
 
