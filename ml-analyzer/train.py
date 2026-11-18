@@ -28,6 +28,7 @@ from training.dataset import (
     WEAK_EARLIER_WINDOW_WEIGHT,
     Row,
     TrainingExample,
+    deduplicate,
     exclude_holdout,
     load_jsonl,
     split,
@@ -66,6 +67,7 @@ def parse_args() -> argparse.Namespace:
         help="Loss weight of weak-label windows before the final one (0 = final window only)",
     )
     parser.add_argument("--include-unconsented", action="store_true")
+    parser.add_argument("--include-eval-text", action="store_true", help="Include transcripts in eval_predictions.jsonl")
     parser.add_argument(
         "--self-only",
         action=argparse.BooleanOptionalAction,
@@ -73,18 +75,21 @@ def parse_args() -> argparse.Namespace:
         help="Drop segment windows with no 'self' message, as HeuristicScorer judges only the customer (default: on)",
     )
     parser.add_argument("--dry-run", action="store_true", help="Report dataset stats and exit")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if not math.isfinite(args.weak_earlier_weight):
+        parser.error("--weak-earlier-weight must be finite")
+    return args
 
 
 def report_holdout(
     path: Path, examples: list[TrainingExample], include_unconsented: bool = False
 ) -> list[TrainingExample]:
     """Print frozen-holdout stats and return ``examples`` without any holdout overlap."""
-    if not path.exists():
-        print(f"holdout: no frozen eval file at {path}; nothing excluded")
-        return examples
-    holdout = load_jsonl(path, require_consent=not include_unconsented)
-    kept, dropped = exclude_holdout(examples, holdout)
+    if not path.is_file():
+        raise SystemExit(f"holdout: no frozen eval file at {path}")
+    originals = load_jsonl(path, require_consent=False, dedupe=False)
+    kept, dropped = exclude_holdout(examples, originals)
+    holdout = deduplicate([e for e in originals if include_unconsented or e.consented])
     scores = [score for _, score, _ in to_segment_rows(holdout)]
     counts = " ".join(f"{label}={count}" for label, count in label_counts(scores).items())
     stats = distribution(scores)
@@ -115,29 +120,31 @@ def prediction_metrics(preds: list[float], labels: list[float]) -> dict[str, flo
     }
 
 
-def write_eval_predictions(path: Path, rows: list[Row], preds: list[float]) -> None:
-    """One JSON line per eval segment: transcript, label, prediction and both buckets."""
+def write_eval_predictions(path: Path, rows: list[Row], preds: list[float], *, include_text: bool = False) -> None:
+    """One JSON line per eval segment with scores, buckets and optional text."""
     if len(rows) != len(preds):
         raise ValueError(f"{len(rows)} eval rows but {len(preds)} predictions")
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as handle:
         for (text, label, _), pred in zip(rows, preds):
             record = {
-                "text": text,
                 "label": label,
                 "prediction": pred,
                 "label_bucket": label_for(label),
                 "prediction_bucket": label_for(pred),
             }
+            if include_text:
+                record["text"] = text
             handle.write(json.dumps(record) + "\n")
 
 
 def main() -> None:
     args = parse_args()
 
-    examples = load_jsonl(args.data, require_consent=not args.include_unconsented)
+    examples = load_jsonl(args.data, require_consent=not args.include_unconsented, dedupe=False)
     if args.eval_file:
         examples = report_holdout(Path(args.eval_file), examples, args.include_unconsented)
+    examples = deduplicate(examples)
     train_rows, eval_rows = split(
         examples,
         window_size=args.segment_size,
@@ -248,7 +255,7 @@ def main() -> None:
         preds = served_scores(trainer.predict(eval_dataset).predictions)
         labels = [score for _, score, _ in eval_rows]
         print("eval " + " ".join(f"{k}={v:.3f}" for k, v in prediction_metrics(preds, labels).items()))
-        write_eval_predictions(out_dir / "eval_predictions.jsonl", eval_rows, preds)
+        write_eval_predictions(out_dir / "eval_predictions.jsonl", eval_rows, preds, include_text=args.include_eval_text)
         print(f"wrote {len(preds)} eval predictions to {out_dir / 'eval_predictions.jsonl'}")
     (out_dir / "training_meta.json").write_text(
         json.dumps(

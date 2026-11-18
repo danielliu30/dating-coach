@@ -41,6 +41,12 @@ def test_split_applies_self_only_to_both_sides() -> None:
     assert (len(train_rows), len(eval_rows)) == (2, 2)
 
 
+def test_final_only_weak_label_drops_conversation_with_match_only_tail() -> None:
+    example = _example("c1", MESSAGES[2:], outcome="kept_talking")
+    assert list(to_segment_rows([example], window_size=1, earlier_window_weight=0)) == []
+    assert [weight for _, _, weight in to_segment_rows([example], window_size=1)] == [0.5]
+
+
 def test_split_does_not_spend_eval_slots_on_filtered_groups() -> None:
     """Match-only groups are dropped before splitting, so usable groups fill both sides.
 
