@@ -25,7 +25,7 @@ def test_null_segments_fall_back_to_the_outcome_weak_label(tmp_path):
     examples = load_jsonl(path)
 
     assert examples[0].segments == []
-    assert list(to_segment_rows(examples)) == [("[0] self: hey\n[1] match: hi", 0.05)]
+    assert list(to_segment_rows(examples)) == [("[0] self: hey\n[1] match: hi", 0.05, 1.0)]
 
 
 def test_human_segments_still_win_over_the_outcome():
@@ -33,4 +33,4 @@ def test_human_segments_still_win_over_the_outcome():
         _row(segments=[{"start_position": 0, "end_position": 1, "engagement_score": 0.7}])
     )
 
-    assert list(to_segment_rows([example])) == [("[0] self: hey\n[1] match: hi", 0.7)]
+    assert list(to_segment_rows([example])) == [("[0] self: hey\n[1] match: hi", 0.7, 1.0)]

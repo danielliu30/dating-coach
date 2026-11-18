@@ -59,12 +59,8 @@ can be shorter. Each window becomes one row with the same weak score:
 | Window | Weight |
 | --- | --- |
 | final (holds the last message) | 1.0 |
-| every earlier window | `--weak-earlier-weight` (default 0.5; `0` keeps only the final window) |
+| every earlier window | `--weak-earlier-weight` (finite, default 0.5; `0` keeps only the final window) |
 
-A conversation that fits in one window gives one row at weight 1.0. `train.py`
-passes each row's weight to `binary_cross_entropy_with_logits(..., weight=...)`,
-so a 0.5 row counts half as much in the loss as a human-labeled or final-window
-row.
 
 ## De-duplication
 
