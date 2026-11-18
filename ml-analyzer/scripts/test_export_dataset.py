@@ -42,6 +42,7 @@ def test_known_names_are_replaced_as_whole_words_case_insensitively():
 
 def test_names_match_across_unicode_case_folding():
     assert Pseudonymiser({"Işıl": "[MATCH]"})("hi ışıl, IŞIL") == "hi [MATCH], [MATCH]"
+    assert Pseudonymiser({"Sila": "[MATCH]", "Sıla": "[SELF]"})("Sila, Sıla") == "[MATCH], [SELF]"
 
 
 def test_segments_with_non_numeric_values_are_dropped():
