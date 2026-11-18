@@ -182,6 +182,11 @@ func Load() (*Config, error) {
 	if len(bad) > 0 {
 		return nil, fmt.Errorf("invalid configuration: %s", strings.Join(bad, "; "))
 	}
+	if cfg.Env != "development" {
+		if err := cfg.validateSecrets(env("POSTGRES_PASSWORD", "")); err != nil {
+			return nil, err
+		}
+	}
 	return cfg, nil
 }
 

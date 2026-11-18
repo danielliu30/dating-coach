@@ -74,11 +74,7 @@ func run() error {
 	notifier := notify.New(cfg)
 	issuer := auth.NewTokenIssuer(cfg.JWTSecret)
 	limiter := auth.NewRateLimiter(rdb, cfg.AuthRateLimit, cfg.AuthRateWindow)
-	// Nothing reads the denylist any more: requests are answered from the
-	// token's signature alone, and open sockets re-read the account row. It is
-	// kept for the revocation it announces, which closes those sockets at once
-	// rather than at their next re-check.
-	denylist := auth.NewDenylist(rdb, cfg.JWTTTL)
+	denylist := auth.NewDenylist(rdb, max(cfg.JWTTTL, cfg.VerifyTokenTTL, cfg.RefreshTokenTTL))
 	verificationCodes := auth.NewVerificationCache(rdb, auth.VerificationCodeTTL)
 
 	authSvc := auth.NewService(pg.Pool, pg.Queries, issuer, notifier, cfg.BcryptCost, cfg.PublicAppURL, verificationCodes, denylist, deletions, cfg.JWTTTL, cfg.VerifyTokenTTL, cfg.RefreshTokenTTL)
@@ -88,6 +84,8 @@ func run() error {
 		slog.Info("google sign-in disabled: GOOGLE_CLIENT_ID is empty")
 	}
 	authHandler := auth.NewHandler(authSvc, limiter)
+	wsTickets := auth.NewWSTickets(rdb, auth.WSTicketTTL)
+	authHandler.SetWSTickets(wsTickets, auth.NewRateLimiter(rdb, auth.WSTicketsPerMinute, time.Minute))
 	provider, err := payments.New(cfg.PaymentsEnabled)
 	if err != nil {
 		return err
@@ -98,9 +96,10 @@ func run() error {
 	// until their next scheduled re-check; this closes them as it happens.
 	go auth.WatchRevocations(ctx, rdb, hub.EndSessions)
 	chatHandler := chat.NewHandler(chat.NewService(pg.Queries, hub), hub, pg.Queries, cfg.CORSOrigins)
+	chatHandler.SetRevocations(denylist)
 	analysisHandler := analysis.NewHandler(analysis.NewService(pg.Pool, pg.Queries, queue))
 
-	router := newRouter(cfg, auth.Middleware(issuer), handlers{
+	router := newRouter(cfg, auth.Middleware(issuer, wsTickets, denylist), handlers{
 		auth:     authHandler,
 		coaching: coachingHandler,
 		chat:     chatHandler,

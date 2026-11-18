@@ -55,9 +55,10 @@ beforeEach(() => {
   jest.useFakeTimers();
   FakeSocket.instances = [];
   globalThis.WebSocket = FakeSocket as unknown as typeof WebSocket;
-  fetchMock = jest.fn(async (url: RequestInfo | URL) =>
-    String(url).includes('/auth/refresh') ? reply(503, { error: 'unavailable' }) : reply(401, { error: 'expired' }),
-  ) as FetchMock;
+  fetchMock = jest.fn(async (url: RequestInfo | URL) => {
+    if (String(url).includes('/auth/ws-ticket')) return reply(200, { ticket: 'tkt' });
+    return String(url).includes('/auth/refresh') ? reply(503, { error: 'unavailable' }) : reply(401, { error: 'expired' });
+  }) as FetchMock;
   globalThis.fetch = fetchMock;
   api.useToken(() => 'expired');
   // Mirrors rotate in state/auth.tsx: only a refused refresh token is a verdict.
@@ -78,7 +79,7 @@ afterEach(() => {
 describe('ChatSocket with the real ApiClient', () => {
   it('renews an expired token only on scheduled failures while refresh is unavailable', async () => {
     const socket = new ChatSocket('t1', () => 'expired', { onEvent: jest.fn() });
-    socket.connect();
+    await socket.connect();
 
     const refreshes: number[] = [];
     const probes: number[] = [];
@@ -88,6 +89,7 @@ describe('ChatSocket with the real ApiClient', () => {
       refreshes.push(calls('/auth/refresh'));
       probes.push(calls('/chat/threads/t1/messages'));
       jest.advanceTimersByTime(10_000);
+      await flush();
       expect(FakeSocket.instances).toHaveLength(failure + 1);
     }
 
