@@ -13,6 +13,7 @@ __pycache__/
 *.py[cod]
 .venv/
 ml-analyzer/models/
+ml-analyzer/artifacts/
 # Exported training data stays local; only the frozen eval holdout is committed.
 ml-analyzer/data/*
 !ml-analyzer/data/eval_holdout.jsonl

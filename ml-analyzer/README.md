@@ -348,8 +348,12 @@ for a weakly labeled conversation whose final window is match-only.
 
 Default recipe: DistilBERT with a single-logit head over segment transcripts,
 soft-target BCE against the 0–1 score (so serving's `sigmoid(logit)` is on the
-same scale as the labels), with [per-row weights](training/data_schema.md#weak-label-weighting)
-and `mae`/`rmse` plus `weighted_mae`/`weighted_rmse` on the eval split.
+same scale as the labels), with [per-row weights](training/data_schema.md#weak-label-weighting).
+Eval reports weighted and unweighted MAE/RMSE plus score spread; a much lower
+`pred_std` than `label_std` suggests a squashed head. `<out>/eval_predictions.jsonl`
+contains per-segment scores and buckets, without transcripts by default.
+`--include-eval-text` adds the text; keep those files private (the default
+`artifacts/` directory is gitignored).
 
 For a generative model that also writes the `comment`/`summary` text, LoRA
 fine-tune a small instruct model on `(transcript → the exact JSON the prompt
