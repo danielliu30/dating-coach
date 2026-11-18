@@ -51,7 +51,8 @@ def conversations(rows: Iterable[Dict]) -> List[Dict]:
         if not row.get("consented"):
             continue
         cid = row["conversation_id"]
-        if row.get("segments"):
+        # Heuristic segments are machine output, not a human review.
+        if row.get("segments") and row.get("label_source") != "heuristic":
             labeled.add(cid)
         current = merged.get(cid)
         if current is None or (row.get("label_source") == "user" and current.get("label_source") != "user"):

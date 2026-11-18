@@ -151,3 +151,9 @@ def test_main_refuses_to_write_to_its_input(tmp_path, monkeypatch, hardlink):
     with pytest.raises(SystemExit, match="must not be"):
         llm_prelabel.main(["--data", str(data), "--out", str(out)])
     assert data.exists()
+
+
+def test_heuristic_segments_do_not_count_as_human_labels():
+    segs = [{"start_position": 0, "end_position": 1, "engagement_score": 0.7}]
+    rows = conversations([_conversation("c1", label_source="heuristic", segments=segs)])
+    assert [r["conversation_id"] for r in rows] == ["c1"]
