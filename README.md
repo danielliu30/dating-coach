@@ -116,8 +116,6 @@ The chat WebSocket same-origin check is unaffected by TLS: nginx forwards `Host:
 
 #### Cloudflare in front (optional)
 
-> **Depends on [#187](https://github.com/danielliu30/dating-coach/issues/187).** `nginx/host-site.conf` sets `X-Forwarded-For`/`X-Real-IP` from `$remote_addr`, which becomes a Cloudflare edge IP once traffic is proxied, so every visitor would share one auth rate-limit bucket. Land the client-IP forwarding change from #187 (or apply it alongside these steps) before pointing production traffic through Cloudflare.
-
 With the host nginx + certbot setup above already working, in the Cloudflare dashboard:
 
 1. Add the site to Cloudflare and switch the registrar's nameservers to the ones Cloudflare assigns.
@@ -134,6 +132,8 @@ for ip in $(curl -fsS https://www.cloudflare.com/ips-v4) $(curl -fsS https://www
 done
 sudo ufw delete allow 80/tcp; sudo ufw delete allow 443/tcp   # drop any open-to-all 80/443 rules
 ```
+
+Before serving proxied traffic, create a root-owned `/etc/nginx/dating-coach-cloudflare/real-ip.conf` with `real_ip_header CF-Connecting-IP;` and one `set_real_ip_from <CIDR>;` per published Cloudflare IPv4 and IPv6 range above. Keep the ranges current, then run `sudo nginx -t && sudo systemctl reload nginx`. Nginx only uses the header from those peers, so direct HTTPS still forwards the actual client IP if the optional file is absent. Block direct public access to the Compose-published backend ports at the provider firewall as well; Docker-published ports can bypass UFW.
 
 WebSockets and the same-origin model are unaffected: the browser-facing origin stays `https://<domain>`, so `WEB_API_URL`, `CORS_ORIGINS` and `PUBLIC_APP_URL` are unchanged.
 
@@ -253,7 +253,7 @@ npx expo export --platform web    # production web bundle
 
 | Area     | Endpoints                                                                                                                                                              |
 | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Auth     | `POST /api/v1/auth/signup` · `signin` · `refresh` · `verify` · `resend-verification` · `GET /me` · `PATCH /me` (`dating_preferences`) · `DELETE /me` (rate limited per IP) |
+| Auth     | `POST /api/v1/auth/signup` · `signin` · `refresh` · `verify` · `resend-verification` · `GET /me` · `PATCH /me` (`dating_preferences`, `coaching_goals`) · `DELETE /me` (rate limited per IP) |
 | Coaching | `GET /coaching/coaches` · `/coaches/{id}` · `/coaches/{id}/availability` · `/coaches/{id}/slots` · `POST /coaching/sessions` · `.../cancel` · `.../reschedule`           |
 | Coach    | `PUT /coach/profile` · `PUT /coach/availability` · `GET /coach/sessions` · `POST /coach/sessions/{id}/status` · `.../notes` · `GET /chat/coach/threads`                  |
 | Chat     | `POST /chat/threads` · `GET /chat/threads` · `GET/POST /chat/threads/{id}/messages` · `POST /chat/threads/{id}/close` · `GET /chat/threads/{id}/ws`                      |
