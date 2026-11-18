@@ -67,6 +67,7 @@ class Annotations:
         self.scores: Dict[Key, Dict[str, float]] = defaultdict(dict)
         self.segments: set = set()
         self.rows: Dict[str, Dict] = {}
+        self._source: Dict[Tuple[Key, str], Path] = {}
 
     def add_file(self, path: Path) -> None:
         for row in jsonl_rows(path):
@@ -77,6 +78,9 @@ class Annotations:
                 key = (cid, int(seg["start_position"]), int(seg["end_position"]))
                 self.segments.add(key)
                 if seg.get("engagement_score") is not None:
+                    first = self._source.setdefault((key, annotator), path)
+                    if first != path:
+                        raise SystemExit(f"{path} and {first} both score {key} as {annotator!r}; set an annotator field")
                     self.scores[key][annotator] = parse_score(seg["engagement_score"], f"{path}: {key}")
 
     def keys(self) -> List[Key]:

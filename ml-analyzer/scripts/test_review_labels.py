@@ -154,3 +154,12 @@ def test_unscored_segment_without_a_suggestion_still_needs_annotators(tmp_path):
     path = _write(tmp_path / "a.jsonl", [_row("c1", [None], suggested=(None,))])
     text = "\n".join(report(_annotations(path)))
     assert "segments: 1" in text and "needs a second annotator: 1 segment(s)" in text
+
+
+def test_same_named_files_without_annotator_field_are_rejected(tmp_path):
+    (tmp_path / "alice").mkdir()
+    (tmp_path / "bob").mkdir()
+    a = _write(tmp_path / "alice" / "labels.jsonl", [_row("c1", [0.2])])
+    b = _write(tmp_path / "bob" / "labels.jsonl", [_row("c1", [0.9])])
+    with pytest.raises(SystemExit, match="set an annotator field"):
+        _annotations(a, b)
