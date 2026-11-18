@@ -285,16 +285,13 @@ human `segments` labels are scarce and authoritative. Aim for a few thousand
 weak-labeled conversations plus a few hundred hand-labeled ones as the eval set,
 and keep the eval set user-disjoint from training.
 
-**Frozen eval holdout.** `data/eval_holdout.jsonl` (same schema) is the fixed
-eval set the serving gate is measured on. It is **never trained on**: `train.py`
-loads it (`--eval-file`, default `data/eval_holdout.jsonl`) and drops every
-`--data` row that shares a `conversation_id` or `user_id` with it before the
-train/eval split, reporting the count as `excluded_from_training`. Do not
-change it between runs you want to compare. The committed file is a small seed
-of synthetic, rubric-labeled conversations whose `segments` sit on the default
-`ML_SEGMENT_SIZE=4` boundaries; replace it with a few hundred real hand-labeled,
-user-disjoint conversations before relying on the gate. Everything else under
-`data/` (e.g. `labeled.jsonl`) is gitignored.
+**Frozen eval holdout.** `--eval-file` defaults to the committed synthetic fixture
+`data/eval_holdout.jsonl`. Training excludes any row with a conversation or
+user ID in that file before deduplication and reports `excluded_from_training`.
+A missing file stops training; pass `--eval-file ''` to opt out. Keep the
+holdout fixed across runs you want to compare, and use a representative,
+hand-labeled, user-disjoint holdout before relying on the gate. Other files in
+`data/` are gitignored.
 
 ### 2. Label
 

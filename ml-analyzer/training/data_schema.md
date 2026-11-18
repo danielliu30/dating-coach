@@ -98,10 +98,9 @@ match.
 
 ## Frozen eval holdout
 
-`data/eval_holdout.jsonl` uses this schema too, with human `segments` labels on
-the served segment boundaries (`ML_SEGMENT_SIZE`, default 4: `[0-3]`, `[4-7]`,
-...). It is never trained on: `train.py` removes any `--data` row sharing a
-`conversation_id` or `user_id` with it.
+Use this schema with human `segments` labels on the served segment boundaries
+(`ML_SEGMENT_SIZE`, default 4: `[0-3]`, `[4-7]`, ...). See the
+[training workflow](../README.md#training-your-own-model) for holdout handling.
 
 ## Annotation guidance
 

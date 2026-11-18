@@ -362,8 +362,32 @@ def test_report_holdout_prints_stats_and_excludes_overlap(tmp_path: Path, capsys
     assert "label_mean=0.500 label_std=0.300 excluded_from_training=1" in out
 
 
-def test_report_holdout_without_file_keeps_everything(tmp_path: Path, capsys) -> None:
-    """A missing holdout file is reported and excludes nothing."""
-    examples = [_example("c1")]
-    assert train.report_holdout(tmp_path / "missing.jsonl", examples) == examples
-    assert "no frozen eval file" in capsys.readouterr().out
+def test_report_holdout_excludes_ids_even_when_rows_are_not_reported(tmp_path: Path, capsys) -> None:
+    holdout = _write(tmp_path, [
+        _payload("h1", ["hey"], user_id="u1"),
+        _payload("h2", ["hey"], user_id="u2"),
+        dict(_payload("h3", ["hello"], user_id="u3"), consented=False),
+    ])
+    examples = [_example("h2"), _example("new", "u2"), _example("other", "u3"), _example("keep")]
+    assert [e.conversation_id for e in train.report_holdout(holdout, examples)] == ["keep"]
+    assert "conversations=1" in capsys.readouterr().out
+
+
+def test_train_excludes_holdout_before_deduping_training_rows(tmp_path: Path, monkeypatch, capsys) -> None:
+    held = _payload("held", ["hey"], user_id="u1",
+                    segments=[{"start_position": 0, "end_position": 0, "engagement_score": 0.8}])
+    holdout = tmp_path / "holdout.jsonl"
+    holdout.write_text(json.dumps(held), encoding="utf-8")
+    data = _write(tmp_path, [held, _payload("keep", ["hey"], user_id="u2")])
+    monkeypatch.setattr(sys, "argv", ["train.py", "--data", str(data), "--eval-file", str(holdout), "--dry-run"])
+
+    train.main()
+
+    out = capsys.readouterr().out
+    assert "excluded_from_training=1" in out
+    assert "conversations=1 segments=1 train=1 eval=0" in out
+
+
+def test_report_holdout_fails_when_file_is_missing(tmp_path: Path) -> None:
+    with pytest.raises(SystemExit, match="no frozen eval file"):
+        train.report_holdout(tmp_path / "missing.jsonl", [_example("c1")])
