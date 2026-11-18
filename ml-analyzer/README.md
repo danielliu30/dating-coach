@@ -293,10 +293,8 @@ python train.py --data data/labeled.jsonl --dry-run   # dataset stats only
 python train.py --data data/labeled.jsonl --out artifacts/segment-scorer
 ```
 
-By default (`--self-only`) segment windows with no `self` message are dropped,
-matching the heuristic scorer; pass `--no-self-only` to keep them. With
-`--weak-earlier-weight 0`, a weakly labeled conversation whose final window is
-match-only produces no rows.
+With `--weak-earlier-weight 0`, the default self-message filter leaves no rows
+for a weakly labeled conversation whose final window is match-only.
 
 Default recipe: DistilBERT with a single-logit head over segment transcripts,
 soft-target BCE against the 0–1 score (so serving's `sigmoid(logit)` is on the
