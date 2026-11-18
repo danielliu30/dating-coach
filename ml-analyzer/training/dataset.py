@@ -206,6 +206,10 @@ def transcript(messages: Sequence[LabeledMessage]) -> str:
     return "\n".join(f"[{m.position}] {m.sender}: {m.body}" for m in sorted(messages, key=lambda m: m.position))
 
 
+def _has_self(messages: Sequence[LabeledMessage]) -> bool:
+    return any(m.sender == "self" for m in messages)
+
+
 def windows(messages: Sequence[LabeledMessage], size: int) -> List[List[LabeledMessage]]:
     """Contiguous windows of at most ``size`` messages, aligned from position 0.
 
@@ -221,6 +225,7 @@ def to_segment_rows(
     examples: Sequence[TrainingExample],
     window_size: int = DEFAULT_WINDOW_SIZE,
     earlier_window_weight: float = WEAK_EARLIER_WINDOW_WEIGHT,
+    self_only: bool = True,
 ) -> Iterator[Row]:
     """Flatten examples into (segment transcript, target score, weight) rows.
 
@@ -229,6 +234,10 @@ def to_segment_rows(
     weak label: one row per ``window_size`` window, the final window at
     ``WEAK_FINAL_WINDOW_WEIGHT`` and every earlier one at ``earlier_window_weight``.
     ``earlier_window_weight <= 0`` keeps only the final window.
+
+    ``self_only`` (the default) drops windows with no ``self`` message, matching
+    ``HeuristicScorer``'s rule that only the customer's messages are judged: a
+    match-only stretch says nothing about the customer's own messages.
     """
     for example in examples:
         by_position = {m.position: m for m in example.messages}
@@ -239,7 +248,7 @@ def to_segment_rows(
                     for p in range(segment.start_position, segment.end_position + 1)
                     if p in by_position
                 ]
-                if window:
+                if window and (_has_self(window) or not self_only):
                     yield (
                         transcript(window),
                         max(0.0, min(1.0, segment.engagement_score)),
@@ -255,7 +264,7 @@ def to_segment_rows(
         chunks = windows(example.messages, window_size)
         for index, window in enumerate(chunks):
             weight = WEAK_FINAL_WINDOW_WEIGHT if index == len(chunks) - 1 else earlier_window_weight
-            if weight > 0:
+            if weight > 0 and (_has_self(window) or not self_only):
                 yield transcript(window), weak, weight
 
 
@@ -264,17 +273,22 @@ def split(
     eval_fraction: float = 0.1,
     window_size: int = DEFAULT_WINDOW_SIZE,
     earlier_window_weight: float = WEAK_EARLIER_WINDOW_WEIGHT,
+    self_only: bool = True,
 ) -> Tuple[List[Row], List[Row]]:
     """Flatten examples into rows with a group-disjoint train/eval split.
 
     Grouping is by ``group_key`` (user when known, otherwise conversation), so no
     segment of an evaluated conversation is ever seen during training. The group
-    hash keeps the assignment stable as the dataset grows.
+    hash keeps the assignment stable as the dataset grows. ``self_only`` is
+    passed to ``to_segment_rows``; only groups left with at least one row are
+    split, so filtered-out groups never take an eval slot.
     """
     eval_fraction = max(0.0, min(1.0, eval_fraction))
-    buckets: Dict[str, List[TrainingExample]] = {}
+    buckets: Dict[str, List[Row]] = {}
     for example in examples:
-        buckets.setdefault(example.group_key(), []).append(example)
+        rows = list(to_segment_rows([example], window_size, earlier_window_weight, self_only))
+        if rows:
+            buckets.setdefault(example.group_key(), []).extend(rows)
 
     keys = sorted(buckets)
     keys.sort(key=lambda k: hashlib.sha256(k.encode("utf-8")).hexdigest())
@@ -283,9 +297,6 @@ def split(
         eval_count = 1
     eval_keys = set(keys[:eval_count])
 
-    train_examples = [e for k in keys if k not in eval_keys for e in buckets[k]]
-    eval_examples = [e for k in keys if k in eval_keys for e in buckets[k]]
-    def rows(group: Sequence[TrainingExample]) -> List[Row]:
-        return list(to_segment_rows(group, window_size, earlier_window_weight))
-
-    return rows(train_examples), rows(eval_examples)
+    train_rows = [row for k in keys if k not in eval_keys for row in buckets[k]]
+    eval_rows = [row for k in keys if k in eval_keys for row in buckets[k]]
+    return train_rows, eval_rows
