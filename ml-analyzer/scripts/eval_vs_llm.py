@@ -1,21 +1,5 @@
 #!/usr/bin/env python
-"""Serving gate: does the trained scorer agree with the LLM scorer on the holdout?
-
-    pip install -r requirements-train.txt
-    LLM_API_KEY=... python scripts/eval_vs_llm.py --checkpoint artifacts/segment-scorer
-    make eval   # same, with the defaults below
-
-Runs ``TrainedScorer`` (the checkpoint) and ``LLMScorer`` (the current ``LLM_*``
-configuration) over every conversation of the frozen eval file, pairs their
-segments by boundary and reports segment-level MAE, Pearson, Spearman and
-Cohen's kappa on the ``label_for`` buckets. Conversations where the LLM fell
-back to the heuristic scorer are excluded, so the trained model is never
-compared against the heuristic. Per-segment pairs go to ``--out``.
-
-Exit status: 0 gate passed, 1 gate failed, 2 not evaluated (no LLM key,
-checkpoint or data, or scoring crashed).
-See "Serving gate" in README.md for the thresholds.
-"""
+"""Compare trained and LLM segment scores on a frozen holdout."""
 
 from __future__ import annotations
 
@@ -42,8 +26,7 @@ from training.dataset import TrainingExample, load_jsonl  # noqa: E402
 
 DEFAULT_EVAL_FILE = ROOT / "data" / "eval_holdout.jsonl"
 
-# The serving gate (documented in README.md). The trained backend may serve
-# when, on the frozen holdout, all three hold.
+# Score agreement thresholds for the holdout comparison.
 GATE_MAX_MAE = 0.1
 GATE_MIN_KAPPA = 0.6
 GATE_MIN_COVERAGE = 0.9  # share of holdout conversations the LLM scored without fallback
@@ -61,10 +44,12 @@ class SegmentPair:
 
 
 def to_request(example: TrainingExample) -> AnalyzeRequest:
-    """The /analyze request the backend would send for this conversation."""
+    """Build an /analyze request with any context supplied by the holdout."""
     return AnalyzeRequest(
         conversation_id=example.conversation_id,
         platform=example.platform,
+        preferences=example.preferences,
+        match_name=example.match_name,
         messages=[
             Message(position=m.position, sender=m.sender, body=m.body, sent_at=m.sent_at) for m in example.messages
         ],
@@ -79,11 +64,16 @@ def pair_segments(example: TrainingExample, trained: AnalyzeResponse, llm: Analy
     """Pair the two backends' segments by (start, end); both chunk with ML_SEGMENT_SIZE."""
     labels = {(s.start_position, s.end_position): s.engagement_score for s in example.segments}
     llm_by_boundary = {(s.start_position, s.end_position): s.engagement_score for s in llm.segments}
+    trained_boundaries = {(s.start_position, s.end_position) for s in trained.segments}
+    if (
+        trained_boundaries != llm_by_boundary.keys()
+        or len(trained_boundaries) != len(trained.segments)
+        or len(llm_by_boundary) != len(llm.segments)
+    ):
+        raise ValueError(f"{example.conversation_id}: backends disagree on boundaries or returned duplicates")
     pairs: List[SegmentPair] = []
     for segment in trained.segments:
         key = (segment.start_position, segment.end_position)
-        if key not in llm_by_boundary:
-            raise ValueError(f"{example.conversation_id}: LLM has no segment {key}; backends disagree on boundaries")
         pairs.append(
             SegmentPair(
                 conversation_id=example.conversation_id,
@@ -110,7 +100,10 @@ async def score_all(
             llm_response = await llm.analyze(request)
         if is_fallback(llm_response):
             return [], True
-        return pair_segments(example, await trained.analyze(request), llm_response), False
+        trained_response = await trained.analyze(request)
+        if is_fallback(trained_response):
+            raise ValueError(f"{example.conversation_id}: trained scorer fell back to the heuristic")
+        return pair_segments(example, trained_response, llm_response), False
 
     results = await asyncio.gather(*(one(e) for e in examples))
     pairs = [pair for segment_pairs, _ in results for pair in segment_pairs]

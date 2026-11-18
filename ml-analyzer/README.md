@@ -327,27 +327,19 @@ backend returns)` pairs — add `peft` from `requirements-train.txt`, and have
 `TrainedScorer.analyze` parse the generated JSON with the same
 `LLMScorer._parse` logic.
 
-### 4. Pass the serving gate
+### 4. Compare scores against the LLM
 
-MAE/RMSE against held-out labels says how close the model is to annotators;
-it does not say whether swapping `ML_BACKEND=llm` for `trained` changes what
-users see. The serving gate measures that directly, on the frozen holdout:
+The default synthetic holdout is an **unpersonalized score check**, not evidence
+that a checkpoint is ready to serve or that its coaching matches the LLM's.
+An alternate holdout can supply pseudonymized `preferences` and `match_name`
+for both scorers.
 
 ```bash
-pip install -r requirements-train.txt
-LLM_API_KEY=... make eval    # = python scripts/eval_vs_llm.py --checkpoint artifacts/segment-scorer --data data/eval_holdout.jsonl
+LLM_API_KEY=... make eval
 ```
 
-`scripts/eval_vs_llm.py` runs `TrainedScorer` (the checkpoint) and `LLMScorer`
-(the current `LLM_*` configuration) over every holdout conversation, pairs their
-segments by boundary and reports segment-level MAE, Pearson and Spearman
-correlation, Cohen's kappa on the served `label_for` buckets
-(engaging/neutral/flat), each backend's score distribution, and both backends'
-MAE/kappa against the holdout's human labels for context. Conversations where
-the LLM fell back to the heuristic are excluded and listed. Per-segment pairs
-are written to `<checkpoint>/eval_vs_llm.jsonl`.
-
-**The trained backend may serve only when, on `data/eval_holdout.jsonl`:**
+The script pairs scores by segment boundary and writes them to
+`<checkpoint>/eval_vs_llm.jsonl`. It passes only if:
 
 | Check | Threshold |
 | --- | --- |
@@ -355,13 +347,9 @@ are written to `<checkpoint>/eval_vs_llm.jsonl`.
 | Cohen's kappa on `label_for` buckets, trained vs LLM | `> 0.6` |
 | Holdout conversations the LLM scored without fallback | `>= 90%` |
 
-The script exits `0` when the gate passes, `1` when it fails and `2` when it
-could not evaluate (no `LLM_API_KEY`, checkpoint or eval data, malformed eval
-data, a scoring crash, or an unwritable output). Undefined metrics, for example a collapsed model whose scores are all identical, count as
-failures. The thresholds live in `scripts/eval_vs_llm.py`
-(`GATE_MAX_MAE`, `GATE_MIN_KAPPA`, `GATE_MIN_COVERAGE`). Re-run the gate
-whenever the checkpoint, the LLM model or `BRAIN_VERSION`/`AGENCY_VERSION`
-change, since the reference moves with them.
+Exit codes: `0` passed, `1` failed a threshold, `2` not evaluated (for example,
+a trained fallback or mismatched segment boundaries). LLM fallbacks are counted
+against coverage and excluded from agreement metrics.
 
 ### 5. Switch backends
 

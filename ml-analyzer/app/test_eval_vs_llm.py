@@ -12,7 +12,7 @@ from scripts.eval_vs_llm import SegmentPair, gate, pair_segments, report, score_
 from training.dataset import TrainingExample
 
 
-def _example(conversation_id: str, count: int = 8, labels: list[float] | None = None) -> TrainingExample:
+def _example(conversation_id: str, count: int = 8, labels: list[float] | None = None, **context: str) -> TrainingExample:
     """A consented conversation of ``count`` messages, optionally human-labeled on 4-message segments."""
     segments = [
         {"start_position": i * 4, "end_position": min(i * 4 + 3, count - 1), "engagement_score": score}
@@ -27,6 +27,7 @@ def _example(conversation_id: str, count: int = 8, labels: list[float] | None = 
                 {"position": i, "sender": "self" if i % 2 == 0 else "match", "body": f"m{i}"} for i in range(count)
             ],
             "segments": segments,
+            **context,
         }
     )
 
@@ -90,10 +91,26 @@ def test_pair_segments_matches_boundaries_and_attaches_labels() -> None:
     ]
 
 
-def test_pair_segments_rejects_mismatched_boundaries() -> None:
+@pytest.mark.parametrize(
+    "trained,llm",
+    [
+        (_response("trained", [0.5, 0.5]), _response("llm", [0.5], size=8)),
+        (_response("trained", [0.5]), _response("llm", [0.5, 0.5])),
+    ],
+)
+def test_pair_segments_rejects_mismatched_boundaries(trained: AnalyzeResponse, llm: AnalyzeResponse) -> None:
     """Backends chunking differently is a configuration error, not something to average over."""
     with pytest.raises(ValueError, match="disagree on boundaries"):
-        pair_segments(_example("c1"), _response("trained", [0.5, 0.5]), _response("llm", [0.5], size=8))
+        pair_segments(_example("c1"), trained, llm)
+
+
+def test_to_request_preserves_optional_personalization() -> None:
+    request = eval_vs_llm.to_request(_example("c1", preferences="a fellow climber", match_name="Riley"))
+    assert request.preferences == "a fellow climber"
+    assert request.match_name == "Riley"
+    unpersonalized = eval_vs_llm.to_request(_example("c2"))
+    assert unpersonalized.preferences is None
+    assert unpersonalized.match_name is None
 
 
 def test_score_all_excludes_llm_fallbacks() -> None:
@@ -157,8 +174,11 @@ def test_main_requires_llm_key(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, 
     assert "LLM_API_KEY is unset" in capsys.readouterr().err
 
 
-def test_main_scores_holdout_and_writes_pairs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys) -> None:
-    """End to end over the committed holdout with fake backends: exit 0 on agreement, pairs written."""
+@pytest.mark.parametrize("trained_fallback", [False, True])
+def test_main_scores_holdout_and_writes_pairs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys, trained_fallback: bool
+) -> None:
+    """Agreement writes pairs; heuristic fallback from the trained scorer cannot pass."""
     monkeypatch.setenv("LLM_API_KEY", "test-key")
     eval_vs_llm.get_settings.cache_clear()
 
@@ -175,14 +195,21 @@ def test_main_scores_holdout_and_writes_pairs(monkeypatch: pytest.MonkeyPatch, t
 
         return Fake
 
-    monkeypatch.setattr(eval_vs_llm, "TrainedScorer", fake("trained-ckpt"))
+    trained_version = "trained-ckpt+fallback:heuristic" if trained_fallback else "trained-ckpt"
+    monkeypatch.setattr(eval_vs_llm, "TrainedScorer", fake(trained_version))
     monkeypatch.setattr(eval_vs_llm, "LLMScorer", fake("llm-fake"))
     out = tmp_path / "pairs.jsonl"
     try:
         code = eval_vs_llm.main(["--checkpoint", str(tmp_path), "--out", str(out)])
     finally:
         eval_vs_llm.get_settings.cache_clear()
-    stdout = capsys.readouterr().out
+    stdout, stderr = capsys.readouterr()
+    if trained_fallback:
+        assert code == 2
+        assert "trained scorer fell back to the heuristic" in stderr
+        assert "serving gate: PASS" not in stdout
+        assert not out.exists()
+        return
     assert code == 0, stdout
     assert "conversations=12 llm_fallback=0 segments=19" in stdout
     records = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
