@@ -12,6 +12,8 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
+
+	"github.com/danielliu30/dating-coach/backend/internal/store/db"
 )
 
 func TestDenylistRevokedSince(t *testing.T) {
@@ -26,7 +28,7 @@ func TestDenylistRevokedSince(t *testing.T) {
 		t.Fatalf("never revoked = %v, %v; want zero, nil", since, err)
 	}
 	before := time.Now()
-	if err := d.RevokeSessions(ctx, user); err != nil {
+	if err := d.RevokeSessionsAt(ctx, user, time.Now()); err != nil {
 		t.Fatalf("revoke: %v", err)
 	}
 	since, err := d.RevokedSince(ctx, user)
@@ -44,7 +46,7 @@ func TestDenylistRevokedSince(t *testing.T) {
 	if err := d.Revoke(ctx, deleted); err != nil {
 		t.Fatalf("revoke: %v", err)
 	}
-	if err := d.RevokeSessions(ctx, deleted); err != nil {
+	if err := d.RevokeSessionsAt(ctx, deleted, time.Now()); err != nil {
 		t.Fatalf("revoke sessions: %v", err)
 	}
 	if since, err := d.RevokedSince(ctx, deleted); err != nil || !since.After(time.Now().Add(24*time.Hour)) {
@@ -55,10 +57,10 @@ func TestDenylistRevokedSince(t *testing.T) {
 	}
 
 	newer := time.Now()
-	if err := d.write(ctx, user, strconv.FormatInt(newer.UnixNano(), 10)); err != nil {
+	if err := d.write(ctx, user, strconv.FormatInt(newer.UnixNano(), 10), true); err != nil {
 		t.Fatalf("write newer cutoff: %v", err)
 	}
-	if err := d.write(ctx, user, strconv.FormatInt(newer.Add(-time.Second).UnixNano(), 10)); err != nil {
+	if err := d.write(ctx, user, strconv.FormatInt(newer.Add(-time.Second).UnixNano(), 10), true); err != nil {
 		t.Fatalf("write older cutoff: %v", err)
 	}
 	if since, err := d.RevokedSince(ctx, user); err != nil || !since.Equal(time.Unix(0, newer.UnixNano())) {
@@ -121,6 +123,56 @@ func TestMiddlewareRefusesRevokedSessions(t *testing.T) {
 				t.Fatalf("status = %d, want %d", rec.Code, tc.want)
 			}
 		})
+	}
+}
+
+type stubRevocationLister []db.ListSessionRevocationsSinceRow
+
+func (s stubRevocationLister) ListSessionRevocationsSince(context.Context, time.Time) ([]db.ListSessionRevocationsSinceRow, error) {
+	return s, nil
+}
+
+// TestReplayRevocationsRestoresLostCutoffs covers a Redis that lost (or never
+// received) a cutoff recorded in Postgres: the replay writes it back, never
+// weakens a stronger entry, and announces nothing, so it cannot drop sockets
+// opened by a sign-in after the cutoff.
+func TestReplayRevocationsRestoresLostCutoffs(t *testing.T) {
+	ctx := context.Background()
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+	d := NewDenylist(rdb, time.Minute)
+
+	signedOut, deleted := uuid.New(), uuid.New()
+	cutoff := time.Now().Add(-time.Second).Truncate(time.Microsecond)
+	if err := d.Revoke(ctx, deleted); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	lister := stubRevocationLister{
+		{ID: signedOut, SessionsRevokedAt: &cutoff},
+		{ID: deleted, SessionsRevokedAt: &cutoff},
+	}
+
+	announcements := rdb.Subscribe(ctx, revokedChannel)
+	t.Cleanup(func() { _ = announcements.Close() })
+	if _, err := announcements.Receive(ctx); err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+
+	for range 2 {
+		if err := d.ReplayRevocations(ctx, lister); err != nil {
+			t.Fatalf("replay: %v", err)
+		}
+	}
+	if since, err := d.RevokedSince(ctx, signedOut); err != nil || !since.Equal(cutoff) {
+		t.Fatalf("replayed cutoff = %v, %v; want %v", since, err, cutoff)
+	}
+	if since, err := d.RevokedSince(ctx, deleted); err != nil || !since.Equal(revokeEverything) {
+		t.Fatalf("deleted account after replay = %v, %v; want every token revoked", since, err)
+	}
+
+	if msg, err := announcements.ReceiveTimeout(ctx, 200*time.Millisecond); err == nil {
+		t.Fatalf("unexpected announcement %v: replays must not drop sockets opened after the cutoff", msg)
 	}
 }
 

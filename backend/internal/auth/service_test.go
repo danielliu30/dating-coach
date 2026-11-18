@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -227,7 +228,7 @@ func TestRefreshRefusesTokensIssuedBeforeARevocation(t *testing.T) {
 	}
 	userID, _ := claims.UserID()
 	time.Sleep(10 * time.Millisecond)
-	if err := svc.denylist.RevokeSessions(ctx, userID); err != nil {
+	if err := svc.denylist.RevokeSessionsAt(ctx, userID, time.Now()); err != nil {
 		t.Fatalf("revoke sessions: %v", err)
 	}
 	if _, err := svc.Refresh(ctx, stale.RefreshToken); !errors.Is(err, ErrInvalidRefreshToken) {
@@ -358,15 +359,84 @@ func TestVerifyEmailRefusesARevokedBearer(t *testing.T) {
 	}
 	userID, _ := claims.UserID()
 	time.Sleep(10 * time.Millisecond)
-	if err := svc.denylist.RevokeSessions(ctx, userID); err != nil {
+	if err := svc.denylist.RevokeSessionsAt(ctx, userID, time.Now()); err != nil {
 		t.Fatalf("revoke sessions: %v", err)
 	}
 	got, err := svc.VerifyEmail(ctx, user.email, "", session.Token)
-	if err != nil {
-		t.Fatalf("verify email: %v", err)
+	if !errors.Is(err, ErrSessionRevoked) {
+		t.Fatalf("verify email: %v, want ErrSessionRevoked", err)
 	}
 	if got.Token != "" || got.RefreshToken != "" {
 		t.Fatalf("verify email with a revoked bearer issued a session")
+	}
+}
+
+func TestVerifyEmailSerializesSessionMintingWithRevocation(t *testing.T) {
+	svc, _, pool := newTestService(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	user := verifiedUser(t, svc, pool)
+	session, err := svc.SignIn(ctx, user.email, user.password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh, err := svc.VerifyEmail(ctx, user.email, "", session.Token); err != nil || fresh.RefreshToken == "" {
+		t.Fatalf("normal verification = %+v, %v", fresh, err)
+	}
+	userID := uuid.MustParse(session.User.ID)
+	var before int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM refresh_tokens WHERE user_id = $1", userID).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	if _, err := svc.queries.WithTx(tx).LockUserForRefresh(ctx, userID); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		req := httptest.NewRequest(http.MethodPost, "/verify", strings.NewReader(fmt.Sprintf(`{"email":%q}`, user.email))).WithContext(ctx)
+		req.Header.Set("Authorization", "Bearer "+session.Token)
+		NewHandler(svc, nil).verify(rec, req)
+	}()
+	// Wait until verification has passed Redis and is blocked on our account lock.
+	for {
+		var blocked bool
+		if err := pool.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid)))", tx.Conn().PgConn().PID()).Scan(&blocked); err != nil {
+			t.Fatal(err)
+		}
+		if blocked {
+			break
+		}
+		select {
+		case <-done:
+			t.Fatal("verification did not wait for the account lock")
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	if err := svc.queries.WithTx(tx).RecordSessionRevocation(ctx, db.RecordSessionRevocationParams{ID: userID, RevokedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	<-done
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("verify status = %d, want 401: %s", rec.Code, rec.Body)
+	}
+	var after int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM refresh_tokens WHERE user_id = $1", userID).Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if after != before {
+		t.Fatalf("refresh token rows = %d, want %d", after, before)
 	}
 }
 
@@ -717,6 +787,147 @@ func TestSignInRefusesAccountWithoutPassword(t *testing.T) {
 		if _, err := svc.SignIn(ctx, email, password); !errors.Is(err, ErrInvalidCredentials) {
 			t.Fatalf("sign in with password %q = %v, want %v", password, err, ErrInvalidCredentials)
 		}
+	}
+}
+
+// TestRevocationsSurviveARedisOutage covers sign-out and refresh-token reuse
+// while Redis is unreachable: the cutoff is still recorded in Postgres, and
+// replaying it into a Redis that never saw it (or lost it) refuses the access
+// tokens issued before it.
+func TestRevocationsSurviveARedisOutage(t *testing.T) {
+	for name, revoke := range map[string]func(svc *Service, s Session, down *Denylist) error{
+		"sign-out": func(svc *Service, s Session, down *Denylist) error {
+			svc.denylist = down
+			claims, err := svc.issuer.Parse(s.Token)
+			if err != nil {
+				return err
+			}
+			userID, err := claims.UserID()
+			if err != nil {
+				return err
+			}
+			if err := svc.SignOut(context.Background(), userID); !errors.Is(err, ErrRevocationUnavailable) {
+				return fmt.Errorf("sign out with Redis down: error = %v, want %v", err, ErrRevocationUnavailable)
+			}
+			return nil
+		},
+		"refresh reuse": func(svc *Service, s Session, down *Denylist) error {
+			if _, err := svc.Refresh(context.Background(), s.RefreshToken); err != nil {
+				return fmt.Errorf("refresh: %w", err)
+			}
+			svc.denylist = down
+			if _, err := svc.Refresh(context.Background(), s.RefreshToken); !errors.Is(err, ErrInvalidRefreshToken) {
+				return fmt.Errorf("reuse with Redis down: error = %v, want %v", err, ErrInvalidRefreshToken)
+			}
+			return nil
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			svc, issuer, pool := newTestService(t)
+			ctx := context.Background()
+			user := verifiedUser(t, svc, pool)
+			session, err := svc.SignIn(ctx, user.email, user.password)
+			if err != nil {
+				t.Fatalf("sign in: %v", err)
+			}
+			live := svc.denylist
+
+			down := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", MaxRetries: -1, DialTimeout: time.Second})
+			t.Cleanup(func() { _ = down.Close() })
+			if err := revoke(svc, session, NewDenylist(down, 15*time.Minute)); err != nil {
+				t.Fatal(err)
+			}
+
+			var recorded *time.Time
+			if err := pool.QueryRow(ctx, "SELECT sessions_revoked_at FROM users WHERE email = $1", user.email).Scan(&recorded); err != nil {
+				t.Fatalf("read sessions_revoked_at: %v", err)
+			}
+			if recorded == nil {
+				t.Fatal("revocation was not recorded in Postgres while Redis was down")
+			}
+
+			if err := live.ReplayRevocations(ctx, db.New(pool)); err != nil {
+				t.Fatalf("replay: %v", err)
+			}
+			req := httptest.NewRequest(http.MethodGet, "/me", nil)
+			req.Header.Set("Authorization", "Bearer "+session.Token)
+			rec := httptest.NewRecorder()
+			Middleware(issuer, nil, live)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusNoContent)
+			})).ServeHTTP(rec, req)
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("access token after replayed revocation: status = %d, want 401", rec.Code)
+			}
+		})
+	}
+}
+
+// TestReuseRevocationDeletesAConcurrentRotation covers a rotation that holds
+// the account row lock while reuse is detected: the reuse revocation waits for
+// it, so the replacement token the rotation commits is deleted too instead of
+// outliving the theft response.
+func TestReuseRevocationDeletesAConcurrentRotation(t *testing.T) {
+	svc, _, pool := newTestService(t)
+	ctx := context.Background()
+	user := verifiedUser(t, svc, pool)
+	if _, err := svc.SignIn(ctx, user.email, user.password); err != nil {
+		t.Fatalf("sign in: %v", err)
+	}
+	var userID uuid.UUID
+	if err := pool.QueryRow(ctx, "SELECT id FROM users WHERE email = $1", user.email).Scan(&userID); err != nil {
+		t.Fatalf("read user id: %v", err)
+	}
+
+	rotation, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin rotation: %v", err)
+	}
+	t.Cleanup(func() { _ = rotation.Rollback(ctx) })
+	if _, err := db.New(rotation).LockUserForRefresh(ctx, userID); err != nil {
+		t.Fatalf("lock user: %v", err)
+	}
+
+	type revocation struct {
+		at  time.Time
+		err error
+	}
+	done := make(chan revocation, 1)
+	go func() {
+		at, err := svc.revokeReusedRefreshTokens(ctx, userID)
+		done <- revocation{at, err}
+	}()
+	select {
+	case r := <-done:
+		t.Fatalf("reuse revocation finished while a rotation held the account row: %v", r.err)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	if _, err := db.New(rotation).CreateRefreshToken(ctx, db.CreateRefreshTokenParams{
+		UserID:    userID,
+		TokenHash: hashRefreshToken(uuid.NewString()),
+		ExpiresAt: time.Now().Add(time.Hour),
+		FamilyID:  uuid.New(),
+	}); err != nil {
+		t.Fatalf("insert replacement: %v", err)
+	}
+	accessIssuedAt := time.Now()
+	if err := rotation.Commit(ctx); err != nil {
+		t.Fatalf("commit rotation: %v", err)
+	}
+	r := <-done
+	if r.err != nil {
+		t.Fatalf("reuse revocation: %v", r.err)
+	}
+	if r.at.Before(accessIssuedAt) {
+		t.Fatalf("cutoff %v precedes the access token the rotation minted at %v", r.at, accessIssuedAt)
+	}
+
+	var remaining int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM refresh_tokens WHERE user_id = $1", userID).Scan(&remaining); err != nil {
+		t.Fatalf("count refresh tokens: %v", err)
+	}
+	if remaining != 0 {
+		t.Fatalf("%d refresh tokens survived the reuse revocation, want 0", remaining)
 	}
 }
 

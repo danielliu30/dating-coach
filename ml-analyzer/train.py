@@ -18,9 +18,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 
-from training.dataset import load_jsonl, split
+from training.dataset import (
+    DEFAULT_WINDOW_SIZE,
+    WEAK_EARLIER_WINDOW_WEIGHT,
+    Row,
+    load_jsonl,
+    split,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -32,16 +39,42 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--learning-rate", type=float, default=2e-5)
     parser.add_argument("--max-length", type=int, default=512)
+    parser.add_argument(
+        "--segment-size",
+        type=int,
+        default=DEFAULT_WINDOW_SIZE,
+        help="Messages per weak-label window; keep equal to serving's ML_SEGMENT_SIZE",
+    )
+    parser.add_argument(
+        "--weak-earlier-weight",
+        type=float,
+        default=WEAK_EARLIER_WINDOW_WEIGHT,
+        help="Loss weight of weak-label windows before the final one (0 = final window only)",
+    )
     parser.add_argument("--include-unconsented", action="store_true")
+    parser.add_argument(
+        "--self-only",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Drop segment windows with no 'self' message, as HeuristicScorer judges only the customer (default: on)",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Report dataset stats and exit")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if not math.isfinite(args.weak_earlier_weight):
+        parser.error("--weak-earlier-weight must be finite")
+    return args
 
 
 def main() -> None:
     args = parse_args()
 
     examples = load_jsonl(args.data, require_consent=not args.include_unconsented)
-    train_rows, eval_rows = split(examples)
+    train_rows, eval_rows = split(
+        examples,
+        window_size=args.segment_size,
+        earlier_window_weight=args.weak_earlier_weight,
+        self_only=args.self_only,
+    )
     if not train_rows:
         raise SystemExit(f"no usable labeled segments in {args.data}")
     segments = len(train_rows) + len(eval_rows)
@@ -63,23 +96,29 @@ def main() -> None:
     model = AutoModelForSequenceClassification.from_pretrained(args.base_model, num_labels=1)
 
     class BCETrainer(Trainer):
-        """Soft-target BCE on the raw logit.
+        """Per-row weighted soft-target BCE on the raw logit.
 
         Plain MSE against labels in [0, 1] fits the logit itself, and the sigmoid
         that serving applies would then squash every prediction into [0.5, 0.73].
-        BCE keeps training and inference on the same scale.
+        BCE keeps training and inference on the same scale. Each row's loss is
+        scaled by the weight ``training.dataset`` attaches to it.
         """
 
         def compute_loss(self, model, inputs, return_outputs=False, **kwargs):  # noqa: ANN001, ANN201
             labels = inputs.pop("labels").float()
+            weights = inputs.pop("weight").float()
             outputs = model(**inputs)
             logits = outputs.logits.squeeze(-1)
-            loss = torch.nn.functional.binary_cross_entropy_with_logits(logits, labels)
+            loss = torch.nn.functional.binary_cross_entropy_with_logits(logits, labels, weight=weights)
             return (loss, outputs) if return_outputs else loss
 
-    def build(rows: list[tuple[str, float]]) -> Dataset:
+    def build(rows: list[Row]) -> Dataset:
         dataset = Dataset.from_dict(
-            {"text": [text for text, _ in rows], "labels": [float(score) for _, score in rows]}
+            {
+                "text": [text for text, _, _ in rows],
+                "labels": [float(score) for _, score, _ in rows],
+                "weight": [float(weight) for _, _, weight in rows],
+            }
         )
         return dataset.map(
             lambda batch: tokenizer(
@@ -89,12 +128,20 @@ def main() -> None:
             remove_columns=["text"],
         )
 
+    # The eval loader is sequential, so predictions line up with eval_rows.
+    eval_weights = np.asarray([weight for _, _, weight in eval_rows], dtype=float)
+
     def metrics(prediction) -> dict[str, float]:  # noqa: ANN001 - transformers EvalPrediction
         preds = torch.sigmoid(torch.tensor(prediction.predictions)).squeeze(-1).numpy()
         labels = np.asarray(prediction.label_ids).squeeze()
+        errors = preds - labels
         return {
-            "mae": float(np.mean(np.abs(preds - labels))),
-            "rmse": float(np.sqrt(np.mean((preds - labels) ** 2))),
+            "mae": float(np.mean(np.abs(errors))),
+            "rmse": float(np.sqrt(np.mean(errors**2))),
+            # Same per-row weights as the loss, so many down-weighted early
+            # windows of long conversations do not dominate the score.
+            "weighted_mae": float(np.average(np.abs(errors), weights=eval_weights)),
+            "weighted_rmse": float(np.sqrt(np.average(errors**2, weights=eval_weights))),
         }
 
     out_dir = Path(args.out)
@@ -110,6 +157,9 @@ def main() -> None:
             save_strategy="epoch",
             logging_steps=25,
             report_to=[],
+            # Keep the "weight" column: the model's forward() does not accept it,
+            # so the default would drop it before compute_loss sees it.
+            remove_unused_columns=False,
         ),
         train_dataset=build(train_rows),
         eval_dataset=build(eval_rows) if eval_rows else None,
@@ -126,7 +176,7 @@ def main() -> None:
                 "base_model": args.base_model,
                 "segments": segments,
                 "epochs": args.epochs,
-                "objective": "soft-target BCE; serve sigmoid(logit) as engagement_score in [0,1]",
+                "objective": "per-row weighted soft-target BCE; serve sigmoid(logit) as engagement_score in [0,1]",
             },
             indent=2,
         ),
