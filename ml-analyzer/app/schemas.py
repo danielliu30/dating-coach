@@ -11,7 +11,7 @@ from typing import Any, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from .coaching import PILLAR_KEYS, pillars_by_keys
+from .coaching import pillars_by_keys
 
 Sender = Literal["self", "match"]
 SegmentLabel = Literal["engaging", "neutral", "flat"]
@@ -36,7 +36,6 @@ class AnalyzeRequest(BaseModel):
     )
     focus_areas: List[str] = Field(
         default_factory=list,
-        max_length=len(PILLAR_KEYS),
         description=(
             "Coaching-brain pillar keys the customer wants to improve on (see PILLAR_KEYS); "
             "the response carries one overall.goal_scores entry per area. Distinct from preferences."
@@ -46,7 +45,7 @@ class AnalyzeRequest(BaseModel):
     @field_validator("focus_areas", mode="before")
     @classmethod
     def _known_pillars(cls, value: Any) -> Any:
-        """Normalise and deduplicate known keys before checking list length."""
+        """Normalise and deduplicate known keys; at most one entry per pillar remains."""
         if not isinstance(value, list) or not all(isinstance(key, str) for key in value):
             return value
         return [p.key for p in pillars_by_keys(value)]
