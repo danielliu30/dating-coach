@@ -26,6 +26,7 @@ func TestLoadProductionSecrets(t *testing.T) {
 		{"Postgres env", "POSTGRES_PASSWORD", "datingcoach"},
 		{"RabbitMQ guests", "RABBITMQ_URL", "amqp://guest:guest@rabbitmq:5672/"},
 		{"RabbitMQ implicit guests", "RABBITMQ_URL", "amqp://rabbitmq:5672/"},
+		{"RabbitMQ custom user with default password", "RABBITMQ_URL", "amqp://app:guest@rabbitmq:5672/"},
 		{"Resend example", "SMTP_PASSWORD", "re_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"},
 		{"SendGrid example", "SMTP_PASSWORD", "SG.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"},
 	} {

@@ -24,8 +24,8 @@ func (c *Config) validateSecrets(postgresPassword string) error {
 	if postgresPassword == "datingcoach" {
 		bad = append(bad, "POSTGRES_PASSWORD is a shipped default")
 	}
-	if uri, err := amqp.ParseURI(c.RabbitMQURL); err == nil && uri.Username == "guest" && uri.Password == "guest" {
-		bad = append(bad, "RABBITMQ_URL uses the default credentials")
+	if uri, err := amqp.ParseURI(c.RabbitMQURL); err == nil && uri.Password == "guest" {
+		bad = append(bad, "RABBITMQ_URL uses the shipped default password")
 	}
 	switch c.SMTPPassword {
 	case "re_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "SG.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx":
