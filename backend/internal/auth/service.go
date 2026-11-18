@@ -177,14 +177,20 @@ func (s *Service) DeleteAccount(ctx context.Context, userID uuid.UUID) error {
 var ErrRevocationUnavailable = errors.New("session revocation unavailable")
 
 // SignOut ends userID's sessions on every device.
+// The worker replays the Postgres cutoff after a Redis outage or flush.
 func (s *Service) SignOut(ctx context.Context, userID uuid.UUID) error {
 	if _, err := s.queries.RevokeUserRefreshTokens(ctx, userID); err != nil {
 		return fmt.Errorf("revoke refresh tokens: %w", err)
 	}
+	// Match Postgres precision so replay preserves the cutoff exactly.
+	at := time.Now().Truncate(time.Microsecond)
+	if err := s.queries.RecordSessionRevocation(ctx, db.RecordSessionRevocationParams{ID: userID, RevokedAt: at}); err != nil {
+		return fmt.Errorf("record session revocation: %w", err)
+	}
 	if s.denylist == nil {
 		return ErrRevocationUnavailable
 	}
-	if err := s.denylist.RevokeSessions(ctx, userID); err != nil {
+	if err := s.denylist.RevokeSessionsAt(ctx, userID, at); err != nil {
 		return fmt.Errorf("%w: %w", ErrRevocationUnavailable, err)
 	}
 	return nil
