@@ -234,6 +234,14 @@ export interface AnalysisOverall {
   reflection_questions?: string[] | null;
   /** Recurring behaviour named as an observation to think about, never a drafted reply. Absent/null on older results. */
   patterns?: string[] | null;
+  /** One score per coaching goal the user picked, for goals the conversation gave evidence on. Absent/null on older results. */
+  goal_scores?: GoalScore[] | null;
+}
+
+export interface GoalScore {
+  goal: CoachingGoal;
+  score: number;
+  comment: string;
 }
 
 export type AnalysisStatus = 'pending' | 'running' | 'succeeded' | 'failed';
