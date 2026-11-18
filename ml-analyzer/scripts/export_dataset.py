@@ -73,8 +73,7 @@ _SOCIAL_HANDLE = re.compile(
     re.IGNORECASE,
 )
 _PHONE = re.compile(r"(?<![\w+])\+?\d[\d\s().-]{5,}\d(?!\w|:\d)")
-# What may follow a date that a phone match swallowed: a space or sentence end.
-_AFTER_DATE = re.compile(r"[.,;!?]?(?:\s|$)")
+_SENTENCE_BREAK = re.compile(r"([.,;!?]\s+)")
 _DATE = re.compile(r"\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}")
 _TRAILING = ".,;:!?)]}'\""
 
@@ -88,6 +87,26 @@ def _keep_trailing(placeholder: str):
         return placeholder + text[len(stripped):]
 
     return replace
+
+
+def _digits(text: str) -> int:
+    return sum(ch.isdigit() for ch in text)
+
+
+def _redact_phone(text: str) -> str:
+    """Redact a phone match, unless it is a date or too short.
+
+    A match can run across a sentence break ("on 2026-03-01. 5 of us"). If a
+    piece between breaks is a date or a phone on its own, redact piece by piece;
+    otherwise the breaks are part of the number ("415. 555. 0134").
+    """
+    parts = _SENTENCE_BREAK.split(text)
+    pieces = parts[::2]
+    if len(parts) > 1 and any(_DATE.fullmatch(p) or _digits(p) >= 7 for p in pieces):
+        return "".join(_redact_phone(p) if i % 2 == 0 else p for i, p in enumerate(parts))
+    if _digits(text) < 7 or _DATE.fullmatch(text.strip()):
+        return text
+    return "[PHONE]"
 
 
 class Pseudonymiser:
@@ -135,13 +154,7 @@ class Pseudonymiser:
         return f"{match.group(1)}{match.group(2)}[HANDLE]{handle[len(stripped):]}"
 
     def _phone(self, match: re.Match) -> str:
-        text = match.group(0)
-        date = _DATE.match(text)
-        if date and _AFTER_DATE.match(text, date.end()):
-            return date.group(0) + _PHONE.sub(self._phone, text[date.end():])
-        if sum(ch.isdigit() for ch in text) < 7:
-            return text
-        return "[PHONE]"
+        return _redact_phone(match.group(0))
 
     def _name(self, match: re.Match) -> str:
         text = match.group(0)
