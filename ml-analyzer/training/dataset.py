@@ -200,7 +200,7 @@ def transcript(messages: Sequence[LabeledMessage]) -> str:
     Delegates to the serving formatter so ``TrainedScorer`` sees exactly the
     text the model was trained on.
     """
-    return _model_transcript(messages, meta=True)  # type: ignore[arg-type]
+    return _model_transcript(messages, meta=True)
 
 
 def _has_self(messages: Sequence[LabeledMessage]) -> bool:

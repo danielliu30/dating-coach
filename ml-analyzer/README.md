@@ -238,8 +238,8 @@ vision endpoint of the configured provider (Anthropic or OpenAI-compatible);
   above hold for `llm` and `heuristic` only. Each segment is scored on the same
   text training rows use: the transcript, prefixed with a `[meta]` line of
   `sent_at` latency/count features when timestamps exist (see
-  [`training/data_schema.md`](training/data_schema.md#model-input)), so
-  checkpoints trained before that line existed should be retrained.
+  [`training/data_schema.md`](training/data_schema.md#model-input)). Retrain
+  pre-`[meta]` checkpoints before serving timestamped inputs.
 
 ## Training your own model
 
