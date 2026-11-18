@@ -27,6 +27,7 @@ func TestLoadProductionSecrets(t *testing.T) {
 		{"RabbitMQ guests", "RABBITMQ_URL", "amqp://guest:guest@rabbitmq:5672/"},
 		{"RabbitMQ implicit guests", "RABBITMQ_URL", "amqp://rabbitmq:5672/"},
 		{"RabbitMQ custom user with default password", "RABBITMQ_URL", "amqp://app:guest@rabbitmq:5672/"},
+		{"RabbitMQ certificate auth with password fallback", "RABBITMQ_URL", "amqps://rabbitmq/?auth_mechanism=external&auth_mechanism=plain"},
 		{"Resend example", "SMTP_PASSWORD", "re_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"},
 		{"SendGrid example", "SMTP_PASSWORD", "SG.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"},
 	} {
@@ -41,6 +42,13 @@ func TestLoadProductionSecrets(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("RabbitMQ certificate-only authentication", func(t *testing.T) {
+		t.Setenv("RABBITMQ_URL", "amqps://rabbitmq/?auth_mechanism=external&certfile=client.pem&keyfile=client.key")
+		if _, err := Load(); err != nil {
+			t.Fatalf("Load() = %v, want certificate-only RabbitMQ config accepted", err)
+		}
+	})
 }
 
 func TestLoadDevelopmentAllowsExampleSecrets(t *testing.T) {

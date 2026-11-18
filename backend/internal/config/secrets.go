@@ -24,7 +24,7 @@ func (c *Config) validateSecrets(postgresPassword string) error {
 	if postgresPassword == "datingcoach" {
 		bad = append(bad, "POSTGRES_PASSWORD is a shipped default")
 	}
-	if uri, err := amqp.ParseURI(c.RabbitMQURL); err == nil && uri.Password == "guest" {
+	if uri, err := amqp.ParseURI(c.RabbitMQURL); err == nil && uri.Password == "guest" && usesRabbitMQPassword(uri.AuthMechanism) {
 		bad = append(bad, "RABBITMQ_URL uses the shipped default password")
 	}
 	switch c.SMTPPassword {
@@ -35,6 +35,15 @@ func (c *Config) validateSecrets(postgresPassword string) error {
 		return fmt.Errorf("refusing to start with example or weak secrets outside development: %s", strings.Join(bad, "; "))
 	}
 	return nil
+}
+
+func usesRabbitMQPassword(mechanisms []string) bool {
+	for _, mechanism := range mechanisms {
+		if !strings.EqualFold(mechanism, "EXTERNAL") {
+			return true
+		}
+	}
+	return len(mechanisms) == 0
 }
 
 func hasEnoughDistinctBytes(s string) bool {
