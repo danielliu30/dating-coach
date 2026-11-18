@@ -13,6 +13,8 @@ export interface Profile {
   phases_working_on: DatingPhase[];
   /** Free text: what the user is looking for. The analyzer tailors its hints to it. */
   dating_preferences: string;
+  /** Coaching-brain pillars the user wants to improve on; each message analysis scores them. */
+  coaching_goals: CoachingGoal[];
 }
 
 // Vocabularies mirror auth.DatingStyles / auth.DatingPhases in the backend.
@@ -42,12 +44,17 @@ export const DATING_PHASES = [
 ] as const;
 export type DatingPhase = (typeof DATING_PHASES)[number];
 
+// Mirrors auth.CoachingGoals in the backend and PILLAR_KEYS in the ML analyzer.
+export const COACHING_GOALS = ['agency', 'feedback', 'support'] as const;
+export type CoachingGoal = (typeof COACHING_GOALS)[number];
+
 export interface DatingProfileInput {
   dating_styles: DatingStyle[];
   phases_strong: DatingPhase[];
   phases_working_on: DatingPhase[];
   /** Trimmed server-side and capped at MAX_DATING_PREFERENCES_LEN characters. */
   dating_preferences: string;
+  coaching_goals: CoachingGoal[];
 }
 
 // Mirrors auth.MaxDatingPreferencesLen in the backend.
