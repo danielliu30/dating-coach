@@ -275,6 +275,25 @@ def test_bridge_keeps_the_first_human_label_in_input_order():
     assert [e.conversation_id for e in deduplicate([weak_b, human_a, human_b, bridge])] == ["human_a"]
 
 
+def test_weak_labeled_copy_replaces_an_unlabeled_first_copy():
+    bodies = ["hey there", "hi how are you", "good thanks", "want to grab coffee"]
+    unlabeled = TrainingExample.from_json(_payload("unlabeled", bodies, user_id="u1", outcome=None))
+    weak = TrainingExample.from_json(_payload("weak", bodies, user_id="u1", outcome="date_set"))
+    human = TrainingExample.from_json(
+        _payload(
+            "human",
+            bodies,
+            user_id="u1",
+            outcome=None,
+            segments=[{"start_position": 0, "end_position": 3, "engagement_score": 0.7}],
+        )
+    )
+
+    assert [e.conversation_id for e in deduplicate([unlabeled, weak])] == ["weak"]
+    assert [e.conversation_id for e in deduplicate([weak, unlabeled])] == ["weak"]
+    assert [e.conversation_id for e in deduplicate([unlabeled, weak, human])] == ["human"]
+
+
 def test_repeated_copies_of_one_user_skip_the_shingle_scan(monkeypatch):
     calls = []
     real_jaccard = dataset_module._jaccard
