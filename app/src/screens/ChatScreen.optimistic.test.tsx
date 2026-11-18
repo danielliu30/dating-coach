@@ -180,6 +180,28 @@ describe('ChatScreen optimistic sending', () => {
     expect(screen.getByText('Not sent: thread is closed')).toBeTruthy();
   });
 
+  it('replaces a closed-thread rejection by client id and does not resend it after reconnecting', async () => {
+    mount();
+    await waitFor(() => expect(mockSockets).toHaveLength(1));
+    act(() => latest().handlers.onStatus?.('closed'));
+    await typeAndSend('into a closed thread');
+    const [[, clientID]] = latest().send.mock.calls as [string, string][];
+
+    // The reconnect flushes the queued send, and the server refuses it.
+    act(() => latest().handlers.onStatus?.('open'));
+    act(() => latest().handlers.onEvent({ type: 'error', client_id: clientID, body: 'thread is closed' }));
+    expect(screen.queryByText('into a closed thread')).toBeNull();
+    expect(screen.getByText('Not sent: thread is closed')).toBeTruthy();
+
+    // A later reconnect and history refetch must not bring the bubble back or send it again.
+    act(() => latest().handlers.onStatus?.('closed'));
+    act(() => latest().handlers.onStatus?.('open'));
+    act(() => latest().handlers.onEvent({ type: 'history', messages: [] }));
+    expect(screen.queryByText('into a closed thread')).toBeNull();
+    expect(screen.queryAllByTestId('pending')).toHaveLength(0);
+    expect(latest().send).toHaveBeenCalledTimes(1);
+  });
+
   it('matches the echo even though the server trims the body', async () => {
     mount();
     await waitFor(() => expect(mockSockets).toHaveLength(1));

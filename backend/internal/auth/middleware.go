@@ -2,6 +2,8 @@ package auth
 
 import (
 	"context"
+	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -27,6 +29,9 @@ type Principal struct {
 	// ignore, since every request is authenticated again; long-lived
 	// connections cannot, and read it to stop outliving their own token.
 	ExpiresAt time.Time
+	// IssuedAt is when the presented token was minted, which the revocation
+	// check compares against: a token issued at or before a revocation is dead.
+	IssuedAt time.Time
 }
 
 // IsCoach reports whether the caller may use the coach-only endpoints.
@@ -38,41 +43,102 @@ func (p Principal) IsAdmin() bool { return p.Role == RoleAdmin }
 
 // bearerToken returns the request's JWT from the Authorization header, falling
 // back to the token query parameter that WebSocket clients must use because
-// they cannot set headers. It returns "" when the request carries neither.
+// they cannot set headers. The fallback is honoured only on WebSocket upgrade
+// requests to a /ws path (the only paths nginx redacts from its access log), so
+// plain HTTP and REST calls cannot authenticate via the URL. It returns ""
+// when the request carries no usable token.
 func bearerToken(r *http.Request) string {
 	raw := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer"))
-	if raw == "" {
+	if raw == "" && strings.HasSuffix(r.URL.Path, "/ws") && isWebSocketUpgrade(r) {
 		raw = r.URL.Query().Get("token")
 	}
 	return raw
 }
 
-// Middleware rejects requests without a valid bearer token.
-func Middleware(issuer *TokenIssuer) func(http.Handler) http.Handler {
+// isWebSocketUpgrade reports whether r asks to upgrade to the websocket
+// protocol, i.e. its Upgrade header lists "websocket" (case-insensitively).
+func isWebSocketUpgrade(r *http.Request) bool {
+	for _, v := range r.Header.Values("Upgrade") {
+		for _, proto := range strings.Split(v, ",") {
+			if strings.EqualFold(strings.TrimSpace(proto), "websocket") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isWebSocketHandshake reports whether r is a WebSocket opening handshake on a
+// socket route: a GET upgrading to websocket whose path ends in /ws. The
+// Upgrade header alone is client-controlled, so without the method and path a
+// leaked ticket would authorize any REST call that set it.
+func isWebSocketHandshake(r *http.Request) bool {
+	return r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/ws") && isWebSocketUpgrade(r)
+}
+
+// Middleware rejects requests without a valid bearer token. A WebSocket
+// handshake on a /ws route may instead carry a single-use ?ticket= minted by POST
+// /auth/ws-ticket, which tickets redeems; tickets may be nil to disable that.
+// Revocation checks fail closed with 503; revocations may be nil only in tests.
+func Middleware(issuer *TokenIssuer, tickets TicketRedeemer, revocations Revocations) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			raw := bearerToken(r)
-			if raw == "" {
-				httpx.Error(w, http.StatusUnauthorized, "missing bearer token")
+			principal, status, msg := authenticate(r, issuer, tickets)
+			if status != 0 {
+				httpx.Error(w, status, msg)
 				return
 			}
-			claims, err := issuer.Parse(raw)
-			if err != nil {
-				httpx.Error(w, http.StatusUnauthorized, "invalid token")
-				return
-			}
-			userID, err := claims.UserID()
-			if err != nil {
-				httpx.Error(w, http.StatusUnauthorized, "invalid token subject")
-				return
-			}
-			principal := Principal{UserID: userID, Email: claims.Email, Role: claims.Role, Scope: claims.Scope}
-			if claims.ExpiresAt != nil {
-				principal.ExpiresAt = claims.ExpiresAt.Time
+			if revocations != nil {
+				since, err := revocations.RevokedSince(r.Context(), principal.UserID)
+				if err != nil {
+					slog.Error("check session revocation", "error", err, "user_id", principal.UserID)
+					httpx.Error(w, http.StatusServiceUnavailable, "authentication unavailable")
+					return
+				}
+				if !since.IsZero() && !principal.IssuedAt.After(since) {
+					httpx.Error(w, http.StatusUnauthorized, "session revoked")
+					return
+				}
 			}
 			next.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), principal)))
 		})
 	}
+}
+
+// authenticate resolves r's caller from its ticket or bearer token. A non-zero
+// status is the error response to send instead.
+func authenticate(r *http.Request, issuer *TokenIssuer, tickets TicketRedeemer) (Principal, int, string) {
+	if ticket := r.URL.Query().Get("ticket"); ticket != "" && tickets != nil && isWebSocketHandshake(r) {
+		principal, err := tickets.Redeem(r.Context(), ticket)
+		switch {
+		case errors.Is(err, ErrInvalidTicket):
+			return Principal{}, http.StatusUnauthorized, "invalid ticket"
+		case err != nil:
+			slog.Error("redeem websocket ticket", "error", err)
+			return Principal{}, http.StatusServiceUnavailable, "authentication unavailable"
+		}
+		return principal, 0, ""
+	}
+	raw := bearerToken(r)
+	if raw == "" {
+		return Principal{}, http.StatusUnauthorized, "missing bearer token"
+	}
+	claims, err := issuer.Parse(raw)
+	if err != nil {
+		return Principal{}, http.StatusUnauthorized, "invalid token"
+	}
+	userID, err := claims.UserID()
+	if err != nil {
+		return Principal{}, http.StatusUnauthorized, "invalid token subject"
+	}
+	principal := Principal{UserID: userID, Email: claims.Email, Role: claims.Role, Scope: claims.Scope}
+	if claims.ExpiresAt != nil {
+		principal.ExpiresAt = claims.ExpiresAt.Time
+	}
+	if claims.IssuedAt != nil {
+		principal.IssuedAt = claims.IssuedAt.Time
+	}
+	return principal, 0, ""
 }
 
 // RequireScope rejects callers whose token was not issued for the given scope.
