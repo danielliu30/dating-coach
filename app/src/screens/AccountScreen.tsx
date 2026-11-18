@@ -285,7 +285,7 @@ export default function AccountScreen(): React.ReactElement {
       <View style={shared.card}>
         <SectionHeader
           title="What you want to improve"
-          caption="Pick the parts of the coaching approach you want to work on. Each message analysis scores you on them."
+          caption="Pick what you want to work on. Analyses score these where the conversation gives evidence."
           icon="trending-up-outline"
           hue="sage"
         />

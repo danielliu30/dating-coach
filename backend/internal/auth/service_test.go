@@ -540,9 +540,6 @@ func TestSignInRefusesAccountWithoutPassword(t *testing.T) {
 	}
 }
 
-// TestUpdateDatingProfileRejectsUnknownCoachingGoal pins that coaching goals
-// come from the coaching-brain pillar keys the ML analyzer accepts; anything
-// else is refused before any query runs.
 func TestUpdateDatingProfileRejectsUnknownCoachingGoal(t *testing.T) {
 	svc := &Service{}
 	_, err := svc.UpdateDatingProfile(context.Background(), Principal{}, DatingProfileInput{
@@ -553,9 +550,6 @@ func TestUpdateDatingProfileRejectsUnknownCoachingGoal(t *testing.T) {
 	}
 }
 
-// TestUpdateDatingProfileStoresCoachingGoals round-trips coaching goals through
-// the real query: they come back normalised to pillar order, GET /auth/me's
-// row carries them, and an omitted list clears them like every other list.
 func TestUpdateDatingProfileStoresCoachingGoals(t *testing.T) {
 	svc, _, pool := newTestService(t)
 	ctx := context.Background()
@@ -594,6 +588,13 @@ func TestUpdateDatingProfileStoresCoachingGoals(t *testing.T) {
 	}
 
 	profile, err = svc.UpdateDatingProfile(ctx, principal, DatingProfileInput{DatingPreferences: "Someone kind"})
+	if err != nil {
+		t.Fatalf("update without goals: %v", err)
+	}
+	if want := []string{"agency", "support"}; !slices.Equal(profile.CoachingGoals, want) {
+		t.Fatalf("omitted coaching_goals = %v, want %v", profile.CoachingGoals, want)
+	}
+	profile, err = svc.UpdateDatingProfile(ctx, principal, DatingProfileInput{CoachingGoals: []string{}})
 	if err != nil {
 		t.Fatalf("clear: %v", err)
 	}
