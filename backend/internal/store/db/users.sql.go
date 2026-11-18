@@ -15,7 +15,7 @@ import (
 const createUser = `-- name: CreateUser :one
 INSERT INTO users (email, password_hash, display_name, role)
 VALUES ($1, $2, $3, $4)
-RETURNING id, email, password_hash, display_name, role, email_verified, created_at, updated_at, deleted_at, dating_styles, phases_strong, phases_working_on, dating_preferences, sessions_revoked_at
+RETURNING id, email, password_hash, display_name, role, email_verified, created_at, updated_at, deleted_at, dating_styles, phases_strong, phases_working_on, dating_preferences, coaching_goals, sessions_revoked_at
 `
 
 type CreateUserParams struct {
@@ -47,6 +47,7 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.PhasesStrong,
 		&i.PhasesWorkingOn,
 		&i.DatingPreferences,
+		&i.CoachingGoals,
 		&i.SessionsRevokedAt,
 	)
 	return i, err
@@ -55,7 +56,7 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 const createVerifiedUser = `-- name: CreateVerifiedUser :one
 INSERT INTO users (email, password_hash, display_name, role, email_verified)
 VALUES ($1, $2, $3, $4, true)
-RETURNING id, email, password_hash, display_name, role, email_verified, created_at, updated_at, deleted_at, dating_styles, phases_strong, phases_working_on, dating_preferences, sessions_revoked_at
+RETURNING id, email, password_hash, display_name, role, email_verified, created_at, updated_at, deleted_at, dating_styles, phases_strong, phases_working_on, dating_preferences, coaching_goals, sessions_revoked_at
 `
 
 type CreateVerifiedUserParams struct {
@@ -87,6 +88,7 @@ func (q *Queries) CreateVerifiedUser(ctx context.Context, arg CreateVerifiedUser
 		&i.PhasesStrong,
 		&i.PhasesWorkingOn,
 		&i.DatingPreferences,
+		&i.CoachingGoals,
 		&i.SessionsRevokedAt,
 	)
 	return i, err
@@ -105,7 +107,7 @@ func (q *Queries) DeleteUser(ctx context.Context, id uuid.UUID) (int64, error) {
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, email, password_hash, display_name, role, email_verified, created_at, updated_at, deleted_at, dating_styles, phases_strong, phases_working_on, dating_preferences, sessions_revoked_at FROM users WHERE email = $1 AND deleted_at IS NULL
+SELECT id, email, password_hash, display_name, role, email_verified, created_at, updated_at, deleted_at, dating_styles, phases_strong, phases_working_on, dating_preferences, coaching_goals, sessions_revoked_at FROM users WHERE email = $1 AND deleted_at IS NULL
 `
 
 func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error) {
@@ -125,13 +127,14 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 		&i.PhasesStrong,
 		&i.PhasesWorkingOn,
 		&i.DatingPreferences,
+		&i.CoachingGoals,
 		&i.SessionsRevokedAt,
 	)
 	return i, err
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, email, password_hash, display_name, role, email_verified, created_at, updated_at, deleted_at, dating_styles, phases_strong, phases_working_on, dating_preferences, sessions_revoked_at FROM users WHERE id = $1 AND deleted_at IS NULL
+SELECT id, email, password_hash, display_name, role, email_verified, created_at, updated_at, deleted_at, dating_styles, phases_strong, phases_working_on, dating_preferences, coaching_goals, sessions_revoked_at FROM users WHERE id = $1 AND deleted_at IS NULL
 `
 
 func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (User, error) {
@@ -151,6 +154,7 @@ func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (User, error) {
 		&i.PhasesStrong,
 		&i.PhasesWorkingOn,
 		&i.DatingPreferences,
+		&i.CoachingGoals,
 		&i.SessionsRevokedAt,
 	)
 	return i, err
@@ -188,7 +192,7 @@ func (q *Queries) ListSessionRevocationsSince(ctx context.Context, since time.Ti
 }
 
 const lockUserForRefresh = `-- name: LockUserForRefresh :one
-SELECT id, email, password_hash, display_name, role, email_verified, created_at, updated_at, deleted_at, dating_styles, phases_strong, phases_working_on, dating_preferences, sessions_revoked_at FROM users WHERE id = $1 AND deleted_at IS NULL FOR UPDATE
+SELECT id, email, password_hash, display_name, role, email_verified, created_at, updated_at, deleted_at, dating_styles, phases_strong, phases_working_on, dating_preferences, coaching_goals, sessions_revoked_at FROM users WHERE id = $1 AND deleted_at IS NULL FOR UPDATE
 `
 
 // Serialises a refresh-token rotation against a concurrent reuse revocation,
@@ -210,6 +214,7 @@ func (q *Queries) LockUserForRefresh(ctx context.Context, id uuid.UUID) (User, e
 		&i.PhasesStrong,
 		&i.PhasesWorkingOn,
 		&i.DatingPreferences,
+		&i.CoachingGoals,
 		&i.SessionsRevokedAt,
 	)
 	return i, err
@@ -238,9 +243,10 @@ SET dating_styles = $2,
     phases_strong = $3,
     phases_working_on = $4,
     dating_preferences = $5,
+    coaching_goals = COALESCE($6::text[], coaching_goals),
     updated_at = now()
 WHERE id = $1 AND deleted_at IS NULL
-RETURNING id, email, password_hash, display_name, role, email_verified, created_at, updated_at, deleted_at, dating_styles, phases_strong, phases_working_on, dating_preferences, sessions_revoked_at
+RETURNING id, email, password_hash, display_name, role, email_verified, created_at, updated_at, deleted_at, dating_styles, phases_strong, phases_working_on, dating_preferences, coaching_goals, sessions_revoked_at
 `
 
 type UpdateUserDatingProfileParams struct {
@@ -249,6 +255,7 @@ type UpdateUserDatingProfileParams struct {
 	PhasesStrong      []string  `json:"phases_strong"`
 	PhasesWorkingOn   []string  `json:"phases_working_on"`
 	DatingPreferences string    `json:"dating_preferences"`
+	CoachingGoals     []string  `json:"coaching_goals"`
 }
 
 func (q *Queries) UpdateUserDatingProfile(ctx context.Context, arg UpdateUserDatingProfileParams) (User, error) {
@@ -258,6 +265,7 @@ func (q *Queries) UpdateUserDatingProfile(ctx context.Context, arg UpdateUserDat
 		arg.PhasesStrong,
 		arg.PhasesWorkingOn,
 		arg.DatingPreferences,
+		arg.CoachingGoals,
 	)
 	var i User
 	err := row.Scan(
@@ -274,6 +282,7 @@ func (q *Queries) UpdateUserDatingProfile(ctx context.Context, arg UpdateUserDat
 		&i.PhasesStrong,
 		&i.PhasesWorkingOn,
 		&i.DatingPreferences,
+		&i.CoachingGoals,
 		&i.SessionsRevokedAt,
 	)
 	return i, err
@@ -307,7 +316,7 @@ SET email_verified = true,
     updated_at = now()
 WHERE id = $1
   AND deleted_at IS NULL
-RETURNING id, email, password_hash, display_name, role, email_verified, created_at, updated_at, deleted_at, dating_styles, phases_strong, phases_working_on, dating_preferences, sessions_revoked_at
+RETURNING id, email, password_hash, display_name, role, email_verified, created_at, updated_at, deleted_at, dating_styles, phases_strong, phases_working_on, dating_preferences, coaching_goals, sessions_revoked_at
 `
 
 func (q *Queries) VerifyUserEmail(ctx context.Context, id uuid.UUID) (User, error) {
@@ -327,6 +336,7 @@ func (q *Queries) VerifyUserEmail(ctx context.Context, id uuid.UUID) (User, erro
 		&i.PhasesStrong,
 		&i.PhasesWorkingOn,
 		&i.DatingPreferences,
+		&i.CoachingGoals,
 		&i.SessionsRevokedAt,
 	)
 	return i, err
