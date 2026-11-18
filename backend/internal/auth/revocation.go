@@ -2,7 +2,6 @@ package auth
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -20,7 +19,9 @@ const (
 	// revokedChannel carries freshly revoked account IDs to every replica, so
 	// connections already authenticated elsewhere can be dropped at once rather
 	// than at their next durable re-check.
-	revokedChannel = "auth:revoked"
+	revokedChannel       = "auth:revoked"
+	revocationsReadyKey  = "auth:revocations:restored"
+	revocationsReplayKey = "auth:revocations:replaying"
 )
 
 // revocationGrace pads an entry beyond the token lifetime it is given, covering
@@ -73,6 +74,11 @@ type SessionRevocationLister interface {
 // announcing would also drop sockets opened by a sign-in after the cutoff.
 // Older sockets close on their heartbeat check instead.
 func (d *Denylist) ReplayRevocations(ctx context.Context, lister SessionRevocationLister) error {
+	// A flush during replay must not let a partially restored cache become ready.
+	replayID := uuid.NewString()
+	if err := d.rdb.Set(ctx, revocationsReplayKey, replayID, 0).Err(); err != nil {
+		return fmt.Errorf("start revocation replay: %w", err)
+	}
 	rows, err := lister.ListSessionRevocationsSince(ctx, time.Now().Add(-d.ttl))
 	if err != nil {
 		return fmt.Errorf("list session revocations: %w", err)
@@ -86,8 +92,21 @@ func (d *Denylist) ReplayRevocations(ctx context.Context, lister SessionRevocati
 			return err
 		}
 	}
+	ready, err := finishRevocationReplay.Run(ctx, d.rdb, []string{revocationsReplayKey, revocationsReadyKey}, replayID).Int()
+	if err != nil {
+		return fmt.Errorf("finish revocation replay: %w", err)
+	}
+	if ready == 0 {
+		return ErrRevocationUnavailable
+	}
 	return nil
 }
+
+var finishRevocationReplay = redis.NewScript(`
+if redis.call("GET", KEYS[1]) ~= ARGV[1] then return 0 end
+redis.call("SET", KEYS[2], "1")
+return 1
+`)
 
 const RevocationReplayPeriod = 15 * time.Second
 
@@ -180,12 +199,19 @@ func WatchRevocations(ctx context.Context, rdb *redis.Client, onRevoked func(uui
 // timestamp (Revoke's, or one written before entries carried one) revokes
 // every token.
 func (d *Denylist) RevokedSince(ctx context.Context, userID uuid.UUID) (time.Time, error) {
-	val, err := d.rdb.Get(ctx, revokedKeyPrefix+userID.String()).Result()
-	if errors.Is(err, redis.Nil) {
-		return time.Time{}, nil
-	}
+	values, err := d.rdb.MGet(ctx, revocationsReadyKey, revokedKeyPrefix+userID.String()).Result()
 	if err != nil {
 		return time.Time{}, fmt.Errorf("check revocation for %s: %w", userID, err)
+	}
+	if values[0] != "1" {
+		return time.Time{}, ErrRevocationUnavailable
+	}
+	if values[1] == nil {
+		return time.Time{}, nil
+	}
+	val, ok := values[1].(string)
+	if !ok {
+		return revokeEverything, nil
 	}
 	nanos, err := strconv.ParseInt(val, 10, 64)
 	if err != nil || nanos < minRevocationNanos {
