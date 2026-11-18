@@ -177,6 +177,8 @@ func (h *Handler) verify(w http.ResponseWriter, r *http.Request) {
 	}
 	session, err := h.svc.VerifyEmail(r.Context(), in.Email, in.Code, bearerToken(r))
 	switch {
+	case errors.Is(err, ErrSessionRevoked):
+		httpx.Error(w, http.StatusUnauthorized, err.Error())
 	case errors.Is(err, ErrInvalidCode):
 		httpx.Error(w, http.StatusBadRequest, err.Error())
 	case err != nil:
