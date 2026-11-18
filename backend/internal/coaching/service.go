@@ -710,6 +710,9 @@ func (s *Service) BookSession(ctx context.Context, userID uuid.UUID, in BookInpu
 	defer func() { _ = tx.Rollback(ctx) }()
 	q := s.queries.WithTx(tx)
 
+	if err := lockBookingSlot(ctx, q, coachID, scheduled, duration); err != nil {
+		return Session{}, err
+	}
 	session, err := q.CreateCoachingSession(ctx, db.CreateCoachingSessionParams{
 		UserID:            userID,
 		CoachID:           coachID,
@@ -739,6 +742,26 @@ func (s *Service) BookSession(ctx context.Context, userID uuid.UUID, in BookInpu
 		return Session{}, fmt.Errorf("commit booking: %w", err)
 	}
 	return sessionOf(session, ""), nil
+}
+
+// lockBookingSlot serializes inserts for a coach before they reach the GiST
+// exclusion check. Recheck after acquiring the lock so a losing insert cannot
+// deadlock with an update to the winning reservation either.
+func lockBookingSlot(ctx context.Context, q *db.Queries, coachID uuid.UUID, start time.Time, duration int32) error {
+	if err := q.LockCoachForBooking(ctx, coachID); err != nil {
+		return fmt.Errorf("lock coach for booking: %w", err)
+	}
+	booked, err := q.ListBookedSlots(ctx, db.ListBookedSlotsParams{
+		CoachID: coachID, ScheduledTime: start.Add(-maxSessionMinutes * time.Minute),
+		ScheduledTime_2: start.Add(time.Duration(duration) * time.Minute),
+	})
+	if err != nil {
+		return fmt.Errorf("list booked slots: %w", err)
+	}
+	if overlapsBooked(start, duration, booked, nil) {
+		return ErrSlotTaken
+	}
+	return nil
 }
 
 // respondDeadline is when a request made at now for a session at start expires
