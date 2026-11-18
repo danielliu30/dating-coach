@@ -72,7 +72,9 @@ _SOCIAL_HANDLE = re.compile(
     r"(\s*(?::|=|-|\bis\b)\s*)(?!\[)([A-Za-z0-9_.]+)",
     re.IGNORECASE,
 )
-_PHONE = re.compile(r"(?<![\w+])\+?\d(?:[\d\s()-]|\.(?!\s)){5,}\d(?!\w|:\d)")
+_PHONE = re.compile(r"(?<![\w+])\+?\d[\d\s().-]{5,}\d(?!\w|:\d)")
+# What may follow a date that a phone match swallowed: a space or sentence end.
+_AFTER_DATE = re.compile(r"[.,;!?]?(?:\s|$)")
 _DATE = re.compile(r"\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}")
 _TRAILING = ".,;:!?)]}'\""
 
@@ -135,7 +137,7 @@ class Pseudonymiser:
     def _phone(self, match: re.Match) -> str:
         text = match.group(0)
         date = _DATE.match(text)
-        if date:
+        if date and _AFTER_DATE.match(text, date.end()):
             return date.group(0) + _PHONE.sub(self._phone, text[date.end():])
         if sum(ch.isdigit() for ch in text) < 7:
             return text
