@@ -257,30 +257,17 @@ submitted transcripts, and `training_examples` holds labels
 `consented`). The app asks the user, after they read their analysis, what
 happened next — that is where `outcome` comes from.
 
-Export a dataset:
+From `ml-analyzer`, export consented, pseudonymised data (gitignored):
 
-```sql
-\copy (
-  SELECT json_build_object(
-    'conversation_id', c.id,
-    'user_id',        c.user_id,
-    'platform',       c.platform,
-    'consented',      t.consented,
-    'reply_received', t.reply_received,
-    'outcome',        t.outcome,
-    'segments',       t.segment_labels,
-    'messages',       json_agg(json_build_object(
-                        'position', m.position, 'sender', m.sender,
-                        'body', m.body, 'sent_at', m.sent_at
-                      ) ORDER BY m.position)
-  )
-  FROM training_examples t
-  JOIN conversations c ON c.id = t.conversation_id
-  JOIN messages m      ON m.conversation_id = c.id
-  WHERE t.consented
-  GROUP BY c.id, c.user_id, c.platform, t.consented, t.reply_received, t.outcome, t.segment_labels
-) TO 'data/labeled.jsonl';
+```bash
+python -m scripts.export_dataset --database-url "$DATABASE_URL" --out data/labeled.jsonl
+# or through the compose database:
+python -m scripts.export_dataset \
+    --psql "docker compose exec -T postgres psql -U datingcoach -d datingcoach"
 ```
+
+Pass the URL explicitly; without it, psql uses its connection defaults.
+Unknown names are not caught, so spot-check before sharing outside the team.
 
 Ground rules: only export `consented` rows, pseudonymise names/handles/links
 before they leave the database, and keep an opt-out path that deletes a user's
@@ -292,8 +279,43 @@ and keep the eval set user-disjoint from training.
 ### 2. Label
 
 See [`training/data_schema.md`](training/data_schema.md) for the schema and the
-annotation rubric. A cheap bootstrap: run the LLM backend over your archive,
-have annotators *correct* the scores rather than produce them from scratch.
+annotation rubric.
+
+1. **Pre-label.** An LLM API key is required. Calls are sequential; reruns skip
+   saved conversations, and human-labeled conversations are skipped.
+   Heuristic fallback suggestions are marked `prelabel.fallback: true`.
+
+   ```bash
+   LLM_API_KEY=... python -m scripts.llm_prelabel --data data/labeled.jsonl --out data/prelabeled.jsonl
+   ```
+
+2. **Annotate.** Two annotators each copy `data/prelabeled.jsonl` to a uniquely
+   named file in `data/annotations/` and fill in `segments[].engagement_score`
+   (finite, 0–1), using `suggested_score` as a starting point. An `annotator`
+   field overrides the file stem as their identity.
+
+3. **Review.** Disagreements above 0.25 go to the adjudication file; fill in
+   its `engagement_score` values. The summary also counts segments needing
+   another annotator.
+
+   ```bash
+   python -m scripts.review_labels data/annotations/*.jsonl --adjudication-out data/adjudicate.jsonl
+   ```
+
+4. **Merge.** Adjudicated scores win; otherwise use the mean of at least two
+   scores with spread ≤0.25. Unresolved segments are omitted. Use a fresh base
+   export: reviewed conversations replace all their base rows (or are omitted
+   if wholly unresolved); missing/non-consented conversations are dropped.
+
+   ```bash
+   python -m scripts.review_labels data/annotations/*.jsonl --adjudicated data/adjudicate.jsonl \
+       --final-out data/train.jsonl --base data/labeled.jsonl
+   ```
+
+   `--base` requires `--final-out`; without a base, only resolved annotations
+   are written and current consent cannot be checked. Keep `--adjudication-out`
+   distinct from the filled `--adjudicated` file. Pass `--data data/train.jsonl`
+   to `train.py` below.
 
 ### 3. Train
 
