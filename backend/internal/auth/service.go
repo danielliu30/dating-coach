@@ -176,6 +176,8 @@ func (s *Service) DeleteAccount(ctx context.Context, userID uuid.UUID) error {
 // because the denylist is unreachable; the caller should retry.
 var ErrRevocationUnavailable = errors.New("session revocation unavailable")
 
+var ErrSessionRevoked = errors.New("session revoked")
+
 // SignOut ends userID's sessions on every device.
 // The worker replays the Postgres cutoff after a Redis outage or flush.
 func (s *Service) SignOut(ctx context.Context, userID uuid.UUID) error {
@@ -631,9 +633,32 @@ func (s *Service) VerifyEmail(ctx context.Context, email, code, bearer string) (
 	if !owns {
 		return Session{User: profile}, nil
 	}
-	session, err := s.openSession(ctx, s.queries, user, uuid.Nil)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Session{}, fmt.Errorf("begin verification: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := s.queries.WithTx(tx)
+	user, err = q.LockUserForRefresh(ctx, user.ID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Session{}, ErrSessionRevoked
+	}
+	if err != nil {
+		return Session{}, fmt.Errorf("lock verification user: %w", err)
+	}
+	claims, err := s.issuer.Parse(bearer)
+	if err != nil {
+		return Session{}, ErrSessionRevoked
+	}
+	if user.SessionsRevokedAt != nil && (claims.IssuedAt == nil || !claims.IssuedAt.After(*user.SessionsRevokedAt)) {
+		return Session{}, ErrSessionRevoked
+	}
+	session, err := s.openSession(ctx, q, user, uuid.Nil)
 	if err != nil {
 		return Session{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Session{}, fmt.Errorf("commit verification: %w", err)
 	}
 	slog.Info("session issued", "user_id", user.ID, "reason", "verify email",
 		"expires_at", session.ExpiresAt)
@@ -682,7 +707,10 @@ func (s *Service) ownsBearer(ctx context.Context, userID uuid.UUID, bearer strin
 	if claims.IssuedAt != nil {
 		issuedAt = claims.IssuedAt.Time
 	}
-	return since.IsZero() || issuedAt.After(since), nil
+	if !since.IsZero() && !issuedAt.After(since) {
+		return false, ErrSessionRevoked
+	}
+	return true, nil
 }
 
 // ResendVerification issues a fresh code, replacing any outstanding one, and

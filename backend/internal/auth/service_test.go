@@ -362,11 +362,80 @@ func TestVerifyEmailRefusesARevokedBearer(t *testing.T) {
 		t.Fatalf("revoke sessions: %v", err)
 	}
 	got, err := svc.VerifyEmail(ctx, user.email, "", session.Token)
-	if err != nil {
-		t.Fatalf("verify email: %v", err)
+	if !errors.Is(err, ErrSessionRevoked) {
+		t.Fatalf("verify email: %v, want ErrSessionRevoked", err)
 	}
 	if got.Token != "" || got.RefreshToken != "" {
 		t.Fatalf("verify email with a revoked bearer issued a session")
+	}
+}
+
+func TestVerifyEmailSerializesSessionMintingWithRevocation(t *testing.T) {
+	svc, _, pool := newTestService(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	user := verifiedUser(t, svc, pool)
+	session, err := svc.SignIn(ctx, user.email, user.password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh, err := svc.VerifyEmail(ctx, user.email, "", session.Token); err != nil || fresh.RefreshToken == "" {
+		t.Fatalf("normal verification = %+v, %v", fresh, err)
+	}
+	userID := uuid.MustParse(session.User.ID)
+	var before int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM refresh_tokens WHERE user_id = $1", userID).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	if _, err := svc.queries.WithTx(tx).LockUserForRefresh(ctx, userID); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		req := httptest.NewRequest(http.MethodPost, "/verify", strings.NewReader(fmt.Sprintf(`{"email":%q}`, user.email))).WithContext(ctx)
+		req.Header.Set("Authorization", "Bearer "+session.Token)
+		NewHandler(svc, nil).verify(rec, req)
+	}()
+	// Wait until verification has passed Redis and is blocked on our account lock.
+	for {
+		var blocked bool
+		if err := pool.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid)))", tx.Conn().PgConn().PID()).Scan(&blocked); err != nil {
+			t.Fatal(err)
+		}
+		if blocked {
+			break
+		}
+		select {
+		case <-done:
+			t.Fatal("verification did not wait for the account lock")
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	if err := svc.queries.WithTx(tx).RecordSessionRevocation(ctx, db.RecordSessionRevocationParams{ID: userID, RevokedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	<-done
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("verify status = %d, want 401: %s", rec.Code, rec.Body)
+	}
+	var after int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM refresh_tokens WHERE user_id = $1", userID).Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if after != before {
+		t.Fatalf("refresh token rows = %d, want %d", after, before)
 	}
 }
 
