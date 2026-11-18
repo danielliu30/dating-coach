@@ -50,6 +50,11 @@ func NewTokenIssuer(secret string) *TokenIssuer {
 	return &TokenIssuer{secret: []byte(secret)}
 }
 
+// Sign-out and refresh-reuse cutoffs are finer than a second, so tokens carry
+// sub-second iat/exp; at the default whole-second precision a sign-in in the
+// same second as a sign-out would be treated as issued before it.
+func init() { jwt.TimePrecision = time.Microsecond }
+
 // Issue mints a signed token for a user and reports when it expires, which the
 // sign-up and sign-in responses hand to clients as the session expiry. Scope
 // and ttl are per call, so the same issuer mints both the short-lived verify
