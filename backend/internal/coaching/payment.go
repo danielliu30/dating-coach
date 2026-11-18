@@ -58,7 +58,16 @@ func (s *Service) bookPaid(ctx context.Context, userID, coachID uuid.UUID, sched
 		holdUntil = scheduled
 	}
 
-	session, err := s.queries.CreatePendingPaymentSession(ctx, db.CreatePendingPaymentSessionParams{
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Session{}, fmt.Errorf("begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := s.queries.WithTx(tx)
+	if err := lockBookingSlot(ctx, q, coachID, scheduled, duration); err != nil {
+		return Session{}, err
+	}
+	session, err := q.CreatePendingPaymentSession(ctx, db.CreatePendingPaymentSessionParams{
 		UserID:          userID,
 		CoachID:         coachID,
 		ScheduledTime:   scheduled,
@@ -73,6 +82,10 @@ func (s *Service) bookPaid(ctx context.Context, userID, coachID uuid.UUID, sched
 			return Session{}, ErrSlotTaken
 		}
 		return Session{}, fmt.Errorf("create pending session: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return Session{}, fmt.Errorf("commit booking: %w", err)
 	}
 
 	checkout, err := s.payments.CreateCheckout(ctx, payments.CheckoutInput{

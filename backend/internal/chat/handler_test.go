@@ -42,7 +42,42 @@ func TestSessionStatus(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			h := NewHandler(nil, nil, tc.accounts, nil)
-			if got := h.sessionStatus(context.Background(), uuid.New()); got != tc.want {
+			if got := h.sessionStatus(context.Background(), auth.Principal{UserID: uuid.New()}); got != tc.want {
+				t.Fatalf("sessionStatus = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+type stubRevocations struct {
+	since time.Time
+	err   error
+}
+
+func (s stubRevocations) RevokedSince(context.Context, uuid.UUID) (time.Time, error) {
+	return s.since, s.err
+}
+
+func TestSessionStatusHonoursRevocationCutoff(t *testing.T) {
+	signedOut := time.Now()
+	tests := []struct {
+		name        string
+		revocations stubRevocations
+		issuedAt    time.Time
+		want        socketVerdict
+	}{
+		{"never revoked keeps its socket", stubRevocations{}, signedOut, socketActive},
+		{"token from before the sign-out loses its socket", stubRevocations{since: signedOut}, signedOut.Add(-time.Minute), socketRevoked},
+		{"token minted at the cutoff loses its socket", stubRevocations{since: signedOut}, signedOut, socketRevoked},
+		{"token from a later sign-in keeps its socket", stubRevocations{since: signedOut}, signedOut.Add(time.Second), socketActive},
+		{"unreachable redis fails closed but stays retryable", stubRevocations{err: errors.New("dial redis: connection refused")}, signedOut, socketUnverifiable},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h := NewHandler(nil, nil, stubAccounts{active: true}, nil)
+			h.SetRevocations(tc.revocations)
+			principal := auth.Principal{UserID: uuid.New(), IssuedAt: tc.issuedAt}
+			if got := h.sessionStatus(context.Background(), principal); got != tc.want {
 				t.Fatalf("sessionStatus = %d, want %d", got, tc.want)
 			}
 		})
@@ -159,14 +194,14 @@ func TestSessionStatusReadsTheAccountRow(t *testing.T) {
 	})
 
 	h := NewHandler(nil, nil, db.New(pool), nil)
-	if got := h.sessionStatus(ctx, userID); got != socketActive {
+	if got := h.sessionStatus(ctx, auth.Principal{UserID: userID}); got != socketActive {
 		t.Fatalf("sessionStatus of a live account = %d, want %d", got, socketActive)
 	}
 
 	if _, err := pool.Exec(ctx, "UPDATE users SET deleted_at = now() WHERE id = $1", userID); err != nil {
 		t.Fatalf("mark user deleted: %v", err)
 	}
-	if got := h.sessionStatus(ctx, userID); got != socketRevoked {
+	if got := h.sessionStatus(ctx, auth.Principal{UserID: userID}); got != socketRevoked {
 		t.Fatalf("sessionStatus of a deleted account = %d, want %d", got, socketRevoked)
 	}
 }

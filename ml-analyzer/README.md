@@ -39,9 +39,10 @@ a pillar's name or principles are reworded.
 The LLM `SYSTEM_PROMPT` is composed from the rendered pillars
 (`render_pillars()`), not written by hand, and `BRAIN_VERSION` is appended to
 `model_version` together with `AGENCY_VERSION` (e.g.
-`llm-openai-gpt-4o+brain-v1+agency-v3`) so every stored result is traceable to
+`llm-openai-gpt-4o+brain-v2+agency-v3`) so every stored result is traceable to
 both the philosophy revision and the enforcement policy that produced it. Bump
-`BRAIN_VERSION` (`app/coaching/brain.py`) when a pillar's principles change, and
+`BRAIN_VERSION` (`app/coaching/brain.py`) when a pillar's principles or the way
+prompts are composed from them change, and
 `AGENCY_VERSION` (`app/coaching/agency.py`) when the `enforce_agency` gate
 changes which outputs it accepts.
 
@@ -145,6 +146,7 @@ Request:
 | `match_name` | string | Optional. Used in the prompt, and by the agency gate so that claims or advice naming the match ("Sam isn't into you") are caught like pronoun forms. |
 | `messages[]` | array | `position` (0-based), `sender` (`self`\|`match`), `body`, optional `sent_at`. Only `self` messages are scored. |
 | `preferences` | string | Optional, ≤2000 chars. What the customer is looking for; feedback is tailored to it. |
+| `focus_areas[]` | array | Optional, defaults to `[]`. Coaching-brain pillar keys (`agency`, `feedback`, `support`) the customer wants to improve on; normalised to lowercase, deduplicated and put in pillar order. Unknown keys are a 422. |
 
 Response:
 
@@ -152,7 +154,7 @@ Response:
 | --- | --- | --- |
 | `model_version` | string | Which backend/model produced the scores. Stored with the result. |
 | `segments[]` | array | `start_position`, `end_position`, `engagement_score` (0–1), `label` (`engaging`\|`neutral`\|`flat`), `comment`. |
-| `overall` | object | `engagement_score`, `summary`, `strengths[]`, `improvements[]`, `reflection_questions[]`, `patterns[]`. |
+| `overall` | object | `engagement_score`, `summary`, `strengths[]`, `improvements[]`, `reflection_questions[]`, `patterns[]`, `goal_scores[]`. |
 
 `overall.reflection_questions[]` are open, non-directive questions that turn the
 analysis inward ("did you actually enjoy this conversation?"); the heuristic
@@ -161,6 +163,15 @@ always emits at least one when the customer wrote anything.
 the whole conversation — e.g. "You sent about twice as many messages as they
 did in this conversation (5 to 2)." — and are empty when nothing recurs. Both
 default to `[]`, so clients that predate them are unaffected.
+`overall.goal_scores[]` holds `{goal, score (0–1), comment}` entries, at most
+one per requested focus area (`goal` is the pillar key); it is `[]` when no
+focus areas were requested.
+The heuristic scorer (and so the LLM fallback) only scores the areas it has a
+signal for: `feedback` is the mean reply-outcome score of the customer's
+messages, `agency` the balance of effort (messages and words) between the
+customer and the match, needing at least three customer messages. `support` is
+about the coach's stance rather than anything in the messages, so the
+heuristic never scores it.
 
 `label` is always derived from the score (≥0.66 engaging, ≥0.4 neutral, else
 flat), so it is consistent across backends. `comment`, `summary` and
@@ -253,30 +264,17 @@ submitted transcripts, and `training_examples` holds labels
 `consented`). The app asks the user, after they read their analysis, what
 happened next — that is where `outcome` comes from.
 
-Export a dataset:
+From `ml-analyzer`, export consented, pseudonymised data (gitignored):
 
-```sql
-\copy (
-  SELECT json_build_object(
-    'conversation_id', c.id,
-    'user_id',        c.user_id,
-    'platform',       c.platform,
-    'consented',      t.consented,
-    'reply_received', t.reply_received,
-    'outcome',        t.outcome,
-    'segments',       t.segment_labels,
-    'messages',       json_agg(json_build_object(
-                        'position', m.position, 'sender', m.sender,
-                        'body', m.body, 'sent_at', m.sent_at
-                      ) ORDER BY m.position)
-  )
-  FROM training_examples t
-  JOIN conversations c ON c.id = t.conversation_id
-  JOIN messages m      ON m.conversation_id = c.id
-  WHERE t.consented
-  GROUP BY c.id, c.user_id, c.platform, t.consented, t.reply_received, t.outcome, t.segment_labels
-) TO 'data/labeled.jsonl';
+```bash
+python -m scripts.export_dataset --database-url "$DATABASE_URL" --out data/labeled.jsonl
+# or through the compose database:
+python -m scripts.export_dataset \
+    --psql "docker compose exec -T postgres psql -U datingcoach -d datingcoach"
 ```
+
+Pass the URL explicitly; without it, psql uses its connection defaults.
+Unknown names are not caught, so spot-check before sharing outside the team.
 
 Ground rules: only export `consented` rows, pseudonymise names/handles/links
 before they leave the database, and keep an opt-out path that deletes a user's
@@ -296,8 +294,43 @@ hand-labeled, user-disjoint holdout before relying on the gate. Other files in
 ### 2. Label
 
 See [`training/data_schema.md`](training/data_schema.md) for the schema and the
-annotation rubric. A cheap bootstrap: run the LLM backend over your archive,
-have annotators *correct* the scores rather than produce them from scratch.
+annotation rubric.
+
+1. **Pre-label.** An LLM API key is required. Calls are sequential; reruns skip
+   saved conversations, and human-labeled conversations are skipped.
+   Heuristic fallback suggestions are marked `prelabel.fallback: true`.
+
+   ```bash
+   LLM_API_KEY=... python -m scripts.llm_prelabel --data data/labeled.jsonl --out data/prelabeled.jsonl
+   ```
+
+2. **Annotate.** Two annotators each copy `data/prelabeled.jsonl` to a uniquely
+   named file in `data/annotations/` and fill in `segments[].engagement_score`
+   (finite, 0–1), using `suggested_score` as a starting point. An `annotator`
+   field overrides the file stem as their identity.
+
+3. **Review.** Disagreements above 0.25 go to the adjudication file; fill in
+   its `engagement_score` values. The summary also counts segments needing
+   another annotator.
+
+   ```bash
+   python -m scripts.review_labels data/annotations/*.jsonl --adjudication-out data/adjudicate.jsonl
+   ```
+
+4. **Merge.** Adjudicated scores win; otherwise use the mean of at least two
+   scores with spread ≤0.25. Unresolved segments are omitted. Use a fresh base
+   export: reviewed conversations replace all their base rows (or are omitted
+   if wholly unresolved); missing/non-consented conversations are dropped.
+
+   ```bash
+   python -m scripts.review_labels data/annotations/*.jsonl --adjudicated data/adjudicate.jsonl \
+       --final-out data/train.jsonl --base data/labeled.jsonl
+   ```
+
+   `--base` requires `--final-out`; without a base, only resolved annotations
+   are written and current consent cannot be checked. Keep `--adjudication-out`
+   distinct from the filled `--adjudicated` file. Pass `--data data/train.jsonl`
+   to `train.py` below.
 
 ### 3. Train
 
@@ -316,7 +349,7 @@ for a weakly labeled conversation whose final window is match-only.
 Default recipe: DistilBERT with a single-logit head over segment transcripts,
 soft-target BCE against the 0–1 score (so serving's `sigmoid(logit)` is on the
 same scale as the labels), with [per-row weights](training/data_schema.md#weak-label-weighting)
-and `mae`/`rmse` on the eval split.
+and `mae`/`rmse` plus `weighted_mae`/`weighted_rmse` on the eval split.
 
 For a generative model that also writes the `comment`/`summary` text, LoRA
 fine-tune a small instruct model on `(transcript → the exact JSON the prompt
