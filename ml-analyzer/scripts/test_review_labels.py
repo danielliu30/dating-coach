@@ -22,7 +22,8 @@ def _row(cid, scores, suggested=(0.8, 0.4), **extra):
         "consented": True,
         "outcome": "kept_talking",
         "reply_received": True,
-        "messages": MESSAGES,
+        # Distinct bodies per conversation, so load_jsonl dedup keeps each one.
+        "messages": [{**m, "body": f"{cid} {m['body']}"} for m in MESSAGES],
         "label_source": "annotator",
         "prelabel": {"model_version": "llm-test", "fallback": False},
         "segments": [
