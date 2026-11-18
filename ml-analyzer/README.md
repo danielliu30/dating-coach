@@ -283,6 +283,14 @@ human `segments` labels are scarce and authoritative. Aim for a few thousand
 weak-labeled conversations plus a few hundred hand-labeled ones as the eval set,
 and keep the eval set user-disjoint from training.
 
+**Frozen eval holdout.** `--eval-file` defaults to the committed synthetic fixture
+`data/eval_holdout.jsonl`. Training excludes any row with a conversation or
+user ID in that file before deduplication and reports `excluded_from_training`.
+A missing file stops training; pass `--eval-file ''` to opt out. Keep the
+holdout fixed across runs you want to compare, and use a representative,
+hand-labeled, user-disjoint holdout before relying on the gate. Other files in
+`data/` are gitignored.
+
 ### 2. Label
 
 See [`training/data_schema.md`](training/data_schema.md) for the schema and the
@@ -328,7 +336,7 @@ annotation rubric.
 
 ```bash
 pip install -r requirements-train.txt
-python train.py --data data/labeled.jsonl --dry-run   # dataset stats only
+python train.py --data data/labeled.jsonl --dry-run   # dataset + holdout stats only
 python train.py --data data/labeled.jsonl --out artifacts/segment-scorer
 ```
 

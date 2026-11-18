@@ -97,6 +97,12 @@ skipped, `na` when none remain). The same line is built by
 `app/scoring/base.py` (`meta_line`) at inference, so train and serve inputs
 match.
 
+## Frozen eval holdout
+
+Use this schema with human `segments` labels on the served segment boundaries
+(`ML_SEGMENT_SIZE`, default 4: `[0-3]`, `[4-7]`, ...). See the
+[training workflow](../README.md#training-your-own-model) for holdout handling.
+
 ## Annotation guidance
 
 Rate a segment on how easy and appealing it is to reply to, not on writing
