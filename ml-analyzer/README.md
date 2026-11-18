@@ -68,8 +68,8 @@ analysis looks at what came back — nothing, a short reply, or an engaged reply
 and flags the pattern as a hint. It **never drafts what to say**: the customer
 drives the conversation, the analyzer only points at what did and did not land.
 The LLM backend enforces this by rejecting any completion that reads as a
-suggested reply and falling back to the heuristic scorer. (`ML_BACKEND=trained`
-is the exception — see the backends section.)
+suggested reply and falling back to the heuristic scorer; the trained backend
+writes its feedback with the heuristic's wording and runs the same check.
 
 **Product thesis.** The message track is the "Dating Humane" manifesto
 (surfaced on the app landing page, `app/src/components/Landing.tsx`) made
@@ -243,11 +243,13 @@ vision endpoint of the configured provider (Anthropic or OpenAI-compatible);
 - **`heuristic.py`** — no network, no model. Length/question/reciprocity signals.
   Used for local dev, CI and as the LLM fallback.
 - **`trained.py`** — a fine-tuned checkpoint. torch/transformers are imported
-  lazily so the serving image stays small until you actually use it. It
-  predates the message track's rules: it scores every segment regardless of
-  sender and ignores `preferences`, so the self-only / no-drafting guarantees
-  above hold for `llm` and `heuristic` only. Each segment is scored on the same
-  text training rows use: the transcript, prefixed with a `[meta]` line of
+  lazily so the serving image stays small until you actually use it. The model
+  only scores windows that contain the customer's messages (match-only windows
+  are neutral, like the heuristic); every comment, the summary and the
+  reflection fields come from the heuristic helpers, so they honour
+  `preferences` and pass the agency gate, which still runs as a final check
+  (a violation falls back to the heuristic scorer). Each segment is scored on the
+  same text training rows use: the transcript, prefixed with a `[meta]` line of
   `sent_at` latency/count features when timestamps exist (see
   [`training/data_schema.md`](training/data_schema.md#model-input)). Retrain
   pre-`[meta]` checkpoints before serving timestamped inputs.
