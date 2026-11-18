@@ -227,7 +227,7 @@ func TestRefreshRefusesTokensIssuedBeforeARevocation(t *testing.T) {
 	}
 	userID, _ := claims.UserID()
 	time.Sleep(10 * time.Millisecond)
-	if err := svc.denylist.RevokeSessions(ctx, userID); err != nil {
+	if err := svc.denylist.RevokeSessionsAt(ctx, userID, time.Now()); err != nil {
 		t.Fatalf("revoke sessions: %v", err)
 	}
 	if _, err := svc.Refresh(ctx, stale.RefreshToken); !errors.Is(err, ErrInvalidRefreshToken) {
@@ -358,7 +358,7 @@ func TestVerifyEmailRefusesARevokedBearer(t *testing.T) {
 	}
 	userID, _ := claims.UserID()
 	time.Sleep(10 * time.Millisecond)
-	if err := svc.denylist.RevokeSessions(ctx, userID); err != nil {
+	if err := svc.denylist.RevokeSessionsAt(ctx, userID, time.Now()); err != nil {
 		t.Fatalf("revoke sessions: %v", err)
 	}
 	got, err := svc.VerifyEmail(ctx, user.email, "", session.Token)

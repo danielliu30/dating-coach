@@ -54,22 +54,12 @@ func NewDenylist(rdb *redis.Client, ttl time.Duration) *Denylist {
 // worker revokes before removing rows.
 //
 // It also announces the revocation on revokedChannel. That publish is best
-// effort and its failure is logged, not returned: the Redis key (and, for session
-// cutoffs, users.sessions_revoked_at) is what makes the revocation true, and listeners that miss the announcement still
-// pick it up from their own periodic re-check.
+// effort: listeners that miss it pick up the cutoff on their periodic re-check.
 func (d *Denylist) Revoke(ctx context.Context, userID uuid.UUID) error {
 	return d.write(ctx, userID, revokedAll, true)
 }
 
-// RevokeSessions marks every token for userID issued up to now as unusable,
-// while tokens minted afterwards (a fresh sign-in) keep working. Sign-out and
-// refresh-token reuse call it. It never weakens an account-wide Revoke.
-func (d *Denylist) RevokeSessions(ctx context.Context, userID uuid.UUID) error {
-	return d.RevokeSessionsAt(ctx, userID, time.Now())
-}
-
-// RevokeSessionsAt is RevokeSessions with an explicit cutoff, so the same
-// instant can be recorded in Postgres (users.sessions_revoked_at) and Redis.
+// RevokeSessionsAt revokes tokens issued at or before at without weakening an account-wide Revoke.
 func (d *Denylist) RevokeSessionsAt(ctx context.Context, userID uuid.UUID, at time.Time) error {
 	return d.write(ctx, userID, strconv.FormatInt(at.UnixNano(), 10), true)
 }
@@ -79,13 +69,9 @@ type SessionRevocationLister interface {
 	ListSessionRevocationsSince(ctx context.Context, since time.Time) ([]db.ListSessionRevocationsSinceRow, error)
 }
 
-// ReplayRevocations copies every durable cutoff still young enough to matter
-// back into Redis. It covers a cutoff recorded while Redis was unreachable and
-// one lost to a Redis flush or failover. Replays are idempotent, since the
-// write never weakens an entry, and silent: an announcement would make every
-// replica's hub drop all of the user's sockets, including ones opened by a
-// sign-in after the cutoff. Sockets older than the cutoff are closed by their
-// own heartbeat check instead.
+// ReplayRevocations restores recent durable cutoffs without announcements:
+// announcing would also drop sockets opened by a sign-in after the cutoff.
+// Older sockets close on their heartbeat check instead.
 func (d *Denylist) ReplayRevocations(ctx context.Context, lister SessionRevocationLister) error {
 	rows, err := lister.ListSessionRevocationsSince(ctx, time.Now().Add(-d.ttl))
 	if err != nil {
@@ -103,7 +89,6 @@ func (d *Denylist) ReplayRevocations(ctx context.Context, lister SessionRevocati
 	return nil
 }
 
-// RevocationReplayPeriod is how often the worker runs ReplayRevocations.
 const RevocationReplayPeriod = 15 * time.Second
 
 // WatchDurableRevocations runs ReplayRevocations every period until ctx is

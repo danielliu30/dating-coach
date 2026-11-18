@@ -28,7 +28,7 @@ func TestDenylistRevokedSince(t *testing.T) {
 		t.Fatalf("never revoked = %v, %v; want zero, nil", since, err)
 	}
 	before := time.Now()
-	if err := d.RevokeSessions(ctx, user); err != nil {
+	if err := d.RevokeSessionsAt(ctx, user, time.Now()); err != nil {
 		t.Fatalf("revoke: %v", err)
 	}
 	since, err := d.RevokedSince(ctx, user)
@@ -46,7 +46,7 @@ func TestDenylistRevokedSince(t *testing.T) {
 	if err := d.Revoke(ctx, deleted); err != nil {
 		t.Fatalf("revoke: %v", err)
 	}
-	if err := d.RevokeSessions(ctx, deleted); err != nil {
+	if err := d.RevokeSessionsAt(ctx, deleted, time.Now()); err != nil {
 		t.Fatalf("revoke sessions: %v", err)
 	}
 	if since, err := d.RevokedSince(ctx, deleted); err != nil || !since.After(time.Now().Add(24*time.Hour)) {

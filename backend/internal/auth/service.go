@@ -182,9 +182,10 @@ func (s *Service) SignOut(ctx context.Context, userID uuid.UUID) error {
 	if _, err := s.queries.RevokeUserRefreshTokens(ctx, userID); err != nil {
 		return fmt.Errorf("revoke refresh tokens: %w", err)
 	}
-	at, err := s.recordSessionRevocation(ctx, userID)
-	if err != nil {
-		return err
+	// Match Postgres precision so replay preserves the cutoff exactly.
+	at := time.Now().Truncate(time.Microsecond)
+	if err := s.queries.RecordSessionRevocation(ctx, db.RecordSessionRevocationParams{ID: userID, RevokedAt: at}); err != nil {
+		return fmt.Errorf("record session revocation: %w", err)
 	}
 	if s.denylist == nil {
 		return ErrRevocationUnavailable
@@ -193,17 +194,6 @@ func (s *Service) SignOut(ctx context.Context, userID uuid.UUID) error {
 		return fmt.Errorf("%w: %w", ErrRevocationUnavailable, err)
 	}
 	return nil
-}
-
-// recordSessionRevocation durably revokes every token of userID issued up to
-// now and returns the cutoff, truncated to the precision Postgres stores so the
-// copy replayed into Redis is the same instant.
-func (s *Service) recordSessionRevocation(ctx context.Context, userID uuid.UUID) (time.Time, error) {
-	at := time.Now().Truncate(time.Microsecond)
-	if err := s.queries.RecordSessionRevocation(ctx, db.RecordSessionRevocationParams{ID: userID, RevokedAt: at}); err != nil {
-		return time.Time{}, fmt.Errorf("record session revocation: %w", err)
-	}
-	return at, nil
 }
 
 // SignUpInput is the decoded POST /auth/signup body.
