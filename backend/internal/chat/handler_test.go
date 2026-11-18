@@ -49,20 +49,15 @@ func TestSessionStatus(t *testing.T) {
 	}
 }
 
-// stubRevocations answers RevokedSince from fixed values, standing in for Redis.
 type stubRevocations struct {
 	since time.Time
 	err   error
 }
 
-// RevokedSince satisfies auth.Revocations.
 func (s stubRevocations) RevokedSince(context.Context, uuid.UUID) (time.Time, error) {
 	return s.since, s.err
 }
 
-// TestSessionStatusHonoursRevocationCutoff covers a replica that missed the
-// auth:revoked announcement: the heartbeat must still close a socket whose
-// token predates a sign-out, without touching one opened after it.
 func TestSessionStatusHonoursRevocationCutoff(t *testing.T) {
 	signedOut := time.Now()
 	tests := []struct {
