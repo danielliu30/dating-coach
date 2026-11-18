@@ -104,6 +104,14 @@ def _jaccard(a: FrozenSet[Tuple[str, ...]], b: FrozenSet[Tuple[str, ...]]) -> fl
     return len(a & b) / union if union else 1.0
 
 
+def _label_rank(example: TrainingExample) -> int:
+    if example.segments:
+        return 0
+    if example.outcome in OUTCOME_SCORE or example.reply_received is not None:
+        return 1
+    return 2
+
+
 def deduplicate(examples: Sequence[TrainingExample]) -> List[TrainingExample]:
     """Cluster exact matches globally and near matches within each user."""
     slots: List[TrainingExample | None] = []
@@ -144,12 +152,14 @@ def deduplicate(examples: Sequence[TrainingExample]) -> List[TrainingExample]:
             parent.append(index)
         else:
             # A copy matching several clusters bridges them: merge into the
-            # earliest, keeping the first human-labeled representative if any.
+            # earliest, keeping the first copy with the best label (human, then
+            # weak, then none).
             index = min(matches)
-            candidates = sorted([(rep_order[r], slots[r]) for r in matches] + [(order, example)], key=lambda c: c[0])
-            labeled = next((c for c in candidates if c[1] is not None and c[1].segments), None)
-            if labeled is not None:
-                rep_order[index], slots[index] = labeled
+            candidates = [(rep_order[r], slots[r]) for r in matches] + [(order, example)]
+            rep_order[index], slots[index] = min(
+                (c for c in candidates if c[1] is not None),
+                key=lambda c: (_label_rank(c[1]), c[0]),
+            )
             for other_root in matches - {index}:
                 parent[other_root] = index
                 slots[other_root] = None
