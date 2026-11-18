@@ -361,7 +361,31 @@ backend returns)` pairs — add `peft` from `requirements-train.txt`, and have
 `TrainedScorer.analyze` parse the generated JSON with the same
 `LLMScorer._parse` logic.
 
-### 4. Switch backends
+### 4. Compare scores against the LLM
+
+The default synthetic holdout is an **unpersonalized score check**, not evidence
+that a checkpoint is ready to serve or that its coaching matches the LLM's.
+An alternate holdout can supply pseudonymized `preferences` and `match_name`
+for both scorers.
+
+```bash
+LLM_API_KEY=... make eval
+```
+
+The script pairs scores by segment boundary and writes them to
+`<checkpoint>/eval_vs_llm.jsonl`. It passes only if:
+
+| Check | Threshold |
+| --- | --- |
+| Segment-level MAE, trained vs LLM | `< 0.1` |
+| Cohen's kappa on `label_for` buckets, trained vs LLM | `> 0.6` |
+| Holdout conversations the LLM scored without fallback | `>= 90%` |
+
+Exit codes: `0` passed, `1` failed a threshold, `2` not evaluated (for example,
+a trained fallback or mismatched segment boundaries). LLM fallbacks are counted
+against coverage and excluded from agreement metrics.
+
+### 5. Switch backends
 
 ```bash
 pip install -r requirements-train.txt   # torch/transformers are not in the serving image

@@ -47,6 +47,8 @@ class TrainingExample:
     outcome: str | None = None  # ghosted | kept_talking | number_exchanged | date_set
     consented: bool = False
     user_id: str | None = None
+    preferences: str | None = None
+    match_name: str | None = None
 
     def group_key(self) -> str:
         """Split unit: all rows of one user (or conversation) stay together."""
@@ -65,6 +67,8 @@ class TrainingExample:
             outcome=payload.get("outcome"),
             consented=bool(payload.get("consented", False)),
             user_id=payload.get("user_id"),
+            preferences=payload.get("preferences"),
+            match_name=payload.get("match_name"),
         )
 
 

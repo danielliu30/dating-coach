@@ -102,6 +102,8 @@ match.
 Use this schema with human `segments` labels on the served segment boundaries
 (`ML_SEGMENT_SIZE`, default 4: `[0-3]`, `[4-7]`, ...). See the
 [training workflow](../README.md#training-your-own-model) for holdout handling.
+Optional string fields `preferences` (maximum 2,000 characters) and
+`match_name` carry pseudonymized context for LLM comparisons, not training.
 
 ## Annotation guidance
 
