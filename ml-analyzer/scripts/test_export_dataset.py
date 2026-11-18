@@ -1,8 +1,9 @@
 import json
+import sys
 
 import pytest
 
-from scripts.export_dataset import Pseudonymiser, main, psql_command, pseudonymise_row
+from scripts.export_dataset import Pseudonymiser, main, psql_rows, pseudonymise_row, write_dataset
 
 
 @pytest.mark.parametrize(
@@ -13,6 +14,7 @@ from scripts.export_dataset import Pseudonymiser, main, psql_command, pseudonymi
         ("my site is www.janebakes.co.uk!", "my site is [LINK]!"),
         ("insta.com/jane_doe or linktr.ee/jane", "[LINK] or [LINK]"),
         ("follow @jane_doe.", "follow [HANDLE]."),
+        ("@a IG: b @" + "c" * 40, "[HANDLE] IG: [HANDLE] [HANDLE]"),
         ("my insta is jane_doe92 :)", "my insta is [HANDLE] :)"),
         ("IG: jane.doe", "IG: [HANDLE]"),
         ("text me 415-555-0134 or +44 7700 900123", "text me [PHONE] or [PHONE]"),
@@ -55,18 +57,21 @@ def test_row_drops_name_columns_and_normalises_null_segments():
     assert row["messages"][0]["body"] == "hi Ana, Ben here"
 
 
-def test_from_raw_writes_only_consented_pseudonymised_rows(tmp_path):
-    raw = tmp_path / "raw.jsonl"
+def test_export_writes_only_consented_pseudonymised_rows(tmp_path, monkeypatch):
     rows = [
         {"conversation_id": "c1", "consented": True, "match_name": "Ana",
          "messages": [{"position": 0, "sender": "self", "body": "Ana, call 415 555 0134"}]},
         {"conversation_id": "c2", "consented": False,
          "messages": [{"position": 0, "sender": "self", "body": "secret"}]},
     ]
-    raw.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
     out = tmp_path / "data" / "labeled.jsonl"
+    def query(command, url):
+        assert command == ["docker", "exec", "db", "psql"]
+        assert url == "postgres://host/db"
+        return iter(rows)
+    monkeypatch.setattr("scripts.export_dataset.psql_rows", query)
 
-    main(["--from-raw", str(raw), "--out", str(out)])
+    main(["--psql", "docker exec db psql", "--database-url", "postgres://host/db", "--out", str(out)])
 
     written = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
     assert [r["conversation_id"] for r in written] == ["c1"]
@@ -82,9 +87,22 @@ def test_segment_free_text_is_dropped() -> None:
     assert pseudonymise_row(row)["segments"] == [{"start_position": 0, "end_position": 1, "engagement_score": 0.8}]
 
 
-def test_database_url_env_only_applies_to_plain_psql(monkeypatch) -> None:
-    monkeypatch.setenv("DATABASE_URL", "postgres://host/db")
-    assert psql_command(None, None) == (["psql"], "postgres://host/db")
-    docker = "docker compose exec -T postgres psql -U u -d d"
-    assert psql_command(docker, None) == (docker.split(), None)
-    assert psql_command(docker, "postgres://x/y") == (docker.split(), "postgres://x/y")
+def test_psql_rows_preserves_json_escapes():
+    row = {"messages": [{"body": "backslash \\ and newline\n"}]}
+    command = [sys.executable, "-c", f"print(); print({json.dumps(row)!r})"]
+    assert list(psql_rows(command, None)) == [row]
+
+
+@pytest.mark.parametrize("output", ["import sys; sys.exit(1)", "print('invalid json')"])
+def test_failed_export_preserves_existing_dataset(tmp_path, output):
+    out = tmp_path / "labeled.jsonl"
+    out.write_text("existing\n")
+    with pytest.raises((SystemExit, json.JSONDecodeError)):
+        write_dataset(psql_rows([sys.executable, "-c", output], None), out)
+    assert out.read_text() == "existing\n"
+
+
+def test_empty_export(tmp_path):
+    out = tmp_path / "labeled.jsonl"
+    assert write_dataset([], out) == 0
+    assert out.read_text() == ""
