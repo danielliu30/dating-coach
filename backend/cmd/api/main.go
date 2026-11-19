@@ -87,7 +87,17 @@ func run() error {
 	}
 	defer deletions.Close()
 
-	notifier := notify.New(cfg)
+	var notifier notify.Notifier = notify.New(cfg)
+	var nudge func(context.Context)
+	if cfg.QueueBackend == "pubsub" {
+		p, err := analysis.OpenPubSubPublisher[struct{}](ctx, cfg.GCPProjectID, cfg.EmailOutboxTopic)
+		if err != nil {
+			return err
+		}
+		defer p.Close()
+		nudge = func(ctx context.Context) { notify.Nudge(ctx, p) }
+		notifier = &notify.OutboxNotifier{Notifier: notifier, Queries: pg.Queries, Publisher: p}
+	}
 	issuer := auth.NewTokenIssuer(cfg.JWTSecret)
 	limiter := auth.NewRateLimiter(rdb, cfg.AuthRateLimit, cfg.AuthRateWindow)
 	denylist := auth.NewDenylist(rdb, max(cfg.JWTTTL, cfg.VerifyTokenTTL, cfg.RefreshTokenTTL))
@@ -110,7 +120,9 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	coachingHandler := coaching.NewHandler(coaching.NewService(pg.Pool, pg.Queries, provider, cfg.PaymentHoldTTL, cfg.PublicAppURL, cfg.MailFrom, ml), limiter)
+	coachingSvc := coaching.NewService(pg.Pool, pg.Queries, provider, cfg.PaymentHoldTTL, cfg.PublicAppURL, cfg.MailFrom, ml)
+	coachingSvc.SetEmailOutboxNudge(nudge)
+	coachingHandler := coaching.NewHandler(coachingSvc, limiter)
 	hub := chat.NewHub(rdb)
 	// Sockets authenticated before a deletion would otherwise keep running
 	// until their next scheduled re-check; this closes them as it happens.

@@ -86,10 +86,11 @@ var coachOnlyStatuses = map[string]bool{StatusCompleted: true, StatusNoShow: tru
 // each coach's weekly availability, the bookable slots derived from it, and the
 // lifecycle of a booked session (request, confirm, reschedule, status, notes).
 type Service struct {
-	pool     *pgxpool.Pool
-	queries  *db.Queries
-	mail     mailer
-	payments payments.Provider
+	emailOutboxNudge func(context.Context)
+	pool             *pgxpool.Pool
+	queries          *db.Queries
+	mail             mailer
+	payments         payments.Provider
 	// holdTTL is how long a booking keeps its slot while the client is at the
 	// payment page.
 	holdTTL time.Duration
@@ -98,6 +99,19 @@ type Service struct {
 	// reviews condenses written reviews into strengths; nil means only the
 	// deterministic recommendation line is produced.
 	reviews ReviewSummarizer
+}
+
+// SetEmailOutboxNudge installs the best-effort wakeup run after transaction commits.
+func (s *Service) SetEmailOutboxNudge(nudge func(context.Context)) { s.emailOutboxNudge = nudge }
+
+func (s *Service) commit(ctx context.Context, tx pgx.Tx) error {
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	if s.emailOutboxNudge != nil {
+		s.emailOutboxNudge(ctx)
+	}
+	return nil
 }
 
 // ReviewSummarizer is the ml-analyzer's review-summary capability as the
@@ -527,7 +541,7 @@ func (s *Service) SetAvailability(ctx context.Context, coachID uuid.UUID, window
 			return nil, fmt.Errorf("add availability: %w", err)
 		}
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := s.commit(ctx, tx); err != nil {
 		return nil, fmt.Errorf("commit availability: %w", err)
 	}
 	return s.ListAvailability(ctx, coachID)
@@ -738,7 +752,7 @@ func (s *Service) BookSession(ctx context.Context, userID uuid.UUID, in BookInpu
 	if err := s.mail.clientRequested(ctx, q, parties); err != nil {
 		return Session{}, err
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := s.commit(ctx, tx); err != nil {
 		return Session{}, fmt.Errorf("commit booking: %w", err)
 	}
 	return sessionOf(session, ""), nil
@@ -884,7 +898,7 @@ func (s *Service) respond(ctx context.Context, session db.CoachingSession, actio
 	if err := s.mail.coachCalendarUpdate(ctx, q, parties); err != nil {
 		return Session{}, err
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := s.commit(ctx, tx); err != nil {
 		return Session{}, fmt.Errorf("commit response: %w", err)
 	}
 	return sessionOf(updated, ""), nil
@@ -953,7 +967,7 @@ func (s *Service) expireBatch(ctx context.Context) (int, error) {
 			return 0, err
 		}
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := s.commit(ctx, tx); err != nil {
 		return 0, fmt.Errorf("commit expiry: %w", err)
 	}
 	return len(expired), nil
@@ -1154,7 +1168,7 @@ func (s *Service) SetStatus(ctx context.Context, sessionID, actorID uuid.UUID, s
 			}
 		}
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := s.commit(ctx, tx); err != nil {
 		return Session{}, fmt.Errorf("commit status: %w", err)
 	}
 	return sessionOf(updated, ""), nil
@@ -1239,7 +1253,7 @@ func (s *Service) Reschedule(ctx context.Context, sessionID, actorID uuid.UUID, 
 	if err != nil {
 		return Session{}, err
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := s.commit(ctx, tx); err != nil {
 		return Session{}, fmt.Errorf("commit reschedule: %w", err)
 	}
 	return sessionOf(updated, ""), nil
@@ -1324,7 +1338,7 @@ func (s *Service) SetMeetingURL(ctx context.Context, sessionID, coachID uuid.UUI
 			return Session{}, err
 		}
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := s.commit(ctx, tx); err != nil {
 		return Session{}, fmt.Errorf("commit meeting url: %w", err)
 	}
 	return sessionOf(updated, ""), nil
