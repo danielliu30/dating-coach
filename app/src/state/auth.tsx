@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
 import { ApiError, api } from '../api/client';
-import type { RenewalResult, SessionEndReason } from '../api/client';
+import type { RenewalResult, SessionEndReason, SignOutScope } from '../api/client';
 import type { AuthSession, DatingProfileInput, Profile, Role } from '../api/types';
 import { requestGoogleIdToken } from '../lib/googleIdentity';
 
@@ -24,20 +24,34 @@ const withinSignOutTimeout = async (work: Promise<unknown>): Promise<void> => {
   clearTimeout(timer);
 };
 
-// Revokes the session these credentials belong to. It runs after the app has
-// dropped them, so an expired access token is renewed here from the captured
-// refresh token rather than through the shared renewal, which only knows the
-// session on hand.
-const revoke = async (token: string, refreshToken: string): Promise<void> => {
+// A session as stored: received_at is when the app obtained its access token,
+// on the device's clock, and is absent from sessions stored before it was kept.
+type StoredSession = AuthSession & { received_at?: number | null };
+
+// Scopes a revocation to the moment the user signed out, or leaves it unscoped
+// (taking effect as it lands) when the token's receipt time is unknown.
+const scopeAt = (refreshToken: string, receivedAt: number, signedOutAt: number): SignOutScope | undefined =>
+  refreshToken && Number.isFinite(receivedAt)
+    ? { refresh_token: refreshToken, token_age_ms: Math.round(signedOutAt - receivedAt) }
+    : undefined;
+
+// Revokes the session these credentials belong to as of signedOutAt, so a
+// request that lands late cannot end a session opened after it. It runs after
+// the app has dropped them, so an expired access token is renewed here from
+// the captured refresh token rather than through the shared renewal, which only
+// knows the session on hand.
+const revoke = async (token: string, refreshToken: string, receivedAt: number, signedOutAt: number): Promise<void> => {
   try {
-    await api.signOut(token);
+    await api.signOut(token, scopeAt(refreshToken, receivedAt, signedOutAt));
     return;
   } catch (error) {
     if (!isRefused(error) || !refreshToken) return;
   }
   let renewed: AuthSession;
+  let renewedAt: number;
   try {
     renewed = await api.refreshSession(refreshToken);
+    renewedAt = Date.now();
   } catch (error) {
     // Usually a renewal in flight spent the token first, and the session it
     // minted is dropped unheld. Presenting the spent token again trips the
@@ -46,7 +60,7 @@ const revoke = async (token: string, refreshToken: string): Promise<void> => {
     if (isRefused(error)) await api.refreshSession(refreshToken).catch(() => undefined);
     return;
   }
-  await api.signOut(renewed.token);
+  await api.signOut(renewed.token, scopeAt(renewed.refresh_token ?? '', renewedAt, signedOutAt));
 };
 
 /**
@@ -104,10 +118,10 @@ const isRefused = (error: unknown): boolean => error instanceof ApiError && erro
 // Reads a stored session, or null when there is nothing usable to restore:
 // unparseable JSON and a blob missing the token or the profile are both worth
 // forgetting, and neither says anything about the backend.
-const parseSession = (raw: string | null): (Partial<AuthSession> & Pick<AuthSession, 'token' | 'user'>) | null => {
+const parseSession = (raw: string | null): (Partial<StoredSession> & Pick<AuthSession, 'token' | 'user'>) | null => {
   if (!raw) return null;
   try {
-    const stored = JSON.parse(raw) as Partial<AuthSession>;
+    const stored = JSON.parse(raw) as Partial<StoredSession>;
     return stored.token && stored.user ? { ...stored, token: stored.token, user: stored.user } : null;
   } catch {
     return null;
@@ -122,6 +136,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
   const tokenRef = useRef<string | null>(null);
   const refreshRef = useRef<string>('');
   const expiresRef = useRef<string>('');
+  // When the access token on hand was obtained, on the device's clock; NaN when
+  // unknown.
+  const receivedRef = useRef<number>(Number.NaN);
   // Bumped whenever the session is replaced or dropped, so a renewal that lands
   // after a sign-out cannot write the old session back over it.
   const generationRef = useRef(0);
@@ -154,6 +171,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
       tokenRef.current = null;
       refreshRef.current = '';
       expiresRef.current = '';
+      receivedRef.current = Number.NaN;
       setToken(null);
       setUser(null);
       setSignedOutReason(reason);
@@ -161,17 +179,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
     });
   }, []);
 
-  const persist = useCallback(async (session: AuthSession) => {
+  const persist = useCallback(async (session: AuthSession, receivedAt: number = Date.now()) => {
     generationRef.current += 1;
     if (userIDRef.current !== session.user.id) principalRef.current += 1;
     userIDRef.current = session.user.id;
     tokenRef.current = session.token;
     refreshRef.current = session.refresh_token ?? '';
     expiresRef.current = session.expires_at ?? '';
+    receivedRef.current = receivedAt;
     setToken(session.token);
     setUser(session.user);
     setSignedOutReason(null);
-    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(session));
+    const record: StoredSession = { ...session, received_at: receivedAt };
+    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(record));
     return session.user;
   }, []);
 
@@ -231,12 +251,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
         if (!stored) {
           if (raw) await forget();
         } else if (isFresh(stored)) {
-          await persist({
-            token: stored.token,
-            refresh_token: stored.refresh_token,
-            expires_at: stored.expires_at ?? '',
-            user: stored.user,
-          });
+          await persist(
+            {
+              token: stored.token,
+              refresh_token: stored.refresh_token,
+              expires_at: stored.expires_at ?? '',
+              user: stored.user,
+            },
+            stored.received_at ?? Number.NaN,
+          );
         } else if (!stored.refresh_token) {
           await forget();
         } else {
@@ -269,6 +292,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
     tokenRef.current = null;
     refreshRef.current = '';
     expiresRef.current = '';
+    receivedRef.current = Number.NaN;
     setToken(null);
     setUser(null);
     setSignedOutReason(null);
@@ -285,8 +309,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
         token: tokenRef.current,
         refresh_token: refreshRef.current,
         expires_at: expiresRef.current,
+        received_at: receivedRef.current,
         user: profile,
-      }),
+      } satisfies StoredSession),
     );
     return profile;
   }, []);
@@ -357,7 +382,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
       signOut: async () => {
         const token = tokenRef.current;
         if (token) {
-          revocationRef.current = revoke(token, refreshRef.current).catch(() => undefined);
+          revocationRef.current = revoke(token, refreshRef.current, receivedRef.current, Date.now()).catch(
+            () => undefined,
+          );
         }
         try {
           await clearSession();
