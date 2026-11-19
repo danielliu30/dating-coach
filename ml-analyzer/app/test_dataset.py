@@ -12,6 +12,7 @@ import training.dataset as dataset_module
 from training.agreement import label_counts
 from training.dataset import (
     OUTCOME_SCORE,
+    TEST_ONLY_SOURCES,
     TrainingExample,
     _jaccard,
     _normalized_transcript,
@@ -26,6 +27,8 @@ from training.dataset import (
 )
 
 HOLDOUT = Path(__file__).resolve().parent.parent / "data" / "eval_holdout.jsonl"
+EXTENDED = HOLDOUT.with_name("eval_extended.jsonl")
+PERSONAS = HOLDOUT.with_name("personas.jsonl")
 
 
 def _payload(conversation_id, bodies, user_id=None, segments=None, outcome="kept_talking"):
@@ -410,3 +413,53 @@ def test_train_excludes_holdout_before_deduping_training_rows(tmp_path: Path, mo
 def test_report_holdout_fails_when_file_is_missing(tmp_path: Path) -> None:
     with pytest.raises(SystemExit, match="no frozen eval file"):
         train.report_holdout(tmp_path / "missing.jsonl", [_example("c1")])
+
+
+def test_eval_fields_default_for_rows_without_them(tmp_path: Path) -> None:
+    """Exports from the backend carry none of the eval-only fields; they default to an app row."""
+    rows = [{"conversation_id": "c1", "consented": True, "messages": [{"position": 0, "sender": "self", "body": "hi"}]}]
+    example = load_jsonl(_write(tmp_path, rows))[0]
+    assert (example.source, example.persona_id, example.profile) == ("app", None, None)
+    assert example.focus_areas == [] and example.expected_themes == []
+
+
+def test_load_jsonl_excludes_sources(tmp_path: Path) -> None:
+    rows = [
+        {"conversation_id": c, "consented": True, "source": source,
+         "messages": [{"position": 0, "sender": "self", "body": f"hello from {c}"}]}
+        for c, source in [("c1", "app"), ("c2", "reddit"), ("c3", "synthetic")]
+    ]
+    kept = load_jsonl(_write(tmp_path, rows), exclude_sources=TEST_ONLY_SOURCES)
+    assert [e.conversation_id for e in kept] == ["c1", "c3"]
+    assert len(load_jsonl(_write(tmp_path, rows))) == 3
+
+
+def test_train_drops_test_only_sources_unless_allowed(tmp_path: Path, monkeypatch) -> None:
+    """``train.py`` never trains on Reddit rows unless ``--allow-source reddit`` is passed."""
+    monkeypatch.setattr(sys, "argv", ["train.py", "--data", "x.jsonl"])
+    assert train.parse_args().allow_source == []
+    monkeypatch.setattr(sys, "argv", ["train.py", "--data", "x.jsonl", "--allow-source", "reddit"])
+    assert train.parse_args().allow_source == ["reddit"]
+
+
+def test_extended_eval_set_is_valid() -> None:
+    """The extended set: long conversations, served segment labels, a known persona and expected themes."""
+    personas = {json.loads(line)["persona_id"]: json.loads(line) for line in PERSONAS.read_text(encoding="utf-8").splitlines() if line.strip()}
+    examples = load_jsonl(EXTENDED)
+    assert len(examples) == sum(1 for line in EXTENDED.read_text(encoding="utf-8").splitlines() if line.strip())
+    assert len({e.group_key() for e in examples}) == len(examples)
+    for example in examples:
+        positions = [m.position for m in example.messages]
+        assert positions == list(range(len(positions)))
+        assert len(positions) >= 32
+        assert {m.sender for m in example.messages} == {"self", "match"}
+        expected = [(s, min(s + 3, len(positions) - 1)) for s in range(0, len(positions), 4)]
+        assert [(s.start_position, s.end_position) for s in example.segments] == expected
+        assert all(0.0 <= s.engagement_score <= 1.0 for s in example.segments)
+        assert example.source == "synthetic"
+        persona = personas[example.persona_id]
+        assert example.profile == persona["profile"]
+        assert example.focus_areas == persona["focus_areas"]
+        assert example.expected_themes and all(t["id"] and t["any"] for t in example.expected_themes)
+    scores = [score for _, score, _ in to_segment_rows(examples)]
+    assert all(label_counts(scores).values()), "extended set must cover every served label bucket"

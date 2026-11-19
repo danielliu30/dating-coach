@@ -25,6 +25,7 @@ from app.scoring.base import label_for
 from training.agreement import distribution, label_counts, mae
 from training.dataset import (
     DEFAULT_WINDOW_SIZE,
+    TEST_ONLY_SOURCES,
     WEAK_EARLIER_WINDOW_WEIGHT,
     Row,
     TrainingExample,
@@ -67,6 +68,13 @@ def parse_args() -> argparse.Namespace:
         help="Loss weight of weak-label windows before the final one (0 = final window only)",
     )
     parser.add_argument("--include-unconsented", action="store_true")
+    parser.add_argument(
+        "--allow-source",
+        action="append",
+        default=[],
+        choices=sorted(TEST_ONLY_SOURCES),
+        help="Train on a test-only source (e.g. reddit); only with the platform's permission",
+    )
     parser.add_argument("--include-eval-text", action="store_true", help="Include transcripts in eval_predictions.jsonl")
     parser.add_argument(
         "--self-only",
@@ -141,7 +149,12 @@ def write_eval_predictions(path: Path, rows: list[Row], preds: list[float], *, i
 def main() -> None:
     args = parse_args()
 
-    examples = load_jsonl(args.data, require_consent=not args.include_unconsented, dedupe=False)
+    examples = load_jsonl(
+        args.data,
+        require_consent=not args.include_unconsented,
+        dedupe=False,
+        exclude_sources=TEST_ONLY_SOURCES - set(args.allow_source),
+    )
     if args.eval_file:
         examples = report_holdout(Path(args.eval_file), examples, args.include_unconsented)
     examples = deduplicate(examples)
