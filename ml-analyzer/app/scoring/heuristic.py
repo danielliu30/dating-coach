@@ -628,6 +628,24 @@ def repeated_question_patterns(messages: Sequence[Message]) -> List[str]:
     return [f"You asked close to the same question more than once{extra}: {shown}."]
 
 
+def conversation_patterns(messages: Sequence[Message]) -> List[str]:
+    """Every heuristic pattern for ``messages``, in a fixed order: reciprocity first, then the long-conversation ones.
+
+    The long-conversation patterns are ``energy_trend_patterns``,
+    ``reinitiation_patterns``, ``streak_patterns``, ``topic_depth_patterns``
+    and ``repeated_question_patterns``; each stays silent when its signal is
+    absent, so a short, even exchange still yields an empty list.
+    """
+    return [
+        *reciprocity_patterns(messages),
+        *energy_trend_patterns(messages),
+        *reinitiation_patterns(messages),
+        *streak_patterns(messages),
+        *topic_depth_patterns(messages),
+        *repeated_question_patterns(messages),
+    ]
+
+
 def reflection_questions(
     reviews: Sequence[SelfMessageReview],
     patterns: Sequence[str],
@@ -760,7 +778,7 @@ def goal_scores(
 
 
 class HeuristicScorer(Scorer):
-    version = "heuristic-v5"
+    version = "heuristic-v6"
 
     def __init__(self, segment_size: int = 4) -> None:
         self.segment_size = segment_size
@@ -787,7 +805,7 @@ class HeuristicScorer(Scorer):
             )
 
         overall_score = clamp(statistics.fmean(r.score for r in reviews)) if reviews else 0.5
-        patterns = reciprocity_patterns(request.messages)
+        reciprocity = reciprocity_patterns(request.messages)
 
         return AnalyzeResponse(
             model_version=self.version,
@@ -797,8 +815,8 @@ class HeuristicScorer(Scorer):
                 summary=_summary(reviews, request.preferences),
                 strengths=_strengths(reviews),
                 improvements=_improvements(reviews),
-                reflection_questions=reflection_questions(reviews, patterns, request.preferences, request.profile),
-                patterns=patterns,
+                reflection_questions=reflection_questions(reviews, reciprocity, request.preferences, request.profile),
+                patterns=conversation_patterns(request.messages),
                 goal_scores=goal_scores(reviews, request.messages, request.focus_areas),
             ),
         )

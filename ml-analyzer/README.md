@@ -174,7 +174,13 @@ the customer's own phases, never echoing the bio or prompts).
 `overall.patterns[]` are short observations naming recurring behaviour across
 the whole conversation — e.g. "You sent about twice as many messages as they
 did in this conversation (5 to 2)." — and are empty when nothing recurs. Both
-default to `[]`, so clients that predate them are unaffected.
+default to `[]`, so clients that predate them are unaffected. Besides
+reciprocity, the heuristic names patterns that show up in long conversations:
+message length early vs late, who picks the conversation back up after
+pauses of 6 hours or more (only when `sent_at` is present), runs of
+consecutive customer messages, small talk vs deeper messages, and questions
+the customer asked again. Each cites `Message N` (position + 1) where it
+points at specific messages.
 The LLM backend asks for and keeps at most 6 `strengths`, 8 `improvements`,
 5 `reflection_questions` and 5 `patterns` (`LIST_LIMITS` in
 `app/scoring/llm.py`), each item cut to 300 characters. The heuristic and
@@ -258,7 +264,8 @@ vision endpoint of the configured provider (Anthropic or OpenAI-compatible);
   segment boundaries, parses strict JSON, clamps and re-labels every score. Any
   failure (timeout, bad JSON, rate limit) degrades to the heuristic scorer and
   reports it in `model_version` rather than failing the analysis job.
-- **`heuristic.py`** — no network, no model. Length/question/reciprocity signals.
+- **`heuristic.py`** — no network, no model. Length/question/reciprocity and
+  long-conversation pattern signals.
   Used for local dev, CI and as the LLM fallback.
 - **`trained.py`** — a fine-tuned checkpoint. torch/transformers are imported
   lazily so the serving image stays small until you actually use it. The model

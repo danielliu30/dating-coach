@@ -1,12 +1,24 @@
 """Long-conversation patterns of the heuristic scorer: each one is deterministic, cites messages and passes the agency gate."""
 
 from datetime import timedelta
+import asyncio
 from typing import List, Optional, Sequence, Tuple
 
 from app.coaching import enforce_agency
-from app.schemas import Message
 from app.scoring.base import _parse_sent_at
-from app.scoring.heuristic import energy_trend_patterns, reinitiation_patterns, repeated_question_patterns, streak_patterns, topic_depth_patterns
+from app.schemas import AnalyzeRequest, Message
+from app.scoring.heuristic import (
+    HeuristicScorer,
+    conversation_patterns,
+    energy_trend_patterns,
+    reciprocity_patterns,
+    reflection_questions,
+    reinitiation_patterns,
+    review_self_messages,
+    repeated_question_patterns,
+    streak_patterns,
+    topic_depth_patterns,
+)
 
 
 def _conversation(turns: Sequence[Tuple[str, str]], sent_at: Optional[Sequence[Optional[str]]] = None) -> List[Message]:
@@ -337,3 +349,55 @@ def test_repeated_questions_read_contracted_question_words_alike() -> None:
         "You asked close to the same question more than once: Message 2 ('Whats your favourite film?') repeats Message 1; "
         "Message 4 ('Wheres your hometown?') repeats Message 3."
     ]
+
+
+def test_heuristic_analyze_reports_long_conversation_patterns_after_reciprocity() -> None:
+    """analyze() reports reciprocity first, then the long-conversation patterns, and bumps the model version."""
+    turns: List[Tuple[str, str]] = []
+    for i in range(16):
+        turns += [("self", LONG), ("match", LONG if i < 8 else SHORT)]
+        if i % 4 == 3:
+            turns.append(("self", "Also, where did you grow up?"))
+    hours = [f"2026-03-{1 + i // 10:02d}T{(i % 10) * 2:02d}:00:00Z" for i in range(len(turns))]
+    request = AnalyzeRequest(conversation_id="long-1", messages=_conversation(turns, sent_at=hours))
+    response = asyncio.run(HeuristicScorer().analyze(request))
+
+    assert response.model_version == "heuristic-v6"
+    reciprocity = reciprocity_patterns(request.messages)
+    assert reciprocity
+    long_patterns = [
+        energy_trend_patterns(request.messages),
+        reinitiation_patterns(request.messages),
+        streak_patterns(request.messages),
+        repeated_question_patterns(request.messages),
+    ]
+    assert all(long_patterns)
+    assert topic_depth_patterns(request.messages) == []
+    assert response.overall.patterns == reciprocity + [p for found in long_patterns for p in found]
+    assert response.overall.patterns == conversation_patterns(request.messages)
+    assert "Were you putting in more effort than they were, and did that feel okay to you?" in response.overall.reflection_questions
+    _assert_agency_safe(response.overall.patterns)
+
+
+def test_heuristic_effort_question_keys_off_reciprocity_only() -> None:
+    """A long-conversation pattern alone does not add the effort reflection question."""
+    turns: List[Tuple[str, str]] = [
+        ("self", "What do you do for work these days?"),
+        ("match", "I teach chemistry, what do you do for work?"),
+    ]
+    turns += [("self", "I design bridges for the city"), ("match", "That sounds fun, I love bridges")] * 4
+    turns += [("self", "So what do you do for work these days again?"), ("match", "Still teaching chemistry at the school")]
+    request = AnalyzeRequest(conversation_id="long-2", messages=_conversation(turns))
+    response = asyncio.run(HeuristicScorer().analyze(request))
+
+    assert reciprocity_patterns(request.messages) == []
+    assert response.overall.patterns == repeated_question_patterns(request.messages)
+    assert len(response.overall.patterns) == 1
+    assert response.overall.reflection_questions == reflection_questions(
+        review_self_messages(request.messages), [], request.preferences
+    )
+
+
+def test_conversation_patterns_stay_empty_for_a_short_even_exchange() -> None:
+    turns = [("self", "How was the hike?"), ("match", "Gorgeous, the ridge was worth it"), ("self", "Jealous, I was stuck inside")]
+    assert conversation_patterns(_conversation(turns)) == []
