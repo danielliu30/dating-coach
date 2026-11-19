@@ -1053,15 +1053,23 @@ func TestSignOutTakesEffectWhenTheUserSignedOut(t *testing.T) {
 		user := verifiedUser(t, svc, pool)
 		device := signIn(user)
 		other := signIn(user)
+		renewing := signIn(user)
 		time.Sleep(5 * time.Millisecond)
 		age := time.Since(issuedAt(device.Token))
 		time.Sleep(5 * time.Millisecond)
+		renewed, err := svc.Refresh(ctx, renewing.RefreshToken)
+		if err != nil {
+			t.Fatalf("refresh: %v", err)
+		}
 		fresh := signIn(user)
 
 		signOut(device.Token, fmt.Sprintf(`{"refresh_token":%q,"token_age_ms":%d}`, device.RefreshToken, age.Milliseconds()))
 
 		if alive(device) || alive(other) {
 			t.Fatal("a session issued before the sign-out survived it")
+		}
+		if _, err := svc.Refresh(ctx, renewed.RefreshToken); err == nil {
+			t.Fatal("a session opened before the sign-out survived it by renewing since")
 		}
 		if !alive(fresh) {
 			t.Fatal("the session opened after the sign-out was ended by it")
