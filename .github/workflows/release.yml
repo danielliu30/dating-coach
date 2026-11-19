@@ -127,6 +127,7 @@ jobs:
       PROJECT: ${{ vars.GCP_PROJECT_ID }}
       REGION: ${{ vars.GCP_REGION || 'us-central1' }}
       RUNTIME_SA: ${{ vars.GCP_RUNTIME_SERVICE_ACCOUNT }}
+      WEB_SA: ${{ vars.GCP_WEB_SERVICE_ACCOUNT }}
       INVOKER_SA: ${{ vars.GCP_INVOKER_SERVICE_ACCOUNT }}
       IMAGES: docker.io/${{ secrets.DOCKERHUB_USERNAME }}
       PUBLIC_APP_URL: ${{ vars.PUBLIC_APP_URL }}
@@ -282,6 +283,7 @@ jobs:
         run: |
           gcloud run deploy dating-coach-web --project "$PROJECT" --region "$REGION" \
             --image "$IMAGES/dating-coach-web:$DEPLOY_TAG" --port 80 \
+            --service-account "$WEB_SA" \
             --allow-unauthenticated --min-instances "$WEB_MIN_INSTANCES" --max-instances "$WEB_MAX_INSTANCES"
 
       - name: Health check, roll back on failure

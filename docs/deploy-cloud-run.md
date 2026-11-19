@@ -54,7 +54,7 @@ export SMTP_PASSWORD='...'            # or leave unset; set it later
 PROJECT_ID=<project> REGION=us-central1 ./scripts/gcp-bootstrap.sh
 ```
 
-It enables the APIs, creates the `dc-runtime`, `dc-invoker` and `dc-deploy`
+It enables the APIs, creates the `dc-runtime`, `dc-web`, `dc-invoker` and `dc-deploy`
 service accounts, GitHub OIDC trust for this repo (no JSON keys), the five
 Secret Manager secrets and the Pub/Sub topics, then prints the GitHub variables
 to set. Re-running it is safe and updates the existing WIF provider's trust
@@ -68,6 +68,10 @@ conditional `roles/pubsub.admin` grant restricted to the three
 `<topic>.worker-push` subscription resource names. This permits setting their
 dead-letter subscriber IAM policies without project-wide Pub/Sub IAM access.
 
+The static web service uses `dc-web`, with no project roles. The deployer can
+act as that account (and the runtime and invoker accounts), so it does not need
+access to the Compute Engine default service account.
+
 ### 3. GitHub settings (Settings > Secrets and variables > Actions)
 
 Secrets (already present): `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`.
@@ -79,6 +83,7 @@ Variables:
 |----------|-------|
 | `GCP_PROJECT_ID`, `GCP_REGION` | printed by the script |
 | `GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_DEPLOY_SERVICE_ACCOUNT`, `GCP_RUNTIME_SERVICE_ACCOUNT`, `GCP_INVOKER_SERVICE_ACCOUNT` | printed by the script |
+| `GCP_WEB_SERVICE_ACCOUNT` | printed by the script (`dc-web@<project>.iam.gserviceaccount.com`) |
 | `API_PUBLIC_URL` | `https://dating-coach-api-<project number>.<region>.run.app` (baked into the web bundle) |
 | `PUBLIC_APP_URL` | `https://dating-coach-web-<project number>.<region>.run.app`, or your domain |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `MAIL_FROM` | optional, for real email |

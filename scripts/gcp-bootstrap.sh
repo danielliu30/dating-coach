@@ -23,6 +23,7 @@ exists() { "$@" >/dev/null 2>&1; }
 
 PROJECT_NUMBER="$(g projects describe "$PROJECT_ID" --format='value(projectNumber)')"
 RUNTIME_SA="dc-runtime@$PROJECT_ID.iam.gserviceaccount.com"
+WEB_SA="dc-web@$PROJECT_ID.iam.gserviceaccount.com"
 INVOKER_SA="dc-invoker@$PROJECT_ID.iam.gserviceaccount.com"
 DEPLOY_SA="dc-deploy@$PROJECT_ID.iam.gserviceaccount.com"
 PUBSUB_AGENT="service-$PROJECT_NUMBER@gcp-sa-pubsub.iam.gserviceaccount.com"
@@ -33,6 +34,7 @@ g services enable run.googleapis.com pubsub.googleapis.com cloudscheduler.google
 
 echo "== service accounts"
 for sa in dc-runtime:"Cloud Run runtime (api, worker, ml, migrate)" \
+          dc-web:"Static web runtime (no project permissions)" \
           dc-invoker:"Pub/Sub push and Cloud Scheduler caller" \
           dc-deploy:"GitHub Actions deployer"; do
   name="${sa%%:*}"
@@ -55,7 +57,7 @@ g projects add-iam-policy-binding "$PROJECT_ID" --member "serviceAccount:$DEPLOY
   --role roles/pubsub.admin \
   --condition "title=worker-push-subscription-iam,expression=$worker_subscriptions" >/dev/null
 bind "$DEPLOY_SA" roles/cloudscheduler.admin
-for sa in "$RUNTIME_SA" "$INVOKER_SA"; do
+for sa in "$RUNTIME_SA" "$INVOKER_SA" "$WEB_SA"; do
   g iam service-accounts add-iam-policy-binding "$sa" --member "serviceAccount:$DEPLOY_SA" \
     --role roles/iam.serviceAccountUser >/dev/null
 done
@@ -105,6 +107,7 @@ Done. Set these GitHub repository *variables* (Settings > Secrets and variables 
   GCP_WORKLOAD_IDENTITY_PROVIDER=projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/github/providers/github
   GCP_DEPLOY_SERVICE_ACCOUNT=$DEPLOY_SA
   GCP_RUNTIME_SERVICE_ACCOUNT=$RUNTIME_SA
+  GCP_WEB_SERVICE_ACCOUNT=$WEB_SA
   GCP_INVOKER_SERVICE_ACCOUNT=$INVOKER_SA
 Cloud Run URLs are https://<service>-$PROJECT_NUMBER.$REGION.run.app, so:
   API_PUBLIC_URL=https://dating-coach-api-$PROJECT_NUMBER.$REGION.run.app
