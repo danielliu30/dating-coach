@@ -147,6 +147,7 @@ Request:
 | `messages[]` | array | `position` (0-based), `sender` (`self`\|`match`), `body`, optional `sent_at`. Only `self` messages are scored. |
 | `preferences` | string | Optional, ≤2000 chars. What the customer is looking for; feedback is tailored to it. |
 | `focus_areas[]` | array | Optional, defaults to `[]`. Coaching-brain pillar keys (`agency`, `feedback`, `support`) the customer wants to improve on; normalised to lowercase, deduplicated and put in pillar order. Unknown keys are a 422. |
+| `profile` | object | Optional. The customer's own dating profile: `dating_styles[]`, `phases_strong[]`, `phases_working_on[]` (the backend's vocabulary keys, normalised to lowercase and deduplicated), `bio` (≤2000 chars) and `prompts[]` (`prompt`, `answer`). Context for the customer's own goals only, never for whom to date; absent or empty leaves the analysis unchanged. |
 
 Response:
 
