@@ -71,8 +71,11 @@ def extract_profile_evidence(messages: Sequence[Message]) -> ProfileEvidence:
                 if day not in constraints:
                     constraints[day] = _Constraint(i)
                     history.append(constraints[day])
-                constraints[day].stated = i
-                constraints[day].suspended = False
+                constraint = constraints[day]
+                constraint.stated = i
+                if constraint.suspended:
+                    constraint.suspended = False
+                    constraint.open_miss = None
             elif _INDIRECT_AVAILABILITY.fullmatch(body):
                 if proposed_day:
                     constraints.pop(proposed_day, None)
@@ -81,7 +84,6 @@ def extract_profile_evidence(messages: Sequence[Message]) -> ProfileEvidence:
                     # can make these restrictions actionable again.
                     for constraint in constraints.values():
                         constraint.suspended = True
-                        constraint.open_miss = None
             else:
                 # The other person may be reopening or qualifying availability.
                 for day in _DAY_WORD.findall(body):
@@ -113,7 +115,7 @@ def extract_profile_evidence(messages: Sequence[Message]) -> ProfileEvidence:
         if not acknowledgment:
             continue
         engagement = engagement or [message.position]
-        open_misses = [c for c in constraints.values() if c.open_miss]
+        open_misses = [c for c in constraints.values() if c.open_miss and not c.suspended]
         if len(open_misses) == 1:
             constraint = open_misses[0]
             assert constraint.open_miss is not None
@@ -126,7 +128,7 @@ def extract_profile_evidence(messages: Sequence[Message]) -> ProfileEvidence:
 
     for constraint in history:
         first, latest = constraint.first_miss, constraint.open_miss
-        if first and latest and first[1] != latest[1]:
+        if not constraint.suspended and first and latest and first[1] != latest[1]:
             issue = ProfileObservation(
                 level="needs_coaching",
                 self_positions=[first[0], latest[0]],
@@ -134,6 +136,7 @@ def extract_profile_evidence(messages: Sequence[Message]) -> ProfileEvidence:
             )
             return ProfileEvidence(coverage="eligible", feedback_needed=issue, self_correction=issue, engagement=issue)
 
+    # An ambiguous acceptance is neither a confirmed outstanding miss nor a repair.
     has_open_miss = any(c.open_miss for c in history)
     evidence = ProfileEvidence(
         coverage="eligible",

@@ -193,6 +193,22 @@ def test_ambiguous_acceptance_is_not_evidence_that_the_previous_restriction_stil
     assert evidence.feedback_needed.level == "unknown"
 
 
+def test_ambiguous_acceptance_is_not_evidence_of_repair_either():
+    evidence = extract_profile_evidence(_conversation(
+        "me: I'd like to try that cafe together.",
+        "them: I can't make Friday.",
+        "me: Got it, how about Saturday?",
+        "them: Let me check.",
+        "me: How about Friday?",
+        "me: How about the next day instead?",
+        "them: That works.",
+        "me: We could try the cafe by the station.",
+    ))
+    assert evidence.engagement.level == "strong"
+    assert evidence.feedback_needed.level == "unknown"
+    assert evidence.self_correction.level == "unknown"
+
+
 def test_no_reply_or_short_style_is_not_a_coaching_need():
     evidence = extract_profile_evidence(_conversation(
         "me: Would you like to meet up?",
