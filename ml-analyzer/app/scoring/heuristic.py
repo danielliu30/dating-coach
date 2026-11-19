@@ -415,6 +415,110 @@ def streak_patterns(messages: Sequence[Message]) -> List[str]:
     ]
 
 
+# Greetings and routine check-ins: the customer's message is small talk when it is mostly one of these.
+SMALL_TALK = re.compile(
+    r"\b(how('?s| is| was| are| r)( (your|ur))? (day|night|morning|evening|weekend|week|work|it going)|"
+    r"how are (you|u)|how r u|how have you been|what'?s up|what about you|how about you|what are you (up to|doing)|"
+    r"good (morning|night))\b",
+    re.IGNORECASE,
+)
+# The customer saying what they think, feel or care about, or asking about the match's.
+DEPTH_MARKER = re.compile(
+    r"\b(i (feel|felt|think|believe|value|care about|always wanted|used to|realized|realised|worry|wish|hope|dream)|"
+    r"i(['\u2019]ve| have) always|i(['\u2019]m| am) (scared|afraid|proud|nervous|excited)|honestly|to me|for me|matters to me|"
+    r"means a lot|grew up|my (family|mom|mum|dad|parents|brother|sister|childhood|dream|goal|friends)|"
+    r"what made you|why do you|what do you love|what matters|what drew you|how did you (get into|end up|decide))\b",
+    re.IGNORECASE,
+)
+# The customer naming their own feeling outright; counts as going deeper at any length ("I feel lonely lately").
+OWN_FEELING = re.compile(
+    r"\b(i (feel|felt|worry|care about|value|realized|realised)|i(['\u2019]ve| have) always|"
+    r"i(['\u2019]m| am) (scared|afraid|proud|nervous|excited|lonely|sad|hurt|anxious))\b",
+    re.IGNORECASE,
+)
+# Word count from which a customer message counts as going deeper even without a ``DEPTH_MARKER``.
+DEEP_WORDS = 15
+# Most words a small-talk message can have; longer ones are judged on their content.
+SMALL_TALK_WORDS = 5
+# Fewest customer messages before the conversation's depth is described.
+MIN_SELF_FOR_DEPTH = 10
+# Share of the customer's messages that is small talk from which the conversation is named as staying there.
+SMALL_TALK_SHARE = 0.6
+# Fewest messages on each side of the deep/small-talk comparison of the replies they drew.
+MIN_DEPTH_COMPARED = 2
+
+Depth = Literal["deep", "small_talk", "other"]
+
+
+def _depth(message: Message) -> Depth:
+    """Classify one customer message as going deeper, small talk, or neither.
+
+    A message is ``deep`` when it has at least ``DEEP_WORDS`` words, an
+    ``OWN_FEELING`` at any length or, from ``SMALL_TALK_WORDS + 1`` words, a
+    ``DEPTH_MARKER``. Otherwise it is
+    ``small_talk`` when it is low-effort, at most ``SMALL_TALK_WORDS`` words
+    or a ``SMALL_TALK`` check-in, and ``other`` when none of these apply.
+    """
+    words = _word_count(message)
+    if (
+        words >= DEEP_WORDS
+        or OWN_FEELING.search(message.body)
+        or (words > SMALL_TALK_WORDS and DEPTH_MARKER.search(message.body))
+    ):
+        return "deep"
+    if _is_low_effort(message) or words <= SMALL_TALK_WORDS or SMALL_TALK.search(message.body):
+        return "small_talk"
+    return "other"
+
+
+def topic_depth_patterns(messages: Sequence[Message]) -> List[str]:
+    """Describe how much of the customer's side went past small talk, and how the deeper messages landed.
+
+    Every ``self`` message is classified by ``_depth``. With at least
+    ``MIN_SELF_FOR_DEPTH`` customer messages, two observations can be made:
+
+    - When at least ``SMALL_TALK_SHARE`` of them are small talk and at most
+      one in ten (at least one allowed) go deeper, a sentence gives both
+      counts and cites the deeper messages.
+    - When at least ``MIN_DEPTH_COMPARED`` messages are deep and as many are
+      small talk, the average words of the reply each drew (from
+      ``review_self_messages``; no reply counts as zero) are compared, and a
+      ratio of at least ``RECIPROCITY_RATIO`` with the deeper average reaching
+      ``GOOD_REPLY_WORDS`` names the difference, citing the deeper messages.
+
+    Only the customer's messages are classified and only reply lengths are
+    reported; nothing says why a reply was long or short.
+    """
+    own = sorted((m for m in messages if m.sender == "self"), key=lambda m: m.position)
+    if len(own) < MIN_SELF_FOR_DEPTH:
+        return []
+    depths = {m.position: _depth(m) for m in own}
+    deep = [m for m in own if depths[m.position] == "deep"]
+    small = [m for m in own if depths[m.position] == "small_talk"]
+
+    patterns: List[str] = []
+    if len(small) >= SMALL_TALK_SHARE * len(own) and len(deep) <= max(1, len(own) // 10):
+        went_deeper = f"{len(deep)} ({_cite(deep)})" if deep else "none"
+        patterns.append(
+            f"Most of your messages stayed in small talk: {len(small)} of your {len(own)} were greetings, check-ins "
+            f"or a few words, and {went_deeper} went into what you think, feel or care about."
+        )
+
+    if len(deep) >= MIN_DEPTH_COMPARED and len(small) >= MIN_DEPTH_COMPARED:
+        reply_words = {
+            r.message.position: _word_count(r.reply) if r.reply is not None else 0 for r in review_self_messages(messages)
+        }
+        deep_back = statistics.fmean(reply_words[m.position] for m in deep)
+        small_back = statistics.fmean(reply_words[m.position] for m in small)
+        if deep_back >= GOOD_REPLY_WORDS and deep_back >= RECIPROCITY_RATIO * small_back:
+            small_phrase = f"about {round(small_back)}" if round(small_back) else "next to nothing"
+            patterns.append(
+                f"Your messages that went deeper ({_cite(deep)}) drew about {round(deep_back)} words back on average, "
+                f"against {small_phrase} for your small talk."
+            )
+    return patterns
+
+
 def reflection_questions(
     reviews: Sequence[SelfMessageReview],
     patterns: Sequence[str],

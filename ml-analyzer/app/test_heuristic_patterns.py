@@ -6,7 +6,7 @@ from typing import List, Optional, Sequence, Tuple
 from app.coaching import enforce_agency
 from app.schemas import Message
 from app.scoring.base import _parse_sent_at
-from app.scoring.heuristic import energy_trend_patterns, reinitiation_patterns, streak_patterns
+from app.scoring.heuristic import energy_trend_patterns, reinitiation_patterns, streak_patterns, topic_depth_patterns
 
 
 def _conversation(turns: Sequence[Tuple[str, str]], sent_at: Optional[Sequence[Optional[str]]] = None) -> List[Message]:
@@ -176,3 +176,74 @@ def test_streaks_stay_silent_when_rare_or_mutual() -> None:
     assert streak_patterns(_by_sender("ssmsmssm" + "sm" * 20)) == []
     # Both sides text in bursts: a texting style, not one side carrying it.
     assert streak_patterns(_by_sender("ssmmssmmssmm")) == []
+
+
+DEEP = "Honestly I think growing up near the sea is why I still need to be by water to feel at home"
+CHECK_IN = "How was your day today, anything fun happen at work?"
+DETAILED_REPLY = "It was a long one but I finally finished the big project I have been dreading all month"
+
+
+def test_topic_depth_names_a_conversation_that_stays_in_small_talk() -> None:
+    turns: List[Tuple[str, str]] = []
+    for i in range(12):
+        turns.append(("self", DEEP if i == 7 else ("hey" if i % 3 == 0 else CHECK_IN)))
+        turns.append(("match", "good thanks"))
+    patterns = topic_depth_patterns(_conversation(turns))
+
+    assert patterns == [
+        "Most of your messages stayed in small talk: 11 of your 12 were greetings, check-ins or a few words, "
+        "and 1 (Message 15) went into what you think, feel or care about."
+    ]
+    _assert_agency_safe(patterns)
+
+    none_deep = [("self", "hey") if i % 2 == 0 else ("match", "hi") for i in range(24)]
+    assert topic_depth_patterns(_conversation(none_deep))[0].endswith(
+        "and none went into what you think, feel or care about."
+    )
+
+
+def test_topic_depth_compares_replies_drawn_by_deeper_messages() -> None:
+    turns: List[Tuple[str, str]] = []
+    for i in range(10):
+        deep = i in (2, 5, 8)
+        turns.append(("self", DEEP if deep else CHECK_IN))
+        if i != 9:
+            turns.append(("match", DETAILED_REPLY if deep else "fine"))
+    patterns = topic_depth_patterns(_conversation(turns))
+
+    assert patterns == [
+        "Your messages that went deeper (Messages 5, 11 and 17) drew about 18 words back on average, "
+        "against about 1 for your small talk."
+    ]
+    _assert_agency_safe(patterns)
+
+    # Small talk followed straight by another customer message drew no reply at all.
+    unanswered: List[Tuple[str, str]] = []
+    for _ in range(5):
+        unanswered += [("self", CHECK_IN), ("self", DEEP), ("match", DETAILED_REPLY)]
+    assert topic_depth_patterns(_conversation(unanswered)) == [
+        "Your messages that went deeper (Messages 2, 5, 8, 11 and 14) drew about 18 words back on average, "
+        "against next to nothing for your small talk."
+    ]
+
+
+def test_topic_depth_reads_contracted_disclosures_as_deeper() -> None:
+    for body in (
+        "I feel lonely lately",
+        "I'm nervous",
+        "I've always wanted to live abroad someday",
+        "I\u2019ve always wanted to live abroad",
+        "I'm nervous about the new job",
+    ):
+        turns = [("self", "hey"), ("match", "hi")] * 9 + [("self", body), ("match", "oh nice")]
+        assert topic_depth_patterns(_conversation(turns))[0].endswith(
+            "and 1 (Message 19) went into what you think, feel or care about."
+        ), body
+
+
+def test_topic_depth_stays_silent_when_short_or_mixed() -> None:
+    few = [("self", "hey") if i % 2 == 0 else ("match", "hi") for i in range(18)]
+    assert topic_depth_patterns(_conversation(few)) == []
+
+    mixed = [("self", DEEP if i % 4 == 0 else CHECK_IN) if i % 2 == 0 else ("match", DETAILED_REPLY) for i in range(24)]
+    assert topic_depth_patterns(_conversation(mixed)) == []
