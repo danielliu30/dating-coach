@@ -141,6 +141,14 @@ def test_reinitiation_stays_silent_without_timestamps_or_balance() -> None:
     partly_dated[5] = partly_dated[5].model_copy(update={"sent_at": "not a time"})
     assert reinitiation_patterns(partly_dated) == []
 
+    # Only the first messages were dated; the backend stamped the rest with the (much later) receive time.
+    dated_head = _timeline("smsmsmsm", gaps_after=[])
+    received = [f"2026-03-05T12:00:00.{i:06d}Z" for i in range(len(dated_head))]
+    head_then_received = [m if m.position < 2 else m.model_copy(update={"sent_at": received[m.position]}) for m in dated_head]
+    assert reinitiation_patterns(head_then_received) == []
+    interleaved = [m if m.position % 2 else m.model_copy(update={"sent_at": received[m.position]}) for m in dated_head]
+    assert reinitiation_patterns(interleaved) == []
+
 
 def _by_sender(senders: str) -> List[Message]:
     return [Message(position=i, sender="self" if c == "s" else "match", body=f"message {i}") for i, c in enumerate(senders)]
@@ -219,6 +227,20 @@ def test_topic_depth_compares_replies_drawn_by_deeper_messages() -> None:
     ]
 
 
+def test_topic_depth_reads_contracted_disclosures_as_deeper() -> None:
+    for body in (
+        "I feel lonely lately",
+        "I'm nervous",
+        "I've always wanted to live abroad someday",
+        "I\u2019ve always wanted to live abroad",
+        "I'm nervous about the new job",
+    ):
+        turns = [("self", "hey"), ("match", "hi")] * 9 + [("self", body), ("match", "oh nice")]
+        assert topic_depth_patterns(_conversation(turns))[0].endswith(
+            "and 1 (Message 19) went into what you think, feel or care about."
+        ), body
+
+
 def test_topic_depth_stays_silent_when_short_or_mixed() -> None:
     few = [("self", "hey") if i % 2 == 0 else ("match", "hi") for i in range(18)]
     assert topic_depth_patterns(_conversation(few)) == []
@@ -273,6 +295,31 @@ def test_repeated_questions_skip_check_ins_short_questions_and_the_match() -> No
 
     different = [("self", "What is your favourite film?"), ("self", "What is your favourite book?"), ("self", "I like this.")]
     assert repeated_question_patterns(_conversation(different)) == []
+
+
+def test_repeated_questions_read_questions_inside_brackets_and_after_check_ins() -> None:
+    turns = [
+        ("self", "(Where did you grow up?) I grew up in Boston."),
+        ("self", "What about you, do you want kids?"),
+        ("self", "Where did you grow up?"),
+        ("self", "How about you, do you want kids?"),
+    ]
+    assert repeated_question_patterns(_conversation(turns)) == [
+        "You asked close to the same question more than once: Message 3 ('Where did you grow up?') repeats Message 1; "
+        "Message 4 ('How about you, do you want kids?') repeats Message 2."
+    ]
+
+
+def test_repeated_questions_tell_apart_different_question_words() -> None:
+    turns = [
+        ("self", "When did you two meet?"),
+        ("self", "Where did you two meet?"),
+        ("self", "Where do you usually go hiking?"),
+        ("self", "When do you usually go hiking?"),
+        ("self", "How's your week going so far?"),
+        ("self", "How's your week going so far?"),
+    ]
+    assert repeated_question_patterns(_conversation(turns)) == []
 
 
 def test_heuristic_analyze_reports_long_conversation_patterns_after_reciprocity() -> None:
