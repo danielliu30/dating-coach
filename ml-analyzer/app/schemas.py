@@ -24,6 +24,87 @@ class Message(BaseModel):
     sent_at: Optional[str] = None
 
 
+# Labels for the backend's users.dating_styles / phases_* vocabularies. Keys
+# outside these tables are still accepted and rendered from the key itself, so
+# a vocabulary added on the backend never fails a request here.
+DATING_STYLE_LABELS = {
+    "in_person": "in person",
+    "tinder": "Tinder",
+    "hinge": "Hinge",
+    "bumble": "Bumble",
+    "coffee_meets_bagel": "Coffee Meets Bagel",
+    "match": "Match",
+    "okcupid": "OkCupid",
+    "feeld": "Feeld",
+    "speed_dating": "speed dating",
+    "friends_intro": "introductions through friends",
+}
+DATING_PHASE_LABELS = {
+    "opening": "opening lines",
+    "first_messages": "the first messages",
+    "building_rapport": "building rapport",
+    "flirting": "flirting",
+    "asking_out": "asking them out",
+    "first_date": "first dates",
+    "follow_up": "following up after a date",
+    "defining_relationship": "defining the relationship",
+}
+
+
+def profile_label(key: str, labels: dict[str, str]) -> str:
+    """Human-readable label for a profile vocabulary key, falling back to the key with spaces."""
+    return labels.get(key, key.replace("_", " "))
+
+
+class ProfilePrompt(BaseModel):
+    """One dating-app prompt the customer answered on their own profile."""
+
+    prompt: str = Field(default="", max_length=200)
+    answer: str = Field(min_length=1, max_length=1000)
+
+
+class UserProfile(BaseModel):
+    """The customer's own dating profile, as context for their goals; never used to judge whom they date.
+
+    The list fields carry the backend's vocabulary keys (``DATING_STYLE_LABELS``,
+    ``DATING_PHASE_LABELS``), normalised to stripped, lowercased, deduplicated
+    keys. Every field is optional; an empty profile is the same as none.
+    """
+
+    dating_styles: List[str] = Field(default_factory=list, max_length=20, description="Where the customer meets people")
+    phases_strong: List[str] = Field(
+        default_factory=list, max_length=20, description="Dating phases the customer feels strong in"
+    )
+    phases_working_on: List[str] = Field(
+        default_factory=list, max_length=20, description="Dating phases the customer is working on"
+    )
+    bio: Optional[str] = Field(default=None, max_length=2000, description="Free-text bio from the customer's profile")
+    prompts: List[ProfilePrompt] = Field(default_factory=list, max_length=10)
+
+    @field_validator("dating_styles", "phases_strong", "phases_working_on", mode="before")
+    @classmethod
+    def _normalise_keys(cls, value: Any) -> Any:
+        """Strip, lowercase and deduplicate keys in order, dropping blanks."""
+        if not isinstance(value, list) or not all(isinstance(key, str) for key in value):
+            return value
+        keys: List[str] = []
+        for key in value:
+            key = key.strip().lower()[:64]
+            if key and key not in keys:
+                keys.append(key)
+        return keys
+
+    def is_empty(self) -> bool:
+        """True when no field carries anything, so callers can treat it as absent."""
+        return not (
+            self.dating_styles
+            or self.phases_strong
+            or self.phases_working_on
+            or (self.bio and self.bio.strip())
+            or self.prompts
+        )
+
+
 class AnalyzeRequest(BaseModel):
     conversation_id: str
     platform: str = "unknown"
@@ -40,6 +121,10 @@ class AnalyzeRequest(BaseModel):
             "Coaching-brain pillar keys the customer wants to improve on (see PILLAR_KEYS); "
             "the response carries at most one overall.goal_scores entry per area. Distinct from preferences."
         ),
+    )
+    profile: Optional[UserProfile] = Field(
+        default=None,
+        description="The customer's own dating profile; absent or empty leaves the analysis untailored to it",
     )
 
     @field_validator("focus_areas", mode="before")
