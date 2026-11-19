@@ -119,6 +119,7 @@ services:
     build: ./ml-analyzer
     environment:
       ML_BACKEND: ${ML_BACKEND:-llm}
+      ML_PROFILE_EVIDENCE_ENABLED: ${ML_PROFILE_EVIDENCE_ENABLED:-false}
       LLM_PROVIDER: ${LLM_PROVIDER:-anthropic}
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_MODEL: ${LLM_MODEL:-claude-sonnet-4-5}
