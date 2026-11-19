@@ -52,6 +52,8 @@ func (h *Handler) Routes(authenticate func(http.Handler) http.Handler) http.Hand
 		public.Post("/refresh", h.refresh)
 		public.Post("/verify", h.verify)
 		public.Post("/resend-verification", h.resendVerification)
+		public.Post("/forgot-password", h.forgotPassword)
+		public.Post("/reset-password", h.resetPassword)
 	})
 	r.Group(func(private chi.Router) {
 		private.Use(authenticate)
@@ -62,6 +64,42 @@ func (h *Handler) Routes(authenticate func(http.Handler) http.Handler) http.Hand
 		private.With(RequireScope(ScopeSession)).Post("/ws-ticket", h.wsTicket)
 	})
 	return r
+}
+
+func (h *Handler) forgotPassword(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Email string `json:"email"`
+	}
+	if err := httpx.Decode(r, &in); err != nil {
+		httpx.Error(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if err := h.svc.ForgotPassword(r.Context(), in.Email); err != nil {
+		slog.Error("request password reset", "error", err)
+	}
+	httpx.JSON(w, http.StatusAccepted, map[string]string{"status": "sent"})
+}
+
+func (h *Handler) resetPassword(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Email    string `json:"email"`
+		Code     string `json:"code"`
+		Password string `json:"password"`
+	}
+	if err := httpx.Decode(r, &in); err != nil {
+		httpx.Error(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	err := h.svc.ResetPassword(r.Context(), in.Email, in.Code, in.Password)
+	switch {
+	case errors.Is(err, ErrInvalidInput), errors.Is(err, ErrInvalidResetCode):
+		httpx.Error(w, http.StatusBadRequest, err.Error())
+	case err != nil:
+		slog.Error("reset password", "error", err)
+		httpx.Error(w, http.StatusInternalServerError, "could not reset password")
+	default:
+		httpx.JSON(w, http.StatusOK, map[string]string{"status": "reset"})
+	}
 }
 
 // signUp handles POST /signup and returns a session for the new account.

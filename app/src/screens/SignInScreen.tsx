@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { ApiError } from '../api/client';
@@ -14,6 +14,7 @@ import { colors, fonts, shared, type } from '../theme';
 
 export default function SignInScreen({
   navigation,
+  route,
 }: NativeStackScreenProps<AuthStackParams, 'SignIn'>): React.ReactElement {
   const { signIn, signInWithGoogle, signedOutReason, dismissSignedOutReason } = useAuth();
   const [email, setEmail] = useState('');
@@ -21,6 +22,10 @@ export default function SignInScreen({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [googleBusy, setGoogleBusy] = useState(false);
+
+  useEffect(() => {
+    if (route?.params?.email !== undefined) setEmail(route.params.email);
+  }, [route?.params?.email]);
 
   const submitGoogle = async () => {
     setGoogleBusy(true);
@@ -70,6 +75,7 @@ export default function SignInScreen({
         />
       ) : null}
       <View style={{ gap: 14 }}>
+        {route?.params?.notice ? <Notice title="Password reset" text={route.params.notice} /> : null}
         <Field
           label="Email"
           value={email}
@@ -88,6 +94,9 @@ export default function SignInScreen({
           placeholder="••••••••"
         />
         {error ? <Text style={shared.error}>{error}</Text> : null}
+        <Pressable accessibilityRole="button" onPress={() => navigation.navigate('ForgotPassword', { email })}>
+          <Text style={styles.link}>Forgot password?</Text>
+        </Pressable>
         <Button label="Sign in" onPress={submit} loading={busy} disabled={googleBusy} icon="arrow-forward" />
         {googleSignInAvailable ? (
           <Button

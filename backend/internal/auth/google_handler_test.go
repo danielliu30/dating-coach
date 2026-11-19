@@ -26,7 +26,7 @@ func failOpenLimiter(t *testing.T) *RateLimiter {
 // refusals that never touch the store: not configured, malformed body, a
 // token the verifier rejects, and a role a caller may not pick.
 func TestGoogleRouteStatusCodes(t *testing.T) {
-	svc := NewService(nil, nil, nil, nil, 0, "", nil, nil, &stubPublisher{}, 15*time.Minute, time.Minute, time.Hour)
+	svc := NewService(nil, nil, nil, nil, 0, "", nil, nil, nil, &stubPublisher{}, 15*time.Minute, time.Minute, time.Hour)
 	routes := NewHandler(svc, failOpenLimiter(t)).Routes(rejectAll)
 	post := func(body string) int {
 		rec := httptest.NewRecorder()

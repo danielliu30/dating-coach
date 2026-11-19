@@ -17,12 +17,25 @@ const (
 // VerificationCache stores short-lived email verification codes and their
 // failed-attempt counters in Redis.
 type VerificationCache struct {
-	rdb *redis.Client
-	ttl time.Duration
+	rdb    *redis.Client
+	ttl    time.Duration
+	prefix string
 }
 
 func NewVerificationCache(rdb *redis.Client, ttl time.Duration) *VerificationCache {
-	return &VerificationCache{rdb: rdb, ttl: ttl}
+	return &VerificationCache{rdb: rdb, ttl: ttl, prefix: "verify"}
+}
+
+func NewResetCache(rdb *redis.Client, ttl time.Duration) *VerificationCache {
+	return &VerificationCache{rdb: rdb, ttl: ttl, prefix: "reset"}
+}
+
+func (c *VerificationCache) codeKey(userID string) string {
+	return c.prefix + ":code:" + userID
+}
+
+func (c *VerificationCache) attemptsKey(userID string) string {
+	return c.prefix + ":attempts:" + userID
 }
 
 func codeKey(userID string) string {
@@ -36,8 +49,8 @@ func attemptsKey(userID string) string {
 // Store saves a verification code and resets the attempt counter.
 func (c *VerificationCache) Store(ctx context.Context, userID, code string) error {
 	pipe := c.rdb.Pipeline()
-	pipe.Set(ctx, codeKey(userID), code, c.ttl)
-	pipe.Set(ctx, attemptsKey(userID), 0, c.ttl)
+	pipe.Set(ctx, c.codeKey(userID), code, c.ttl)
+	pipe.Set(ctx, c.attemptsKey(userID), 0, c.ttl)
 	_, err := pipe.Exec(ctx)
 	return err
 }
@@ -46,8 +59,8 @@ func (c *VerificationCache) Store(ctx context.Context, userID, code string) erro
 // is missing, the code is treated as expired/invalid.
 func (c *VerificationCache) Get(ctx context.Context, userID string) (code string, attempts int64, err error) {
 	pipe := c.rdb.Pipeline()
-	codeCmd := pipe.Get(ctx, codeKey(userID))
-	attemptsCmd := pipe.Get(ctx, attemptsKey(userID))
+	codeCmd := pipe.Get(ctx, c.codeKey(userID))
+	attemptsCmd := pipe.Get(ctx, c.attemptsKey(userID))
 	if _, err := pipe.Exec(ctx); err != nil && err != redis.Nil {
 		return "", 0, err
 	}
@@ -81,10 +94,10 @@ return n
 // pinned to the remaining lifetime of the code so both expire together; once
 // the code is gone the counter is removed and 0 is returned.
 func (c *VerificationCache) IncrementAttempts(ctx context.Context, userID string) (int64, error) {
-	return incrementAttemptsScript.Run(ctx, c.rdb, []string{codeKey(userID), attemptsKey(userID)}).Int64()
+	return incrementAttemptsScript.Run(ctx, c.rdb, []string{c.codeKey(userID), c.attemptsKey(userID)}).Int64()
 }
 
 // Invalidate removes the code and attempt counter.
 func (c *VerificationCache) Invalidate(ctx context.Context, userID string) error {
-	return c.rdb.Del(ctx, codeKey(userID), attemptsKey(userID)).Err()
+	return c.rdb.Del(ctx, c.codeKey(userID), c.attemptsKey(userID)).Err()
 }

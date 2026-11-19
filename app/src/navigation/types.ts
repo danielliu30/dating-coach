@@ -1,7 +1,8 @@
 import type { NavigatorScreenParams } from '@react-navigation/native';
 
 export type AuthStackParams = {
-  SignIn: undefined;
+  SignIn: { email?: string; notice?: string } | undefined;
+  ForgotPassword: { email?: string } | undefined;
   SignUp: undefined;
   Verify: { email?: string } | undefined;
 };

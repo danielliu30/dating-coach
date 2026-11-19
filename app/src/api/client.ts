@@ -237,6 +237,14 @@ export class ApiClient {
     return this.request<{ status: string }>('POST', '/auth/resend-verification', { email });
   }
 
+  forgotPassword(email: string) {
+    return this.request<{ status: string }>('POST', '/auth/forgot-password', { email });
+  }
+
+  resetPassword(email: string, code: string, password: string) {
+    return this.request<{ status: string }>('POST', '/auth/reset-password', { email, code, password });
+  }
+
   me() {
     return this.request<Profile>('GET', '/auth/me');
   }

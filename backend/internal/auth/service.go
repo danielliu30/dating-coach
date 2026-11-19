@@ -65,6 +65,7 @@ type Service struct {
 	bcryptCost     int
 	appURL         string
 	codes          *VerificationCache
+	resetCodes     *VerificationCache
 	denylist       *Denylist
 	deletions      DeletionPublisher
 	sessionTTL     time.Duration
@@ -96,6 +97,7 @@ func NewService(
 	bcryptCost int,
 	appURL string,
 	codes *VerificationCache,
+	resetCodes *VerificationCache,
 	denylist *Denylist,
 	deletions DeletionPublisher,
 	sessionTTL time.Duration,
@@ -110,6 +112,7 @@ func NewService(
 		bcryptCost:     bcryptCost,
 		appURL:         appURL,
 		codes:          codes,
+		resetCodes:     resetCodes,
 		denylist:       denylist,
 		deletions:      deletions,
 		sessionTTL:     sessionTTL,
