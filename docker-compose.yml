@@ -140,6 +140,7 @@ services:
       args:
         EXPO_PUBLIC_API_URL: ${WEB_API_URL:-}
         EXPO_PUBLIC_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+        EXPO_PUBLIC_PROFILE_SCORE_ENABLED: ${PROFILE_SCORE_ENABLED:-false}
     profiles: ['gateway']
     ports: ['${WEB_PORT:-3000}:80']
     restart: unless-stopped

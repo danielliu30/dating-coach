@@ -114,7 +114,12 @@ function AnalysisNavigator(): React.ReactElement {
     <AnalysisStack.Navigator screenOptions={stackOptions}>
       <AnalysisStack.Screen name="Submit" component={SubmitConversationScreen} options={{ headerShown: false }} />
       <AnalysisStack.Screen name="History" component={AnalysisHistoryScreen} options={{ title: 'Past analyses' }} />
-      <AnalysisStack.Screen name="Result" component={AnalysisResultScreen} options={{ title: 'Feedback' }} />
+      <AnalysisStack.Screen
+        name="Result"
+        component={AnalysisResultScreen}
+        getId={({ params }) => params?.analysisID}
+        options={{ title: 'Feedback' }}
+      />
     </AnalysisStack.Navigator>
   );
 }

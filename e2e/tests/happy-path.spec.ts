@@ -193,7 +193,7 @@ test.describe.serial('happy path', () => {
 
   test('6. client submits a conversation and gets a heuristic analysis', async () => {
     await openTab(clientPage, 'Analyse');
-    await expect(clientPage.getByText('Analyse a conversation')).toBeVisible();
+    await expect(field(clientPage, 'Title')).toBeVisible();
     const title = `Sourdough match ${Date.now()}`;
     await field(clientPage, 'Title').fill(title);
     await button(clientPage, 'Use the example').click();
