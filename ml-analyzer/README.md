@@ -385,6 +385,19 @@ Exit codes: `0` passed, `1` failed a threshold, `2` not evaluated (for example,
 a trained fallback or mismatched segment boundaries). LLM fallbacks are counted
 against coverage and excluded from agreement metrics.
 
+### Reddit test conversations (test only)
+
+`scripts/reddit_fetch.py` pulls self posts through Reddit's OAuth API and needs
+`REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET` and `REDDIT_USER_AGENT`. It never
+fetches comments, so crowd advice is never a target.
+`scripts/reddit_to_eval.py --salt ...` keeps `Me:` / `Name:` transcripts,
+removes usernames, links, emails, phone numbers and the match's name, and
+writes `source: "reddit"`, `consented: false` rows to `data/reddit/`, which is
+git-ignored. Score them with `eval_compare.py run --include-unconsented`.
+Reddit's terms restrict ML training, so `train.py` drops these rows unless
+`--allow-source reddit` is passed. Only pass it with Reddit's permission.
+Re-run the fetch before each eval so posts deleted on Reddit are dropped.
+
 ### 5. Switch backends
 
 ```bash
