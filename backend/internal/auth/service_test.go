@@ -501,7 +501,7 @@ func TestSignOut(t *testing.T) {
 	t.Run("a nil denylist returns ErrRevocationUnavailable", func(t *testing.T) {
 		noDenylist := *svc
 		noDenylist.denylist = nil
-		if err := noDenylist.SignOut(ctx, userID); !errors.Is(err, ErrRevocationUnavailable) {
+		if err := noDenylist.SignOut(ctx, userID, SignOutRequest{}); !errors.Is(err, ErrRevocationUnavailable) {
 			t.Fatalf("sign out without a denylist: error = %v, want %v", err, ErrRevocationUnavailable)
 		}
 	})
@@ -809,7 +809,7 @@ func TestRevocationsSurviveARedisOutage(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			if err := svc.SignOut(context.Background(), userID); !errors.Is(err, ErrRevocationUnavailable) {
+			if err := svc.SignOut(context.Background(), userID, SignOutRequest{}); !errors.Is(err, ErrRevocationUnavailable) {
 				return fmt.Errorf("sign out with Redis down: error = %v, want %v", err, ErrRevocationUnavailable)
 			}
 			return nil
@@ -995,4 +995,138 @@ func TestUpdateDatingProfileStoresCoachingGoals(t *testing.T) {
 	if len(profile.CoachingGoals) != 0 || profile.CoachingGoals == nil {
 		t.Fatalf("cleared coaching_goals = %#v, want []", profile.CoachingGoals)
 	}
+}
+
+// TestSignOutTakesEffectWhenTheUserSignedOut covers a sign-out request that
+// lands late: it still ends every session issued before the user signed out,
+// but not one the user opened after, however long the request was delayed.
+func TestSignOutTakesEffectWhenTheUserSignedOut(t *testing.T) {
+	svc, issuer, pool := newTestService(t)
+	ctx := context.Background()
+	routes := NewHandler(svc, NewRateLimiter(svc.denylist.rdb, 100, time.Minute)).Routes(Middleware(issuer, nil, svc.denylist))
+
+	authenticated := func(token string) int {
+		req := httptest.NewRequest(http.MethodGet, "/me", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		Middleware(issuer, nil, svc.denylist)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		})).ServeHTTP(rec, req)
+		return rec.Code
+	}
+	signIn := func(user credentials) Session {
+		t.Helper()
+		s, err := svc.SignIn(ctx, user.email, user.password)
+		if err != nil {
+			t.Fatalf("sign in: %v", err)
+		}
+		return s
+	}
+	issuedAt := func(token string) time.Time {
+		t.Helper()
+		claims, err := issuer.Parse(token)
+		if err != nil {
+			t.Fatalf("parse token: %v", err)
+		}
+		return claims.IssuedAt.Time
+	}
+	signOut := func(token, body string) {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, "/signout", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		routes.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("POST /signout = %d %s, want 200", rec.Code, rec.Body.String())
+		}
+	}
+	alive := func(s Session) bool {
+		t.Helper()
+		if authenticated(s.Token) != http.StatusNoContent {
+			return false
+		}
+		_, err := svc.Refresh(ctx, s.RefreshToken)
+		return err == nil
+	}
+
+	t.Run("a late sign-out spares a later sign-in and ends earlier ones", func(t *testing.T) {
+		user := verifiedUser(t, svc, pool)
+		device := signIn(user)
+		other := signIn(user)
+		renewing := signIn(user)
+		time.Sleep(5 * time.Millisecond)
+		age := time.Since(issuedAt(device.Token))
+		time.Sleep(5 * time.Millisecond)
+		renewed, err := svc.Refresh(ctx, renewing.RefreshToken)
+		if err != nil {
+			t.Fatalf("refresh: %v", err)
+		}
+		fresh := signIn(user)
+
+		signOut(device.Token, fmt.Sprintf(`{"refresh_token":%q,"token_age_ms":%d}`, device.RefreshToken, age.Milliseconds()))
+
+		if alive(device) || alive(other) {
+			t.Fatal("a session issued before the sign-out survived it")
+		}
+		if _, err := svc.Refresh(ctx, renewed.RefreshToken); err == nil {
+			t.Fatal("a session opened before the sign-out survived it by renewing since")
+		}
+		if !alive(fresh) {
+			t.Fatal("the session opened after the sign-out was ended by it")
+		}
+	})
+
+	t.Run("a session renewed after signing out still ends", func(t *testing.T) {
+		user := verifiedUser(t, svc, pool)
+		device := signIn(user)
+		signedOut := time.Now()
+		time.Sleep(5 * time.Millisecond)
+		renewed, err := svc.Refresh(ctx, device.RefreshToken)
+		if err != nil {
+			t.Fatalf("refresh: %v", err)
+		}
+		age := signedOut.Sub(time.Now())
+
+		signOut(renewed.Token, fmt.Sprintf(`{"refresh_token":%q,"token_age_ms":%d}`, renewed.RefreshToken, age.Milliseconds()))
+
+		if _, err := svc.Refresh(ctx, renewed.RefreshToken); err == nil {
+			t.Fatal("the signing-out session's renewed refresh token survived")
+		}
+	})
+
+	t.Run("a time still ahead is clamped to now", func(t *testing.T) {
+		user := verifiedUser(t, svc, pool)
+		device := signIn(user)
+		signOut(device.Token, fmt.Sprintf(`{"refresh_token":%q,"token_age_ms":%d}`, device.RefreshToken, time.Hour.Milliseconds()))
+		time.Sleep(time.Millisecond)
+		if !alive(signIn(user)) {
+			t.Fatal("a sign-in after the sign-out was ended by it")
+		}
+	})
+
+	t.Run("without the session's refresh token the cutoff is now", func(t *testing.T) {
+		user := verifiedUser(t, svc, pool)
+		device := signIn(user)
+		stranger := signIn(verifiedUser(t, svc, pool))
+		before := signIn(user)
+		signOut(device.Token, fmt.Sprintf(`{"refresh_token":%q,"token_age_ms":0}`, stranger.RefreshToken))
+		if alive(before) {
+			t.Fatal("a session issued before the sign-out landed survived it")
+		}
+		if !alive(stranger) {
+			t.Fatal("another account's session was ended")
+		}
+	})
+
+	t.Run("a malformed body is refused", func(t *testing.T) {
+		user := verifiedUser(t, svc, pool)
+		device := signIn(user)
+		req := httptest.NewRequest(http.MethodPost, "/signout", strings.NewReader(`{"token_age_ms":"soon"}`))
+		req.Header.Set("Authorization", "Bearer "+device.Token)
+		rec := httptest.NewRecorder()
+		routes.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("POST /signout = %d, want 400", rec.Code)
+		}
+	})
 }

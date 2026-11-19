@@ -347,6 +347,38 @@ describe('ApiClient wrappers', () => {
     expect(lastRequest().init.body).toBe(JSON.stringify({ coach_id: 'c1', session_id: null }));
   });
 
+  it('signOut posts to /auth/signout with the given token, not the one on hand', async () => {
+    fetchMock.mockResolvedValueOnce(reply(200, { status: 'signed_out' }));
+    const client = new ApiClient();
+    client.useToken(() => null);
+
+    await expect(client.signOut('captured')).resolves.toEqual({ status: 'signed_out' });
+
+    const { url, init } = lastRequest();
+    expect(url).toBe(`${API_BASE_URL}${API_PREFIX}/auth/signout`);
+    expect(init.method).toBe('POST');
+    expect(init.headers).toMatchObject({ Authorization: 'Bearer captured' });
+  });
+
+  it('signOut sends the scope that places the revocation at the tap', async () => {
+    fetchMock.mockResolvedValueOnce(reply(200, { status: 'signed_out' }));
+    await new ApiClient().signOut('captured', { refresh_token: 'r', token_age_ms: 1500 });
+
+    expect(JSON.parse(String(lastRequest().init.body))).toEqual({ refresh_token: 'r', token_age_ms: 1500 });
+  });
+
+  it('signOut never triggers a renewal on 401', async () => {
+    fetchMock.mockResolvedValueOnce(reply(401, { error: 'expired' }));
+    const client = new ApiClient();
+    client.useToken(() => 'tok');
+    const renew = jest.fn(async () => 'renewed' as const);
+    client.useRenewal(renew);
+
+    await expect(client.signOut('captured')).rejects.toMatchObject({ status: 401 });
+    expect(renew).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('refreshSession never triggers a renewal on 401', async () => {
     fetchMock.mockResolvedValueOnce(reply(401, { error: 'spent' }));
     const client = new ApiClient();

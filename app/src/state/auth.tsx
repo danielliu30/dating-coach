@@ -2,11 +2,66 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
 import { ApiError, api } from '../api/client';
-import type { RenewalResult, SessionEndReason } from '../api/client';
+import type { RenewalResult, SessionEndReason, SignOutScope } from '../api/client';
 import type { AuthSession, DatingProfileInput, Profile, Role } from '../api/types';
 import { requestGoogleIdToken } from '../lib/googleIdentity';
 
 const STORAGE_KEY = 'dating-coach.session';
+
+// How long anything waits on a sign-out's server-side revocation, so a hung
+// connection cannot stall the caller or the next sign-in.
+export const SIGN_OUT_TIMEOUT_MS = 5000;
+
+// Resolves once work settles or SIGN_OUT_TIMEOUT_MS passes, whichever is first.
+const withinSignOutTimeout = async (work: Promise<unknown>): Promise<void> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    work.catch(() => undefined),
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, SIGN_OUT_TIMEOUT_MS);
+    }),
+  ]);
+  clearTimeout(timer);
+};
+
+// A session as stored: received_at is when the app obtained its access token,
+// on the device's clock, and is absent from sessions stored before it was kept.
+type StoredSession = AuthSession & { received_at?: number | null };
+
+// Scopes a revocation to the moment the user signed out, or leaves it unscoped
+// (taking effect as it lands) when the token's receipt time is unknown.
+const scopeAt = (refreshToken: string, receivedAt: number, signedOutAt: number): SignOutScope | undefined =>
+  refreshToken && Number.isFinite(receivedAt)
+    ? { refresh_token: refreshToken, token_age_ms: Math.round(signedOutAt - receivedAt) }
+    : undefined;
+
+// Revokes the session these credentials belong to as of signedOutAt, so a
+// request that lands late cannot end a session opened after it. It runs after
+// the app has dropped them, so an expired access token is renewed here from
+// the captured refresh token rather than through the shared renewal, which only
+// knows the session on hand.
+const revoke = async (token: string, refreshToken: string, receivedAt: number, signedOutAt: number): Promise<void> => {
+  try {
+    await api.signOut(token, scopeAt(refreshToken, receivedAt, signedOutAt));
+    return;
+  } catch (error) {
+    if (!isRefused(error) || !refreshToken) return;
+  }
+  let renewed: AuthSession;
+  let renewedAt: number;
+  try {
+    renewed = await api.refreshSession(refreshToken);
+    renewedAt = Date.now();
+  } catch (error) {
+    // Usually a renewal in flight spent the token first, and the session it
+    // minted is dropped unheld. Presenting the spent token again trips the
+    // server's replay detection, which revokes every session the account has:
+    // the same end state as the sign-out.
+    if (isRefused(error)) await api.refreshSession(refreshToken).catch(() => undefined);
+    return;
+  }
+  await api.signOut(renewed.token, scopeAt(renewed.refresh_token ?? '', renewedAt, signedOutAt));
+};
 
 /**
  * Why the app signed the user out without being asked to. `expired` is the
@@ -63,10 +118,10 @@ const isRefused = (error: unknown): boolean => error instanceof ApiError && erro
 // Reads a stored session, or null when there is nothing usable to restore:
 // unparseable JSON and a blob missing the token or the profile are both worth
 // forgetting, and neither says anything about the backend.
-const parseSession = (raw: string | null): (Partial<AuthSession> & Pick<AuthSession, 'token' | 'user'>) | null => {
+const parseSession = (raw: string | null): (Partial<StoredSession> & Pick<AuthSession, 'token' | 'user'>) | null => {
   if (!raw) return null;
   try {
-    const stored = JSON.parse(raw) as Partial<AuthSession>;
+    const stored = JSON.parse(raw) as Partial<StoredSession>;
     return stored.token && stored.user ? { ...stored, token: stored.token, user: stored.user } : null;
   } catch {
     return null;
@@ -81,6 +136,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
   const tokenRef = useRef<string | null>(null);
   const refreshRef = useRef<string>('');
   const expiresRef = useRef<string>('');
+  // When the access token on hand was obtained, on the device's clock; NaN when
+  // unknown.
+  const receivedRef = useRef<number>(Number.NaN);
   // Bumped whenever the session is replaced or dropped, so a renewal that lands
   // after a sign-out cannot write the old session back over it.
   const generationRef = useRef(0);
@@ -90,6 +148,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
   // that outlives its principal must never be replayed under the next one.
   const principalRef = useRef(0);
   const userIDRef = useRef<string | null>(null);
+  // The last sign-out's server-side revocation. A sign-in waits for it, so a
+  // revocation that lands late cannot take the new session down with it.
+  const revocationRef = useRef<Promise<void>>(Promise.resolve());
 
   // The client reads the token through a ref so requests always use the latest
   // one without re-creating the client on every render.
@@ -110,6 +171,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
       tokenRef.current = null;
       refreshRef.current = '';
       expiresRef.current = '';
+      receivedRef.current = Number.NaN;
       setToken(null);
       setUser(null);
       setSignedOutReason(reason);
@@ -117,17 +179,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
     });
   }, []);
 
-  const persist = useCallback(async (session: AuthSession) => {
+  const persist = useCallback(async (session: AuthSession, receivedAt: number = Date.now()) => {
     generationRef.current += 1;
     if (userIDRef.current !== session.user.id) principalRef.current += 1;
     userIDRef.current = session.user.id;
     tokenRef.current = session.token;
     refreshRef.current = session.refresh_token ?? '';
     expiresRef.current = session.expires_at ?? '';
+    receivedRef.current = receivedAt;
     setToken(session.token);
     setUser(session.user);
     setSignedOutReason(null);
-    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(session));
+    const record: StoredSession = { ...session, received_at: receivedAt };
+    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(record));
     return session.user;
   }, []);
 
@@ -187,12 +251,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
         if (!stored) {
           if (raw) await forget();
         } else if (isFresh(stored)) {
-          await persist({
-            token: stored.token,
-            refresh_token: stored.refresh_token,
-            expires_at: stored.expires_at ?? '',
-            user: stored.user,
-          });
+          await persist(
+            {
+              token: stored.token,
+              refresh_token: stored.refresh_token,
+              expires_at: stored.expires_at ?? '',
+              user: stored.user,
+            },
+            stored.received_at ?? Number.NaN,
+          );
         } else if (!stored.refresh_token) {
           await forget();
         } else {
@@ -225,6 +292,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
     tokenRef.current = null;
     refreshRef.current = '';
     expiresRef.current = '';
+    receivedRef.current = Number.NaN;
     setToken(null);
     setUser(null);
     setSignedOutReason(null);
@@ -241,8 +309,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
         token: tokenRef.current,
         refresh_token: refreshRef.current,
         expires_at: expiresRef.current,
+        received_at: receivedRef.current,
         user: profile,
-      }),
+      } satisfies StoredSession),
     );
     return profile;
   }, []);
@@ -254,11 +323,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
       user,
       signedOutReason,
       dismissSignedOutReason: () => setSignedOutReason(null),
-      signIn: async (email, password) => persist(await api.signIn({ email, password })),
-      signUp: async ({ email, password, displayName, role }) =>
-        persist(await api.signUp({ email, password, display_name: displayName, role })),
-      signInWithGoogle: async (role) =>
-        persist(await api.signInWithGoogle({ id_token: await requestGoogleIdToken(), role })),
+      signIn: async (email, password) => {
+        await withinSignOutTimeout(revocationRef.current);
+        return persist(await api.signIn({ email, password }));
+      },
+      signUp: async ({ email, password, displayName, role }) => {
+        await withinSignOutTimeout(revocationRef.current);
+        return persist(await api.signUp({ email, password, display_name: displayName, role }));
+      },
+      signInWithGoogle: async (role) => {
+        const idToken = await requestGoogleIdToken();
+        await withinSignOutTimeout(revocationRef.current);
+        return persist(await api.signInWithGoogle({ id_token: idToken, role }));
+      },
       verify: async (email, code) => {
         // Verifying as the account being verified swaps the sign-up token for a
         // session one; the sign-up token cannot reach the private API the app is
@@ -298,7 +375,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
         // session restored from it cannot be renewed and is dropped.
         await clearSession().catch(() => undefined);
       },
-      signOut: clearSession,
+      // Drops the session locally first, so nothing a closed app or a second
+      // tap does can bring it back, then revokes it server-side so its refresh
+      // token stops working. A failed revocation still leaves this device
+      // signed out.
+      signOut: async () => {
+        const token = tokenRef.current;
+        if (token) {
+          revocationRef.current = revoke(token, refreshRef.current, receivedRef.current, Date.now()).catch(
+            () => undefined,
+          );
+        }
+        try {
+          await clearSession();
+        } finally {
+          await withinSignOutTimeout(revocationRef.current);
+        }
+      },
     }),
     [clearSession, persist, persistUser, ready, signedOutReason, token, user],
   );
