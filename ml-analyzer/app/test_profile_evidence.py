@@ -139,7 +139,13 @@ def test_new_miss_in_the_same_turn_as_a_first_repair_is_not_a_repeated_turn():
     assert evidence.self_correction.level == "unknown"
 
 
-@pytest.mark.parametrize("reply", ["Actually Friday works now.", "Sure, but Friday morning only."])
+@pytest.mark.parametrize("reply", [
+    "Actually Friday works now.",
+    "Sure, but Friday morning only.",
+    "Actually, I’m free that day.",
+    "I can make it then after all.",
+    "That actually works for me.",
+])
 def test_different_availability_is_not_a_repeated_coaching_need(reply):
     evidence = extract_profile_evidence(_conversation(
         "me: I'd like to try that cafe together.",
