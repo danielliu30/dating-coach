@@ -7,8 +7,12 @@ import respx
 
 from app.coaching import AGENCY_VERSION, BRAIN_VERSION
 from app.config import Settings
-from app.schemas import AnalyzeRequest, Message
-from app.scoring.llm import SYSTEM_PROMPT, LLMScorer, citation_sources, output_token_budget
+from fastapi.testclient import TestClient
+from pydantic import ValidationError
+
+from app.main import app
+from app.schemas import AnalyzeRequest, Message, UserProfile
+from app.scoring.llm import SYSTEM_PROMPT, LLMScorer, citation_sources, output_token_budget, profile_spec
 
 
 def _settings(provider: str = "openai", **overrides: object) -> Settings:
@@ -228,3 +232,87 @@ def test_output_token_budget_is_capped() -> None:
     """A conversation whose estimate exceeds the cap gets exactly the cap."""
     assert output_token_budget(200, ["agency"], cap=8192) == 8192
     assert output_token_budget(1, (), cap=500) == 500
+
+
+def test_analyze_request_profile_is_optional_and_normalised() -> None:
+    """``profile`` defaults to None; its vocabulary keys are stripped, lowercased and deduplicated in order."""
+    base = {"conversation_id": "p0", "messages": [{"position": 0, "sender": "self", "body": "Hey"}]}
+    assert AnalyzeRequest(**base).profile is None
+    request = AnalyzeRequest(
+        **base,
+        profile={
+            "dating_styles": [" Hinge", "hinge", "", "in_person"],
+            "phases_working_on": ["building_rapport", "BUILDING_RAPPORT "],
+            "prompts": [{"prompt": "A perfect Sunday", "answer": "Coffee and a long climb"}],
+        },
+    )
+    assert request.profile is not None
+    assert request.profile.dating_styles == ["hinge", "in_person"]
+    assert request.profile.phases_working_on == ["building_rapport"]
+    assert request.profile.phases_strong == [] and request.profile.bio is None
+    assert not request.profile.is_empty()
+    assert UserProfile().is_empty() and UserProfile(bio="  \n ").is_empty()
+    with pytest.raises(ValidationError):
+        UserProfile(prompts=[{"prompt": "Two truths", "answer": ""}])
+
+    response = TestClient(app).post("/analyze", json=request.model_dump())
+    assert response.status_code == 200
+
+
+def test_user_prompt_renders_profile_only_when_given() -> None:
+    """An absent or empty profile leaves the user prompt unchanged; a given one adds one line per field, by label."""
+    scorer = LLMScorer(_settings())
+    boundaries = [(0, 1), (2, 3)]
+    plain = scorer._user_prompt(_request(), boundaries)
+    assert "dating profile" not in plain
+    assert scorer._user_prompt(_request().model_copy(update={"profile": UserProfile()}), boundaries) == plain
+
+    profile = UserProfile(
+        dating_styles=["hinge", "friends_intro"],
+        phases_strong=["flirting"],
+        phases_working_on=["building_rapport", "slow_burn"],
+        bio="Climber.\n\nBakes   bread on Sundays.",
+        prompts=[{"prompt": "My simple pleasures", "answer": "Sunrise\nhikes"}, {"answer": "Ask me about Lisbon"}],
+    )
+    spec = profile_spec(profile)
+    assert spec.splitlines() == [
+        "The customer's own dating profile (context for their goals only):",
+        "- Meets people through: Hinge, introductions through friends",
+        "- Feels strong at: flirting",
+        "- Working on: building rapport, slow burn",
+        "- Bio: Climber. Bakes bread on Sundays.",
+        '- Prompt "My simple pleasures": Sunrise hikes',
+        "- Prompt answer: Ask me about Lisbon",
+    ]
+    prompt = scorer._user_prompt(_request().model_copy(update={"profile": profile}), boundaries)
+    assert prompt == plain.replace("Use exactly these", spec + "Use exactly these")
+    assert profile_spec(None) == ""
+
+
+def test_system_prompt_keeps_profile_to_the_customers_own_goals() -> None:
+    """The contract scopes the profile to the customer's own goals and forbids whom-to-date advice and profile rewrites."""
+    assert "When the customer's own profile is given" in SYSTEM_PROMPT
+    assert "Never use it to tell the customer whom to date" in SYSTEM_PROMPT
+    assert "never critique or rewrite the profile" in SYSTEM_PROMPT
+    assert "never read the match's feelings from it" in SYSTEM_PROMPT
+
+
+@pytest.mark.parametrize(
+    "reflection",
+    [
+        pytest.param("Since you meet people on Hinge, you should date someone who climbs.", id="whom-to-date"),
+        pytest.param("You said you are working on flirting, so try asking about their weekend.", id="drafting"),
+    ],
+)
+def test_profile_context_does_not_loosen_the_agency_gate(reflection: str) -> None:
+    """Profile-driven prose that prescribes or drafts still fails the gate and falls back to the heuristic scorer."""
+    payload = _analysis_payload()
+    payload["overall"]["reflection_questions"] = [reflection]  # type: ignore[index]
+    scorer = LLMScorer(_settings())
+    request = _request().model_copy(update={"profile": UserProfile(dating_styles=["hinge"], phases_working_on=["flirting"])})
+    with respx.mock(assert_all_called=True) as mock:
+        mock.post("https://llm.test/v1/chat/completions").mock(
+            return_value=httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(payload)}}]})
+        )
+        result = asyncio.run(scorer.analyze(request))
+    assert result.model_version == f"{scorer.version}+fallback:{scorer._fallback.version}"

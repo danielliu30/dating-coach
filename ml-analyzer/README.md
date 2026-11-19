@@ -39,7 +39,7 @@ a pillar's name or principles are reworded.
 The LLM `SYSTEM_PROMPT` is composed from the rendered pillars
 (`render_pillars()`), not written by hand, and `BRAIN_VERSION` is appended to
 `model_version` together with `AGENCY_VERSION` (e.g.
-`llm-openai-gpt-4o+brain-v2+agency-v3`) so every stored result is traceable to
+`llm-openai-gpt-4o+brain-v3+agency-v3`) so every stored result is traceable to
 both the philosophy revision and the enforcement policy that produced it. Bump
 `BRAIN_VERSION` (`app/coaching/brain.py`) when a pillar's principles or the way
 prompts are composed from them change, and
@@ -83,6 +83,15 @@ concrete. It is built around agency:
   i.e. investing more energy than the person on the other side — is stated as
   an observation in `overall.patterns` and handed back: "here's a pattern we've
   noticed; is this worth thinking about?"
+- *Notice your own feelings and reasoning.* Since `brain-v3` the brain also
+  coaches what goes on inside the customer: anxiety while waiting on a reply,
+  over-investing relative to what comes back, mixed feelings about the match,
+  and what they actually want. These surface only through the existing
+  `overall.patterns` and `overall.reflection_questions`, anchored in the
+  customer's own messages and phrased as something to notice. Mixed feelings
+  are treated as information, never resolved for the customer, and feelings
+  are only ever the customer's own: attributing any to the match is still
+  rejected as mind-reading.
 - *Never draft.* Your words should still be your words. No field ever contains
   a suggested or rewritten message, and the anti-drafting guard covers the new
   fields too.
@@ -147,6 +156,7 @@ Request:
 | `messages[]` | array | `position` (0-based), `sender` (`self`\|`match`), `body`, optional `sent_at`. Only `self` messages are scored. |
 | `preferences` | string | Optional, ≤2000 chars. What the customer is looking for; feedback is tailored to it. |
 | `focus_areas[]` | array | Optional, defaults to `[]`. Coaching-brain pillar keys (`agency`, `feedback`, `support`) the customer wants to improve on; normalised to lowercase, deduplicated and put in pillar order. Unknown keys are a 422. |
+| `profile` | object | Optional. The customer's own dating profile: `dating_styles[]`, `phases_strong[]`, `phases_working_on[]` (the backend's vocabulary keys, normalised to lowercase and deduplicated), `bio` (≤2000 chars) and `prompts[]` (`prompt`, `answer`). Context for the customer's own goals only, never for whom to date; absent or empty leaves the analysis unchanged. |
 
 Response:
 
