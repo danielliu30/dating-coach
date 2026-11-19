@@ -3,6 +3,7 @@ package notify
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"github.com/danielliu30/dating-coach/backend/internal/store/db"
 )
@@ -12,8 +13,11 @@ type NudgePublisher interface {
 	Publish(context.Context, struct{}) error
 }
 
-// Nudge requests immediate delivery, logging failures for the scheduled fallback.
+// Nudge requests delivery within two seconds, independently of request
+// cancellation, logging failures for the scheduled fallback.
 func Nudge(ctx context.Context, p NudgePublisher) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+	defer cancel()
 	if err := p.Publish(ctx, struct{}{}); err != nil {
 		slog.Error("publish email outbox nudge; scheduled relay will retry", "error", err)
 	}
