@@ -159,6 +159,20 @@ def test_different_availability_is_not_a_repeated_coaching_need(reply):
     assert evidence.self_correction.level == "unknown"
 
 
+def test_accepting_an_alternative_does_not_erase_the_original_restriction():
+    evidence = extract_profile_evidence(_conversation(
+        "me: I'd like to try that cafe together.",
+        "them: I can't make Friday.",
+        "me: How about Friday?",
+        "me: Would Saturday work?",
+        "them: That works.",
+        "them: I can't make Friday.",
+        "me: Would Friday work?",
+    ))
+    assert evidence.feedback_needed.issue == "repeated_ignored_constraint"
+    assert evidence.feedback_needed.self_positions == [4, 12]
+
+
 def test_no_reply_or_short_style_is_not_a_coaching_need():
     evidence = extract_profile_evidence(_conversation(
         "me: Would you like to meet up?",
