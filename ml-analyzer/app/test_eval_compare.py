@@ -72,16 +72,33 @@ def test_diff_lists_conversations_missing_from_one_run() -> None:
 
 
 def test_segment_error_uses_overlapping_predictions_when_boundaries_differ() -> None:
-    """A human label on [0-3] is still compared when the scorer emits [0-1] and [2-3]."""
     import asyncio
 
-    from app.scoring.heuristic import HeuristicScorer
+    from app.schemas import AnalyzeResponse, Overall, Segment
     from training.dataset import TrainingExample
 
-    record = asyncio.run(eval_compare.run_one(TrainingExample.from_json(ROW), HeuristicScorer(2), "s"))
-    assert len(record["response"]["segments"]) == 2
-    assert record["quality"]["label_coverage"] == 1.0
-    assert record["quality"]["segment_mae"] is not None
+    class FakeScorer:
+        def __init__(self, end_position: int):
+            self.end_position = end_position
+
+        async def analyze(self, _request):
+            return AnalyzeResponse(
+                model_version="test",
+                segments=[
+                    Segment(start_position=0, end_position=2, engagement_score=0.0),
+                    Segment(start_position=self.end_position, end_position=self.end_position, engagement_score=1.0),
+                ],
+                overall=Overall(engagement_score=0.5),
+            )
+
+    example = TrainingExample.from_json(ROW)
+    full = asyncio.run(eval_compare.run_one(example, FakeScorer(3), "full"))["quality"]
+    assert full["label_coverage"] == 1.0
+    assert full["segment_mae"] == 0.25  # target 0.50 vs (3 * 0.00 + 1 * 1.00) / 4
+
+    partial = asyncio.run(eval_compare.run_one(example, FakeScorer(1), "partial"))["quality"]
+    assert partial["label_coverage"] == 0.0
+    assert partial["segment_mae"] is None
 
 
 def test_llm_run_without_key_refuses_instead_of_scoring_heuristics(tmp_path: Path, monkeypatch) -> None:

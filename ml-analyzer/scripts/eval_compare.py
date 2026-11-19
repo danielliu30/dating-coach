@@ -90,17 +90,19 @@ async def run_one(example: TrainingExample, scorer: Scorer, label: str) -> Dict[
     request = to_request(example)
     response = await scorer.analyze(request)
     quality = score_response(response, request.messages, example.expected_themes, example.match_name)
-    # Each human segment is compared with the mean of the predicted segments overlapping it, so a
-    # backend with different boundaries is still scored on every labelled stretch.
+    # Weight by actual messages, and only score a label with unambiguous coverage.
+    predictions_by_position = {
+        m.position: [s.engagement_score for s in response.segments if s.start_position <= m.position <= s.end_position]
+        for m in request.messages
+    }
     pairs = []
     for human in example.segments:
         overlapping = [
-            s.engagement_score
-            for s in response.segments
-            if s.start_position <= human.end_position and s.end_position >= human.start_position
+            scores for position, scores in predictions_by_position.items()
+            if human.start_position <= position <= human.end_position
         ]
-        if overlapping:
-            pairs.append((human.engagement_score, sum(overlapping) / len(overlapping)))
+        if overlapping and all(len(scores) == 1 for scores in overlapping):
+            pairs.append((human.engagement_score, sum(scores[0] for scores in overlapping) / len(overlapping)))
     quality["segment_mae"] = mae([h for h, _ in pairs], [p for _, p in pairs]) if pairs else math.nan
     quality["label_coverage"] = len(pairs) / len(example.segments) if example.segments else math.nan
     return {
