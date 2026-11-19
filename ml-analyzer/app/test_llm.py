@@ -12,7 +12,7 @@ from pydantic import ValidationError
 
 from app.main import app
 from app.schemas import AnalyzeRequest, Message, UserProfile
-from app.scoring.llm import SYSTEM_PROMPT, LLMScorer, citation_sources, profile_spec
+from app.scoring.llm import LIST_LIMITS, SYSTEM_PROMPT, LLMScorer, citation_sources, output_token_budget, profile_spec
 
 
 def _settings(provider: str = "openai", **overrides: object) -> Settings:
@@ -63,19 +63,20 @@ def _analysis_payload() -> dict[str, object]:
 
 
 def test_openai_complete_sends_expected_request() -> None:
-    """OpenAI completion uses the chat endpoint, authorization header, and JSON response mode."""
+    """OpenAI completion uses the chat endpoint, authorization header, JSON response mode, and token limit."""
     scorer = LLMScorer(_settings())
     with respx.mock(assert_all_called=True) as mock:
         route = mock.post("https://llm.test/v1/chat/completions").mock(
             return_value=httpx.Response(200, json={"choices": [{"message": {"content": "TEXT"}}]})
         )
-        result = asyncio.run(scorer._complete("prompt"))
+        result = asyncio.run(scorer._complete("prompt", 1234))
     request = route.calls.last.request
     body = json.loads(request.content)
     assert result == "TEXT"
     assert request.headers["Authorization"] == "Bearer test-key"
     assert body["model"] == "test-model"
     assert body["response_format"] == {"type": "json_object"}
+    assert body["max_tokens"] == 1234
     assert body["messages"] == [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": "prompt"},
@@ -89,7 +90,7 @@ def test_anthropic_complete_sends_expected_request() -> None:
         route = mock.post("https://llm.test/v1/messages").mock(
             return_value=httpx.Response(200, json={"content": [{"type": "text", "text": "TEXT"}]})
         )
-        result = asyncio.run(scorer._complete("prompt"))
+        result = asyncio.run(scorer._complete("prompt", 1234))
     request = route.calls.last.request
     body = json.loads(request.content)
     assert result == "TEXT"
@@ -97,7 +98,7 @@ def test_anthropic_complete_sends_expected_request() -> None:
     assert request.headers["anthropic-version"] == "2023-06-01"
     assert body["system"] == SYSTEM_PROMPT
     assert body["model"] == "test-model"
-    assert body["max_tokens"] == 1500
+    assert body["max_tokens"] == 1234
     assert body["messages"] == [{"role": "user", "content": "prompt"}]
 
 
@@ -123,6 +124,37 @@ def test_analyze_parses_segments_and_overall(provider: str) -> None:
     assert result.overall.engagement_score == 0.6
     assert result.overall.summary.startswith("The exchange")
     assert result.overall.strengths == ["The first message drew an engaged reply."]
+
+
+def _long_request(message_count: int) -> AnalyzeRequest:
+    """Build an alternating self/match conversation of ``message_count`` messages."""
+    return AnalyzeRequest(
+        conversation_id="llm-long",
+        messages=[
+            Message(position=i, sender="self" if i % 2 == 0 else "match", body=f"Message body {i}.")
+            for i in range(message_count)
+        ],
+    )
+
+
+@pytest.mark.parametrize("provider", ["openai", "anthropic"])
+@pytest.mark.parametrize(
+    ("message_count", "cap", "expected"),
+    [
+        pytest.param(4, 8192, output_token_budget(2, (), cap=100_000), id="short"),
+        pytest.param(40, 8192, output_token_budget(20, (), cap=100_000), id="long"),
+        pytest.param(120, 8192, 8192, id="capped-default"),
+        pytest.param(120, 3000, 3000, id="capped-configured"),
+    ],
+)
+def test_analyze_scales_max_tokens_with_segments(provider: str, message_count: int, cap: int, expected: int) -> None:
+    """analyze() sends each provider a max_tokens budget derived from the segment count, limited by the cap."""
+    scorer = LLMScorer(_settings(provider, llm_max_output_tokens=cap))
+    path = "/chat/completions" if provider == "openai" else "/messages"
+    with respx.mock(assert_all_called=True) as mock:
+        route = mock.post(f"https://llm.test/v1{path}").mock(return_value=httpx.Response(500))
+        asyncio.run(scorer.analyze(_long_request(message_count)))
+    assert json.loads(route.calls.last.request.content)["max_tokens"] == expected
 
 
 @pytest.mark.parametrize(
@@ -212,6 +244,27 @@ def test_parse_strips_fences_and_clamps_scores() -> None:
     result = scorer._parse(f"```json\n{raw}\n```", [(0, 1), (2, 3)])
     assert [s.engagement_score for s in result.segments] == [1.0, 0.0]
     assert result.overall.engagement_score == 1.0
+
+
+def test_output_token_budget_grows_with_segments() -> None:
+    """Each segment adds a fixed allowance on top of an overall block sized for every LIST_LIMITS item."""
+    overall = 250 + 75 * sum(LIST_LIMITS.values())
+    assert output_token_budget(1, (), cap=100_000) == overall + 150
+    assert output_token_budget(25, (), cap=100_000) == overall + 25 * 150
+    assert output_token_budget(26, (), cap=100_000) - output_token_budget(25, (), cap=100_000) == 150
+
+
+def test_output_token_budget_counts_requested_focus_areas_once() -> None:
+    """Each requested focus area adds a goal-score allowance; a repeated key adds it once."""
+    base = output_token_budget(2, (), cap=100_000)
+    assert output_token_budget(2, ["agency", "feedback"], cap=100_000) == base + 200
+    assert output_token_budget(2, ["agency", " Agency ", "agency"], cap=100_000) == base + 100
+
+
+def test_output_token_budget_is_capped() -> None:
+    """A conversation whose estimate exceeds the cap gets exactly the cap."""
+    assert output_token_budget(200, ["agency"], cap=8192) == 8192
+    assert output_token_budget(1, (), cap=500) == 500
 
 
 def test_analyze_request_profile_is_optional_and_normalised() -> None:

@@ -37,7 +37,7 @@ from typing import Dict, Iterable, Iterator, List, Optional, Tuple
 THRESHOLD = 0.25
 # Tolerate float noise so a 0.25 spread (e.g. 0.6 vs 0.85) counts as agreement.
 EPSILON = 1e-9
-ROW_FIELDS = ("conversation_id", "user_id", "platform", "consented", "outcome", "reply_received", "messages")
+ROW_FIELDS = ("conversation_id", "user_id", "platform", "consented", "source", "outcome", "reply_received", "messages")
 
 Key = Tuple[str, int, int]
 

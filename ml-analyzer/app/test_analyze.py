@@ -234,6 +234,26 @@ def test_heuristic_never_diagnoses_why_the_match_pulled_back() -> None:
         assert hint.endswith("is it worth thinking about?")
 
 
+def test_heuristic_keeps_up_to_five_strengths_and_eight_improvements() -> None:
+    """Long conversations surface up to MAX_STRENGTHS strengths and MAX_IMPROVEMENTS improvements, in order."""
+    from app.scoring.heuristic import MAX_IMPROVEMENTS, MAX_STRENGTHS
+
+    assert (MAX_STRENGTHS, MAX_IMPROVEMENTS) == (5, 8)
+    detailed = "That sounds great, I spent the whole weekend hiking up by the lake with my sister and loved it."
+    messages = []
+    for i in range(7):
+        messages.append(Message(position=len(messages), sender="self", body=f"What was the best part of trip {i}?"))
+        messages.append(Message(position=len(messages), sender="match", body=detailed))
+    for i in range(10):
+        messages.append(Message(position=len(messages), sender="self", body=f"Flat question {i}?"))
+        messages.append(Message(position=len(messages), sender="match", body="ok"))
+    response = asyncio.run(HeuristicScorer(segment_size=4).analyze(AnalyzeRequest(conversation_id="long", messages=messages)))
+
+    assert len(response.overall.strengths) == MAX_STRENGTHS
+    assert len(response.overall.improvements) == MAX_IMPROVEMENTS
+    assert [h.split(" (")[0] for h in response.overall.improvements] == [f"Message {15 + 2 * i}" for i in range(MAX_IMPROVEMENTS)]
+
+
 def test_heuristic_populates_reflection_questions_and_patterns() -> None:
     """analyze() fills ``overall.reflection_questions`` for any self messages and ``overall.patterns`` when the customer over-invests; neither drafts or directs."""
     over_investing = AnalyzeRequest(
@@ -958,7 +978,7 @@ def test_llm_goal_score_failure_falls_back_to_heuristic_goal_scores(monkeypatch,
         Message(position=1, sender="match", body="Great, we hiked the ridge trail and found a lake. You?"),
     ]
 
-    async def complete(prompt: str) -> str:
+    async def complete(prompt: str, max_tokens: int) -> str:
         return json.dumps(
             {
                 "segments": [{"start_position": 0, "end_position": 1, "engagement_score": 0.8, "comment": "Fine."}],
@@ -1435,6 +1455,27 @@ def test_llm_parse_reads_and_guards_reflection_fields() -> None:
         bad = dict(base, overall=dict(base["overall"], **{field: [draft]}))
         with pytest.raises(ValueError, match="drafted a reply"):
             scorer._parse(json.dumps(bad), boundaries)
+
+
+def test_llm_overall_list_caps_match_the_prompt() -> None:
+    """Each overall list keeps up to its LIST_LIMITS count, and the prompt asks for the same counts."""
+    from app.scoring.llm import LIST_LIMITS, SYSTEM_PROMPT
+
+    assert LIST_LIMITS == {"strengths": 6, "improvements": 8, "reflection_questions": 5, "patterns": 5}
+    assert '"strengths" are up to 6' in SYSTEM_PROMPT
+    assert '"improvements" are up to 8' in SYSTEM_PROMPT
+    assert '"reflection_questions" are 1-5' in SYSTEM_PROMPT
+    assert '"patterns" are 0-5' in SYSTEM_PROMPT
+
+    scorer = _focus_scorer()
+    lists = {key: [f"Message 1 {key} note {i}." for i in range(limit + 3)] for key, limit in LIST_LIMITS.items()}
+    payload = {
+        "segments": [{"start_position": 0, "end_position": 1, "engagement_score": 0.7, "comment": "Message 1 drew a detailed reply."}],
+        "overall": {"engagement_score": 0.7, "summary": "Landing well.", **lists},
+    }
+    overall = scorer._parse(json.dumps(payload), [(0, 1)]).overall
+    for key, limit in LIST_LIMITS.items():
+        assert getattr(overall, key) == lists[key][:limit]
 
 
 def test_llm_parse_rejects_overall_lists_of_the_wrong_shape() -> None:

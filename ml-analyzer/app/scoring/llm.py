@@ -73,11 +73,11 @@ engagement_score 0.5 and a comment saying there is nothing of the customer's \
 to review there.
 - engagement_score: 1.0 = the customer's messages here clearly drew engaged, \
 detailed replies; 0.0 = they went unanswered or were met with one-word replies.
-- "improvements" point out potential flaws, phrased as hints to reflect on: a \
-message that got no reply, a message that only got a short reply, a message \
-that closed the topic. Cite the message exactly as Message N ("brief quote"), \
-where N is its 1-based number (position + 1) and the quote is the customer's \
-own words. Frame each one as a pattern handed back to the customer to think \
+- "improvements" are up to 8 hints pointing out potential flaws, phrased as \
+hints to reflect on: a message that got no reply, a message that only got a \
+short reply, a message that closed the topic. Cite the message exactly as \
+Message N ("brief quote"), where N is its 1-based number (position + 1) and \
+the quote is the customer's own words. Frame each one as a pattern handed back to the customer to think \
 about ("here's what happened; is it worth thinking about?"), not as a verdict. \
 If the customer's final message has no reply recorded, the match may simply not \
 have answered yet: mention it neutrally, do not count it as a flaw.
@@ -85,22 +85,22 @@ have answered yet: mention it neutrally, do not count it as a flaw.
 interest. You cannot know that. Describe only the observable outcome (no \
 reply, a short reply, an engaged reply); never write "because", "they lost \
 interest", "turned them off" or "rejected".
-- "patterns" are 0-3 short observations naming recurring behaviour across the \
+- "patterns" are 0-5 short observations naming recurring behaviour across the \
 whole conversation, for the customer to reflect on: e.g. how much of the \
 asking, or how many of the words, were theirs versus the match's; whether \
 the energy shifted part-way through; what the customer's own messages show of \
 how they felt, such as following up after a silence or hedging their own \
 interest. Descriptive only; no advice, no reasons, no drafted wording. \
 Return [] when nothing recurs.
-- "reflection_questions" are 1-3 open, inward questions the customer can sit \
+- "reflection_questions" are 1-5 open, inward questions the customer can sit \
 with: "did I actually enjoy this?", "was I putting in more than they were, \
 and did that feel okay?", "did this feel like it was heading toward what I \
 said I am looking for?", "what do I actually want here?", "do I feel two \
 ways about this, and what is each side telling me?". They turn the analysis \
 toward the customer's own experience ("did I like them?", not only "did they \
 like me?"). They must never tell the customer what to do or what to say next.
-- "strengths" acknowledge the customer's messages that produced a good or \
-successful response, cited the same way.
+- "strengths" are up to 6 acknowledgements of the customer's messages that \
+produced a good or successful response, cited the same way.
 - NEVER suggest, draft or rewrite what the customer should say or should have \
 said. No example replies, no "try asking ...", no "you could say ...". The \
 customer always drives the conversation; you only hint at what to look at. \
@@ -130,9 +130,21 @@ return "goal_scores": [].
 you are an AI.
 """
 
+# How many items of each overall list are kept; the prompt asks for the same counts.
+LIST_LIMITS: Dict[str, int] = {"strengths": 6, "improvements": 8, "reflection_questions": 5, "patterns": 5}
+
 # Composed from the brain so the philosophy has one source of truth; the
 # output contract and hard rules below are the scorer's own.
 SYSTEM_PROMPT = _PROMPT_INTRO + render_pillars() + _PROMPT_CONTRACT
+
+# Worst-case output tokens (~4 characters per token) for the JSON the parser
+# keeps: a segment entry with its 500-character comment, a goal score with its
+# 300-character comment, and the overall block (1000-character summary plus
+# every LIST_LIMITS item at 300 characters).
+_SEGMENT_TOKENS = 150
+_GOAL_SCORE_TOKENS = 100
+_LIST_ITEM_TOKENS = 75
+_OVERALL_TOKENS = 250 + _LIST_ITEM_TOKENS * sum(LIST_LIMITS.values())
 
 
 class LLMScorer(Scorer):
@@ -146,9 +158,12 @@ class LLMScorer(Scorer):
     async def analyze(self, request: AnalyzeRequest) -> AnalyzeResponse:
         boundaries = [(start, end) for start, end, _ in chunk(request.messages, self.settings.segment_size)]
         prompt = self._user_prompt(request, boundaries)
+        max_tokens = output_token_budget(
+            len(boundaries), request.focus_areas, self.settings.llm_max_output_tokens
+        )
 
         try:
-            raw = await self._complete(prompt)
+            raw = await self._complete(prompt, max_tokens)
             return self._parse(
                 raw, boundaries, citation_sources(request.messages), request.match_name, request.focus_areas
             )
@@ -172,7 +187,7 @@ class LLMScorer(Scorer):
             f"Customer messages to review, with the reply each one drew:\n{self_message_digest(request.messages)}"
         )
 
-    async def _complete(self, prompt: str) -> str:
+    async def _complete(self, prompt: str, max_tokens: int) -> str:
         provider = self.settings.llm_provider
         async with httpx.AsyncClient(timeout=self.settings.llm_timeout) as client:
             if provider == "anthropic":
@@ -184,7 +199,7 @@ class LLMScorer(Scorer):
                     },
                     json={
                         "model": self.settings.llm_model,
-                        "max_tokens": 1500,
+                        "max_tokens": max_tokens,
                         "system": SYSTEM_PROMPT,
                         "messages": [{"role": "user", "content": prompt}],
                     },
@@ -199,6 +214,7 @@ class LLMScorer(Scorer):
                 json={
                     "model": self.settings.llm_model,
                     "temperature": 0.2,
+                    "max_tokens": max_tokens,
                     "response_format": {"type": "json_object"},
                     "messages": [
                         {"role": "system", "content": SYSTEM_PROMPT},
@@ -240,10 +256,10 @@ class LLMScorer(Scorer):
         segments: List[Segment] = [by_boundary[b] for b in boundaries]
 
         overall = payload.get("overall", {})
-        strengths = _string_list(overall, "strengths")
-        improvements = _string_list(overall, "improvements")
-        reflection_questions = _string_list(overall, "reflection_questions")
-        patterns = _string_list(overall, "patterns")
+        strengths = _string_list(overall, "strengths", LIST_LIMITS["strengths"])
+        improvements = _string_list(overall, "improvements", LIST_LIMITS["improvements"])
+        reflection_questions = _string_list(overall, "reflection_questions", LIST_LIMITS["reflection_questions"])
+        patterns = _string_list(overall, "patterns", LIST_LIMITS["patterns"])
         goal_scores = _goal_scores(overall, focus_areas)
         prose = [s.comment for s in segments] + [str(overall.get("summary", ""))]
         prose += strengths + improvements + reflection_questions + patterns
@@ -265,6 +281,21 @@ class LLMScorer(Scorer):
                 goal_scores=goal_scores,
             ),
         )
+
+
+def output_token_budget(segment_count: int, focus_areas: Sequence[str], cap: int) -> int:
+    """Return the max output tokens for a response covering ``segment_count`` segments.
+
+    The estimate is the overall block plus one entry per segment and per
+    requested focus area (a repeated key counts once, as the prompt lists it),
+    limited to ``cap``.
+    """
+    estimate = (
+        _OVERALL_TOKENS
+        + _SEGMENT_TOKENS * segment_count
+        + _GOAL_SCORE_TOKENS * len(pillars_by_keys(focus_areas))
+    )
+    return min(cap, estimate)
 
 
 def focus_area_spec(focus_areas: Sequence[str]) -> str:
@@ -348,7 +379,7 @@ def _goal_scores(overall: Dict[str, Any], focus_areas: Sequence[str]) -> List[Go
     return [by_goal[goal] for goal in wanted if goal in by_goal]
 
 
-def _string_list(overall: Dict[str, Any], key: str, limit: int = 5, max_chars: int = 300) -> List[str]:
+def _string_list(overall: Dict[str, Any], key: str, limit: int, max_chars: int = 300) -> List[str]:
     """Return ``overall[key]`` as a list of at most ``limit`` strings, each cut to ``max_chars``.
 
     A missing key yields ``[]``. Anything other than a JSON array of strings (a

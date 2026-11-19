@@ -19,8 +19,8 @@ RUN if [ "$INSTALL_TRAINING_DEPS" = "1" ]; then \
 COPY app ./app
 COPY training ./training
 COPY train.py ./
-# The frozen holdout, so containerized train.py runs still exclude it.
-COPY data/eval_holdout.jsonl ./data/
+# Ship both eval sets so containerized training can exclude them.
+COPY data/eval_holdout.jsonl data/eval_extended.jsonl ./data/
 
 EXPOSE 8000
 
