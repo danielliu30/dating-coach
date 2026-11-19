@@ -20,6 +20,16 @@ import type {
   SubmitMessage,
 } from './types';
 
+/**
+ * Places a sign-out at the moment the user signed out rather than when the
+ * request lands: token_age_ms is how long the client had held the presented
+ * access token by then, negative for one obtained after.
+ */
+export interface SignOutScope {
+  refresh_token: string;
+  token_age_ms: number;
+}
+
 export class ApiError extends Error {
   constructor(readonly status: number, message: string) {
     super(message);
@@ -256,8 +266,8 @@ export class ApiClient {
    * dropped it by the time it asks; for the same reason a 401 is final here
    * rather than a cue to renew the session on hand.
    */
-  signOut(token: string) {
-    return this.request<{ status: string }>('POST', '/auth/signout', undefined, true, token);
+  signOut(token: string, scope?: SignOutScope) {
+    return this.request<{ status: string }>('POST', '/auth/signout', scope, true, token);
   }
 
   /**

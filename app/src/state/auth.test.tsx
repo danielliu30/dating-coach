@@ -248,7 +248,7 @@ describe('AuthProvider sign out / delete', () => {
     });
 
     expect(mocked.signOut).toHaveBeenCalledTimes(1);
-    expect(mocked.signOut).toHaveBeenCalledWith('access');
+    expect(mocked.signOut).toHaveBeenCalledWith('access', undefined);
     expect(result.current.token).toBeNull();
     expect(result.current.user).toBeNull();
     expect(result.current.signedOutReason).toBeNull();
@@ -308,8 +308,11 @@ describe('AuthProvider sign out / delete', () => {
     });
 
     expect(mocked.refreshSession).toHaveBeenCalledWith('refresh');
-    expect(mocked.signOut).toHaveBeenNthCalledWith(1, 'access');
-    expect(mocked.signOut).toHaveBeenNthCalledWith(2, 'renewed');
+    expect(mocked.signOut).toHaveBeenNthCalledWith(1, 'access', undefined);
+    expect(mocked.signOut).toHaveBeenNthCalledWith(2, 'renewed', {
+      refresh_token: 'refresh2',
+      token_age_ms: expect.any(Number),
+    });
     expect(result.current.token).toBeNull();
     expect(result.current.signedOutReason).toBeNull();
     expect(await stored()).toBeNull();
@@ -395,6 +398,59 @@ describe('AuthProvider sign out / delete', () => {
     expect(mocked.signIn).toHaveBeenCalledTimes(1);
     expect(result.current.token).toBe('fresh');
     expect((await stored())?.token).toBe('fresh');
+  });
+
+  describe('scoping the revocation to the tap', () => {
+    let clock = 1_800_000_000_000;
+    beforeEach(() => {
+      jest.spyOn(Date, 'now').mockImplementation(() => clock);
+    });
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    it('sends how long the access token had been held when the user signed out', async () => {
+      const { result } = await renderAuth();
+      mocked.signIn.mockResolvedValue(session());
+      await act(async () => {
+        await result.current.signIn('a@b.c', 'pw');
+      });
+      clock += 3000;
+
+      await act(async () => {
+        await result.current.signOut();
+      });
+
+      expect(mocked.signOut).toHaveBeenCalledWith('access', { refresh_token: 'refresh', token_age_ms: 3000 });
+    });
+
+    it('keeps the receipt time of a stored session across restarts', async () => {
+      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify({ ...session(), received_at: clock - 60_000 }));
+      const { result } = await renderAuth();
+
+      await act(async () => {
+        await result.current.signOut();
+      });
+
+      expect(mocked.signOut).toHaveBeenCalledWith('access', { refresh_token: 'refresh', token_age_ms: 60_000 });
+    });
+
+    it('dates a token renewed after the tap back to the tap', async () => {
+      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify({ ...session(), received_at: clock }));
+      mocked.signOut.mockRejectedValueOnce(new ApiError(401, 'expired'));
+      mocked.refreshSession.mockImplementation(async () => {
+        clock += 2000;
+        return session({ token: 'renewed', refresh_token: 'refresh2' });
+      });
+      const { result } = await renderAuth();
+
+      await act(async () => {
+        await result.current.signOut();
+      });
+
+      expect(mocked.signOut).toHaveBeenNthCalledWith(1, 'access', { refresh_token: 'refresh', token_age_ms: 0 });
+      expect(mocked.signOut).toHaveBeenNthCalledWith(2, 'renewed', { refresh_token: 'refresh2', token_age_ms: -2000 });
+    });
   });
 
   it('signOut without a session skips the API call', async () => {

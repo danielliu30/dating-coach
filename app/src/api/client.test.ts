@@ -360,6 +360,13 @@ describe('ApiClient wrappers', () => {
     expect(init.headers).toMatchObject({ Authorization: 'Bearer captured' });
   });
 
+  it('signOut sends the scope that places the revocation at the tap', async () => {
+    fetchMock.mockResolvedValueOnce(reply(200, { status: 'signed_out' }));
+    await new ApiClient().signOut('captured', { refresh_token: 'r', token_age_ms: 1500 });
+
+    expect(JSON.parse(String(lastRequest().init.body))).toEqual({ refresh_token: 'r', token_age_ms: 1500 });
+  });
+
   it('signOut never triggers a renewal on 401', async () => {
     fetchMock.mockResolvedValueOnce(reply(401, { error: 'expired' }));
     const client = new ApiClient();
