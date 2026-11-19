@@ -72,13 +72,14 @@ type MLSegment struct {
 // analyzer that omits them, carry null for these keys, like any absent slice.
 // GoalScores holds requested focus areas the analyzer could judge.
 type MLOverall struct {
-	EngagementScore     float64       `json:"engagement_score"`
-	Summary             string        `json:"summary"`
-	Strengths           []string      `json:"strengths"`
-	Improvements        []string      `json:"improvements"`
-	ReflectionQuestions []string      `json:"reflection_questions"`
-	Patterns            []string      `json:"patterns"`
-	GoalScores          []MLGoalScore `json:"goal_scores"`
+	EngagementScore     float64         `json:"engagement_score"`
+	Summary             string          `json:"summary"`
+	Strengths           []string        `json:"strengths"`
+	Improvements        []string        `json:"improvements"`
+	ReflectionQuestions []string        `json:"reflection_questions"`
+	Patterns            []string        `json:"patterns"`
+	GoalScores          []MLGoalScore   `json:"goal_scores"`
+	ProfileEvidence     json.RawMessage `json:"profile_evidence,omitempty"`
 }
 
 // MLGoalScore scores the conversation against one coaching-brain pillar the
