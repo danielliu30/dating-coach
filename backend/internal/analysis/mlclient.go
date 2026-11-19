@@ -24,8 +24,20 @@ type MLRequest struct {
 	Preferences string `json:"preferences,omitempty"`
 	// FocusAreas is the owner's users.coaching_goals: coaching-brain pillar keys
 	// the analyzer scores in Overall.GoalScores. Omitted when empty.
-	FocusAreas []string    `json:"focus_areas,omitempty"`
-	Messages   []MLMessage `json:"messages"`
+	FocusAreas []string `json:"focus_areas,omitempty"`
+	// Profile is the owner's self-reported dating profile, context for their
+	// own goals; nil (omitted) when every field is empty.
+	Profile  *MLProfile  `json:"profile,omitempty"`
+	Messages []MLMessage `json:"messages"`
+}
+
+// MLProfile mirrors ml-analyzer's UserProfile: the owner's users.dating_styles,
+// phases_strong and phases_working_on vocabulary keys. The analyzer also
+// accepts a bio and prompts, which the backend does not store.
+type MLProfile struct {
+	DatingStyles    []string `json:"dating_styles,omitempty"`
+	PhasesStrong    []string `json:"phases_strong,omitempty"`
+	PhasesWorkingOn []string `json:"phases_working_on,omitempty"`
 }
 
 // MLMessage is one transcript message as the analyzer expects it.

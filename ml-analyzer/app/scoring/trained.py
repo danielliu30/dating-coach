@@ -123,7 +123,7 @@ class TrainedScorer(Scorer):
             summary=_summary(reviews, request.preferences),
             strengths=_strengths(reviews),
             improvements=_improvements(reviews),
-            reflection_questions=reflection_questions(reviews, patterns, request.preferences),
+            reflection_questions=reflection_questions(reviews, patterns, request.preferences, request.profile),
             patterns=patterns,
         )
 
