@@ -70,7 +70,8 @@ services:
 
   # Applies backend/migrations, then exits.
   migrate:
-    image: migrate/migrate:v4.17.1
+    image: ${DOCKERHUB_NAMESPACE:-danielliu30}/dating-coach-migrate:${IMAGE_TAG:-latest}
+    build: ./backend/migrations
     depends_on:
       postgres:
         condition: service_healthy
