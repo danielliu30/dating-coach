@@ -129,6 +129,14 @@ def test_reinitiation_stays_silent_without_timestamps_or_balance() -> None:
     partly_dated[5] = partly_dated[5].model_copy(update={"sent_at": "not a time"})
     assert reinitiation_patterns(partly_dated) == []
 
+    # Only the first messages were dated; the backend stamped the rest with the (much later) receive time.
+    dated_head = _timeline("smsmsmsm", gaps_after=[])
+    received = [f"2026-03-05T12:00:00.{i:06d}Z" for i in range(len(dated_head))]
+    head_then_received = [m if m.position < 2 else m.model_copy(update={"sent_at": received[m.position]}) for m in dated_head]
+    assert reinitiation_patterns(head_then_received) == []
+    interleaved = [m if m.position % 2 else m.model_copy(update={"sent_at": received[m.position]}) for m in dated_head]
+    assert reinitiation_patterns(interleaved) == []
+
 
 def _by_sender(senders: str) -> List[Message]:
     return [Message(position=i, sender="self" if c == "s" else "match", body=f"message {i}") for i, c in enumerate(senders)]
