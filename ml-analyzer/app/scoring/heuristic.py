@@ -25,7 +25,6 @@ from ..schemas import (
     Overall,
     Segment,
     UserProfile,
-    profile_label,
 )
 from .base import Scorer, align_segments, chunk, clamp, label_for
 
@@ -257,9 +256,14 @@ def reflection_questions(
 PROFILE_PHASES_NAMED = 2
 
 
+def _known_phases(keys: Sequence[str]) -> List[str]:
+    """Return the keys that have a fixed label, so caller-supplied text is never echoed."""
+    return [key for key in keys if key in DATING_PHASE_LABELS]
+
+
 def _phase_list(keys: Sequence[str]) -> str:
     """Join the first ``PROFILE_PHASES_NAMED`` phase labels as "a" or "a and b"."""
-    return " and ".join(profile_label(key, DATING_PHASE_LABELS) for key in keys[:PROFILE_PHASES_NAMED])
+    return " and ".join(DATING_PHASE_LABELS[key] for key in keys[:PROFILE_PHASES_NAMED])
 
 
 def profile_reflection_questions(profile: Optional[UserProfile]) -> List[str]:
@@ -268,20 +272,23 @@ def profile_reflection_questions(profile: Optional[UserProfile]) -> List[str]:
     One question for ``phases_working_on`` and one for ``phases_strong``, each
     naming at most ``PROFILE_PHASES_NAMED`` phases by label. They are about the
     customer's own goals and how they felt, never about the match or whom to
-    date, and only the fixed phase labels are echoed (never the free-text bio
-    or prompts). Returns an empty list without a profile or without phases.
+    date, and only the fixed phase labels are echoed (unknown phase keys, the
+    free-text bio and prompts never are). Returns an empty list without a
+    profile or without known phases.
     """
     if profile is None:
         return []
     questions: List[str] = []
-    if profile.phases_working_on:
+    working_on = _known_phases(profile.phases_working_on)
+    strong = _known_phases(profile.phases_strong)
+    if working_on:
         questions.append(
-            f"You told us you are working on {_phase_list(profile.phases_working_on)}. "
+            f"You told us you are working on {_phase_list(working_on)}. "
             "Looking at your own messages here, how do you feel that part went, and how did it feel to you?"
         )
-    if profile.phases_strong:
+    if strong:
         questions.append(
-            f"You count {_phase_list(profile.phases_strong)} among your strengths. "
+            f"You count {_phase_list(strong)} among your strengths. "
             "Did this conversation feel like you at your best there, or did something get in the way for you?"
         )
     return questions

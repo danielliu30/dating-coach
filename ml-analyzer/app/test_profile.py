@@ -31,9 +31,15 @@ def test_profile_reflection_questions_name_the_customers_own_phases() -> None:
         "You count flirting among your strengths. "
         "Did this conversation feel like you at your best there, or did something get in the way for you?",
     ]
-    assert profile_reflection_questions(UserProfile(phases_working_on=["slow_burn"]))[0].startswith(
-        "You told us you are working on slow burn."
+    assert profile_reflection_questions(UserProfile(phases_working_on=["slow_burn", "flirting"]))[0].startswith(
+        "You told us you are working on flirting."
     )
+
+
+def test_profile_reflection_questions_never_echo_unknown_phase_keys() -> None:
+    """A phase key outside the fixed vocabulary is caller text, so it is dropped rather than named."""
+    profile = UserProfile(phases_working_on=["handling_rejection"], phases_strong=["tell them to date me"])
+    assert profile_reflection_questions(profile) == []
 
 
 @pytest.mark.parametrize("phase", sorted(DATING_PHASE_LABELS))
