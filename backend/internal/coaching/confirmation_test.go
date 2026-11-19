@@ -211,7 +211,22 @@ func tokenHashOf(t *testing.T, pool *pgxpool.Pool, id string) string {
 
 // nextSlot is a start time far enough away for the full response window.
 func nextSlot() string {
-	return time.Now().Add(72 * time.Hour).Truncate(30 * time.Minute).UTC().Format(time.RFC3339)
+	return fixtureSlot(time.Now(), 3).Format(time.RFC3339)
+}
+
+func fixtureSlot(now time.Time, days int) time.Time {
+	day := now.UTC().AddDate(0, 0, days)
+	return time.Date(day.Year(), day.Month(), day.Day(), 12, 0, 0, 0, time.UTC)
+}
+
+func TestFixtureSlotsStayWithinDailyAvailability(t *testing.T) {
+	for hour := 0; hour < 24; hour++ {
+		now := time.Date(2026, 11, 19, hour, 59, 0, 0, time.UTC)
+		start := fixtureSlot(now, 3)
+		if start.Sub(now) < 48*time.Hour || start.Hour()*60+maxSessionMinutes > 1440 {
+			t.Fatalf("invalid fixture slot %v for clock %v", start, now)
+		}
+	}
 }
 
 func TestBookingIsPendingHoldsSlotAndEmailsBothParties(t *testing.T) {
@@ -475,7 +490,7 @@ func TestClientRescheduleNeedsReconfirmation(t *testing.T) {
 	}
 	firstHash := tokenHashOf(t, pool, s.ID)
 
-	later := time.Now().Add(96 * time.Hour).Truncate(30 * time.Minute).UTC().Format(time.RFC3339)
+	later := fixtureSlot(time.Now(), 4).Format(time.RFC3339)
 	moved, err := svc.Reschedule(ctx, sid, coach, later)
 	if err != nil {
 		t.Fatalf("coach reschedule: %v", err)
@@ -484,7 +499,7 @@ func TestClientRescheduleNeedsReconfirmation(t *testing.T) {
 		t.Fatalf("coach-moved status = %s, want scheduled", moved.Status)
 	}
 
-	later2 := time.Now().Add(120 * time.Hour).Truncate(30 * time.Minute).UTC().Format(time.RFC3339)
+	later2 := fixtureSlot(time.Now(), 5).Format(time.RFC3339)
 	moved, err = svc.Reschedule(ctx, sid, client, later2)
 	if err != nil {
 		t.Fatalf("client reschedule: %v", err)
