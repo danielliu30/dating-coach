@@ -3,6 +3,7 @@ package auth
 import (
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"time"
@@ -233,7 +234,21 @@ func (h *Handler) signOut(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusUnauthorized, "unauthenticated")
 		return
 	}
-	if err := h.svc.SignOut(r.Context(), principal.UserID); err != nil {
+	// The body is optional; without it the sign-out takes effect as it lands.
+	var in struct {
+		RefreshToken string `json:"refresh_token"`
+		TokenAgeMS   *int64 `json:"token_age_ms"`
+	}
+	if err := httpx.Decode(r, &in); err != nil && !errors.Is(err, io.EOF) {
+		httpx.Error(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	req := SignOutRequest{IssuedAt: principal.IssuedAt, RefreshToken: in.RefreshToken}
+	if in.TokenAgeMS != nil {
+		age := time.Duration(*in.TokenAgeMS) * time.Millisecond
+		req.TokenAge = &age
+	}
+	if err := h.svc.SignOut(r.Context(), principal.UserID, req); err != nil {
 		slog.Error("sign out", "error", err, "user_id", principal.UserID)
 		if errors.Is(err, ErrRevocationUnavailable) {
 			httpx.Error(w, http.StatusServiceUnavailable, "could not sign out, try again")

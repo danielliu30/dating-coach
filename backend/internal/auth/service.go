@@ -178,14 +178,50 @@ var ErrRevocationUnavailable = errors.New("session revocation unavailable")
 
 var ErrSessionRevoked = errors.New("session revoked")
 
+// SignOutRequest names the session a sign-out comes from and when it happened.
+type SignOutRequest struct {
+	// IssuedAt is the presented access token's issue time.
+	IssuedAt time.Time
+	// RefreshToken is the signing-out session's refresh token, current or spent.
+	RefreshToken string
+	// TokenAge is how long the client had held the access token when the user
+	// signed out, on the client's clock; negative for a token it obtained after.
+	TokenAge *time.Duration
+}
+
 // SignOut ends userID's sessions on every device.
 // The worker replays the Postgres cutoff after a Redis outage or flush.
-func (s *Service) SignOut(ctx context.Context, userID uuid.UUID) error {
-	if _, err := s.queries.RevokeUserRefreshTokens(ctx, userID); err != nil {
-		return fmt.Errorf("revoke refresh tokens: %w", err)
+//
+// The cutoff is when the user signed out, not when the request lands, so one
+// delayed past a fresh sign-in cannot end that session. It is placed on the
+// server's clock as the access token's issue time plus req.TokenAge, which
+// needs no agreement between the two clocks, and it is honoured only with the
+// session's refresh token, whose whole family is ended regardless of when its
+// tokens were issued. Without both, or for a time still ahead, it is now.
+func (s *Service) SignOut(ctx context.Context, userID uuid.UUID, req SignOutRequest) error {
+	at := time.Now()
+	family := uuid.Nil
+	if req.RefreshToken != "" && req.TokenAge != nil && !req.IssuedAt.IsZero() {
+		row, err := s.queries.GetRefreshToken(ctx, hashRefreshToken(req.RefreshToken))
+		switch {
+		case err == nil && row.UserID == userID:
+			family = row.FamilyID
+			if signedOut := req.IssuedAt.Add(*req.TokenAge); signedOut.Before(at) {
+				at = signedOut
+			}
+		case err != nil && !errors.Is(err, pgx.ErrNoRows):
+			return fmt.Errorf("lookup refresh token: %w", err)
+		}
 	}
 	// Match Postgres precision so replay preserves the cutoff exactly.
-	at := time.Now().Truncate(time.Microsecond)
+	at = at.Truncate(time.Microsecond)
+	if family == uuid.Nil {
+		if _, err := s.queries.RevokeUserRefreshTokens(ctx, userID); err != nil {
+			return fmt.Errorf("revoke refresh tokens: %w", err)
+		}
+	} else if _, err := s.queries.RevokeUserRefreshTokensIssuedBy(ctx, db.RevokeUserRefreshTokensIssuedByParams{UserID: userID, Cutoff: at, FamilyID: family}); err != nil {
+		return fmt.Errorf("revoke refresh tokens: %w", err)
+	}
 	if err := s.queries.RecordSessionRevocation(ctx, db.RecordSessionRevocationParams{ID: userID, RevokedAt: at}); err != nil {
 		return fmt.Errorf("record session revocation: %w", err)
 	}
