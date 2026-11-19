@@ -65,8 +65,20 @@ func (r *Relay) Run(ctx context.Context) error {
 
 // Drain attempts up to relayBatch queued emails and reports how many were
 // delivered. A failed send is recorded on its row and retried on a later pass,
-// up to MaxAttempts; only a database error stops the pass.
+// up to MaxAttempts; only a database error stops the pass. Overlapping passes
+// across instances return without sending.
 func (r *Relay) Drain(ctx context.Context) (int, error) {
+	var sent int
+	err := r.queries.WithExclusivePass(ctx, "relay-emails", func(q *db.Queries) error {
+		var err error
+		locked := &Relay{queries: q, notifier: r.notifier}
+		sent, err = locked.drain(ctx)
+		return err
+	})
+	return sent, err
+}
+
+func (r *Relay) drain(ctx context.Context) (int, error) {
 	pending, err := r.queries.PendingEmails(ctx, db.PendingEmailsParams{Limit: relayBatch, Attempts: MaxAttempts})
 	if err != nil {
 		return 0, fmt.Errorf("read email outbox: %w", err)
