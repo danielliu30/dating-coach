@@ -42,7 +42,7 @@ func TestDeleteAccountFailsWhenNothingWasRecorded(t *testing.T) {
 	}
 	t.Cleanup(pool.Close)
 
-	svc := NewService(pool, db.New(pool), nil, nil, 0, "", nil, NewDenylist(nil, time.Minute), failingPublisher{}, time.Hour, time.Minute, 24*time.Hour)
+	svc := NewService(pool, db.New(pool), nil, nil, 0, "", nil, nil, NewDenylist(nil, time.Minute), failingPublisher{}, time.Hour, time.Minute, 24*time.Hour)
 	if err := svc.DeleteAccount(context.Background(), uuid.New()); err == nil {
 		t.Fatal("DeleteAccount succeeded although the deletion was never recorded")
 	}
@@ -91,7 +91,7 @@ func newTestService(t *testing.T) (*Service, *TokenIssuer, *pgxpool.Pool) {
 		t.Fatal(err)
 	}
 	issuer := NewTokenIssuer("test-secret")
-	svc := NewService(pool, db.New(pool), issuer, silentNotifier{}, bcrypt.MinCost, "http://app.test", codes, NewDenylist(rdb, 15*time.Minute), nil, 15*time.Minute, 30*time.Minute, 24*time.Hour)
+	svc := NewService(pool, db.New(pool), issuer, silentNotifier{}, bcrypt.MinCost, "http://app.test", codes, NewResetCache(rdb, 15*time.Minute, 0), NewDenylist(rdb, 15*time.Minute), nil, 15*time.Minute, 30*time.Minute, 24*time.Hour)
 	return svc, issuer, pool
 }
 

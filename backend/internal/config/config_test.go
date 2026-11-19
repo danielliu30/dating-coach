@@ -24,6 +24,8 @@ func TestLoadRejectsNonPositiveDurations(t *testing.T) {
 		"zero jwt ttl":          {"JWT_TTL", "0"},
 		"negative rate window":  {"AUTH_RATE_WINDOW", "-30s"},
 		"zero refresh ttl":      {"REFRESH_TOKEN_TTL", "0"},
+		"zero reset ttl":        {"RESET_CODE_TTL", "0"},
+		"zero reset cooldown":   {"RESET_RESEND_COOLDOWN", "0"},
 		"negative refresh ttl":  {"REFRESH_TOKEN_TTL", "-1h"},
 	}
 	for name, tc := range cases {
@@ -38,6 +40,46 @@ func TestLoadRejectsNonPositiveDurations(t *testing.T) {
 				t.Fatalf("Load() error = %v, want it to name %s", err, tc.key)
 			}
 		})
+	}
+}
+
+func TestResetCodeTTL(t *testing.T) {
+	setRequired(t)
+	t.Setenv("RESET_CODE_TTL", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ResetCodeTTL != 15*time.Minute {
+		t.Fatal(cfg.ResetCodeTTL)
+	}
+	t.Setenv("RESET_CODE_TTL", "2m")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ResetCodeTTL != 2*time.Minute {
+		t.Fatal(cfg.ResetCodeTTL)
+	}
+}
+
+func TestResetResendCooldown(t *testing.T) {
+	setRequired(t)
+	t.Setenv("RESET_RESEND_COOLDOWN", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ResetResendCooldown != time.Minute {
+		t.Fatal(cfg.ResetResendCooldown)
+	}
+	t.Setenv("RESET_RESEND_COOLDOWN", "90s")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ResetResendCooldown != 90*time.Second {
+		t.Fatal(cfg.ResetResendCooldown)
 	}
 }
 
