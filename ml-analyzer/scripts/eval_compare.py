@@ -278,8 +278,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         settings = replace(settings, backend=args.backend)
     if args.checkpoint:
         settings = replace(settings, model_dir=args.checkpoint)
-    if settings.backend == "llm" and args.include_unconsented:
-        raise SystemExit("eval_compare: --include-unconsented is not allowed with the LLM backend")
+    if args.include_unconsented and settings.backend not in {"heuristic", "trained"}:
+        raise SystemExit("eval_compare: --include-unconsented is only allowed with heuristic or trained")
     if settings.backend == "llm" and not settings.llm_configured:
         # build_scorer would silently serve the heuristic, and the run would report 0 fallbacks.
         raise SystemExit("eval_compare: --backend llm needs LLM_API_KEY; use --backend heuristic for a heuristic run")

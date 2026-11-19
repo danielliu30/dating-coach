@@ -96,15 +96,15 @@ def test_llm_run_without_key_refuses_instead_of_scoring_heuristics(tmp_path: Pat
         raise AssertionError("expected SystemExit")
 
 
-@pytest.mark.parametrize("backend_args", [[], ["--backend", "llm"]])
-def test_llm_run_does_not_send_unconsented_rows(tmp_path: Path, monkeypatch, backend_args) -> None:
-    monkeypatch.setenv("ML_BACKEND", "llm")
+@pytest.mark.parametrize("backend,backend_args", [("llm", []), ("heuristic", ["--backend", "llm"]), ("typo", [])])
+def test_llm_run_does_not_send_unconsented_rows(tmp_path: Path, monkeypatch, backend, backend_args) -> None:
+    monkeypatch.setenv("ML_BACKEND", backend)
     monkeypatch.setenv("LLM_API_KEY", "test-key")
     monkeypatch.setattr(eval_compare, "get_settings", eval_compare.get_settings.__wrapped__)
     monkeypatch.setattr(eval_compare, "build_scorer", lambda _: pytest.fail("must not construct an LLM scorer"))
     out = tmp_path / "x.jsonl"
 
-    with pytest.raises(SystemExit, match="--include-unconsented is not allowed"):
+    with pytest.raises(SystemExit, match="--include-unconsented is only allowed"):
         eval_compare.main(["run", "--include-unconsented", "--label", "x", "--out", str(out), *backend_args])
 
     assert not out.exists()
