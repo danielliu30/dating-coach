@@ -19,7 +19,18 @@ from ..coaching import (
     render_pillars,
 )
 from ..config import Settings
-from ..schemas import AnalyzeRequest, AnalyzeResponse, GoalScore, Message, Overall, Segment
+from ..schemas import (
+    DATING_PHASE_LABELS,
+    DATING_STYLE_LABELS,
+    AnalyzeRequest,
+    AnalyzeResponse,
+    GoalScore,
+    Message,
+    Overall,
+    Segment,
+    UserProfile,
+    profile_label,
+)
 from .base import Scorer, align_segments, chunk, clamp, transcript
 from .heuristic import HeuristicScorer, review_self_messages
 
@@ -97,6 +108,14 @@ This applies to "reflection_questions" and "patterns" exactly as it does to \
 "improvements" and "summary".
 - When the customer's stated preferences are given, relate the hints to them \
 (e.g. whether their messages surface what they are actually looking for).
+- When the customer's own profile is given (where they meet people, the dating \
+phases they feel strong in or are working on, their bio and prompt answers), \
+use it only as context for the customer's own goals and how they present \
+themselves: "patterns" and "reflection_questions" may relate what their \
+messages show to a phase they are working on or strong in, or to how they \
+describe themselves, and ask how that part felt to them. Never use it to tell \
+the customer whom to date or what kind of person to look for, never critique \
+or rewrite the profile, and never read the match's feelings from it.
 - "goal_scores": when the request lists focus areas the customer chose to \
 improve on, return at most one entry per listed focus area, with "goal" set to \
 its key. Leave a focus area out when the customer's own messages give nothing \
@@ -150,6 +169,7 @@ class LLMScorer(Scorer):
             f"Platform: {request.platform}. The match is called {match_name}.\n"
             f"What the customer is looking for: {preferences}\n"
             f"{focus_area_spec(request.focus_areas)}"
+            f"{profile_spec(request.profile)}"
             f"Use exactly these segment boundaries (start-end message positions): {segment_spec}\n\n"
             f"Transcript (context only, review just the self lines):\n{transcript(request.messages)}\n\n"
             f"Customer messages to review, with the reply each one drew:\n{self_message_digest(request.messages)}"
@@ -261,6 +281,39 @@ def focus_area_spec(focus_areas: Sequence[str]) -> str:
         f"Focus areas the customer chose to improve on (return at most one overall.goal_scores entry for each of {keys}):\n"
         f"{blocks}\n"
     )
+
+
+def profile_spec(profile: Optional[UserProfile]) -> str:
+    """Render the customer's own profile for the user prompt, or "" when absent or empty.
+
+    Each present field becomes one line, with vocabulary keys shown by label and
+    free text collapsed onto a single line so it cannot break the prompt layout.
+    """
+    if profile is None or profile.is_empty():
+        return ""
+    lines = ["The customer's own dating profile (context for their goals only):"]
+    if profile.dating_styles:
+        lines.append(f"- Meets people through: {_labels(profile.dating_styles, DATING_STYLE_LABELS)}")
+    if profile.phases_strong:
+        lines.append(f"- Feels strong at: {_labels(profile.phases_strong, DATING_PHASE_LABELS)}")
+    if profile.phases_working_on:
+        lines.append(f"- Working on: {_labels(profile.phases_working_on, DATING_PHASE_LABELS)}")
+    bio = _one_line(profile.bio or "")
+    if bio:
+        lines.append(f"- Bio: {bio}")
+    for item in profile.prompts:
+        prompt = _one_line(item.prompt)
+        answer = _one_line(item.answer)
+        lines.append(f'- Prompt "{prompt}": {answer}' if prompt else f"- Prompt answer: {answer}")
+    return "\n".join(lines) + "\n"
+
+
+def _labels(keys: Sequence[str], labels: Dict[str, str]) -> str:
+    return ", ".join(profile_label(key, labels) for key in keys)
+
+
+def _one_line(text: str) -> str:
+    return " ".join(text.split())
 
 
 def _goal_scores(overall: Dict[str, Any], focus_areas: Sequence[str]) -> List[GoalScore]:
