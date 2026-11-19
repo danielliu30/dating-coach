@@ -209,6 +209,23 @@ def test_ambiguous_acceptance_is_not_evidence_of_repair_either():
     assert evidence.self_correction.level == "unknown"
 
 
+def test_explicit_availability_clears_ambiguity_for_a_separate_repair():
+    evidence = extract_profile_evidence(_conversation(
+        "me: I'd like to try that cafe together.",
+        "them: I can't make Friday.",
+        "me: How about Friday?",
+        "me: How about tomorrow instead?",
+        "them: That works.",
+        "them: Actually, Friday works now.",
+        "them: I can't make Saturday.",
+        "me: How about Saturday?",
+        "me: Sorry, I missed that. How about Sunday?",
+    ))
+    assert evidence.feedback_needed.level == "strong"
+    assert evidence.self_correction.level == "strong"
+    assert evidence.self_correction.self_positions == [14, 16]
+
+
 def test_no_reply_or_short_style_is_not_a_coaching_need():
     evidence = extract_profile_evidence(_conversation(
         "me: Would you like to meet up?",

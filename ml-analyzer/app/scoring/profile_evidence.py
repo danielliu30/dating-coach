@@ -15,6 +15,11 @@ _DECLINE = re.compile(
     rf"(?:(?:sorry|no), )?(?:i (?:can't|cannot) (?:do|make) (?P<direct>{_DAY})"
     rf"|(?P<day_first>{_DAY}) (?:doesn't|does not) work for me)[.!]?"
 )
+_DIRECT_AVAILABILITY = re.compile(
+    rf"(?:actually,? )?(?:i can (?:do|make) (?P<direct>{_DAY})"
+    rf"|i(?:'m| am) (?:free|available) (?:on )?(?P<free>{_DAY})"
+    rf"|(?P<day_first>{_DAY}) (?:actually )?works(?: for me)?)(?: after all| now)?[.!]?"
+)
 _INDIRECT_AVAILABILITY = re.compile(
     r"(?:actually,? )?(?:(?:i'm|i am) (?:free|available) (?:then|that day)"
     r"|i can (?:do|make) (?:it then|that day|then)"
@@ -66,6 +71,7 @@ def extract_profile_evidence(messages: Sequence[Message]) -> ProfileEvidence:
         if message.sender == "match":
             last_match = i
             decline = _DECLINE.fullmatch(body)
+            available = _DIRECT_AVAILABILITY.fullmatch(body)
             if decline:
                 day = decline["direct"] or decline["day_first"]
                 if day not in constraints:
@@ -75,6 +81,11 @@ def extract_profile_evidence(messages: Sequence[Message]) -> ProfileEvidence:
                 constraint.stated = i
                 if constraint.suspended:
                     constraint.suspended = False
+                    constraint.open_miss = None
+            elif available:
+                day = available["direct"] or available["free"] or available["day_first"]
+                constraint = constraints.pop(day, None)
+                if constraint and constraint.suspended:
                     constraint.open_miss = None
             elif _INDIRECT_AVAILABILITY.fullmatch(body):
                 if proposed_day:
