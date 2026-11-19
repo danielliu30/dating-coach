@@ -89,7 +89,7 @@ func (w *Worker) Handle(ctx context.Context, job Job, lastAttempt bool) error {
 	return nil
 }
 
-// ownerTailoring loads current preferences and goals; missing owners leave analysis untailored.
+// ownerTailoring loads current preferences, goals and dating profile; missing owners leave analysis untailored.
 func (w *Worker) ownerTailoring(ctx context.Context, userID uuid.UUID) (db.User, error) {
 	user, err := w.queries.GetUserByID(ctx, userID)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -105,6 +105,7 @@ func newMLRequest(conversation db.Conversation, messages []db.Message, owner db.
 		MatchName:      conversation.MatchName,
 		Preferences:    owner.DatingPreferences,
 		FocusAreas:     owner.CoachingGoals,
+		Profile:        newMLProfile(owner),
 		Messages:       make([]MLMessage, 0, len(messages)),
 	}
 	for _, m := range messages {
@@ -116,6 +117,19 @@ func newMLRequest(conversation db.Conversation, messages []db.Message, owner db.
 		})
 	}
 	return req
+}
+
+// newMLProfile returns the owner's dating profile, or nil when it is empty so
+// the analyzer takes its untailored path.
+func newMLProfile(owner db.User) *MLProfile {
+	if len(owner.DatingStyles) == 0 && len(owner.PhasesStrong) == 0 && len(owner.PhasesWorkingOn) == 0 {
+		return nil
+	}
+	return &MLProfile{
+		DatingStyles:    owner.DatingStyles,
+		PhasesStrong:    owner.PhasesStrong,
+		PhasesWorkingOn: owner.PhasesWorkingOn,
+	}
 }
 
 // fail records a permanent failure on the analysis row, or returns cause so the

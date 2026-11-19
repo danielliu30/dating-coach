@@ -124,7 +124,7 @@ class TrainedScorer(Scorer):
             summary=_summary(reviews, request.preferences),
             strengths=_strengths(reviews),
             improvements=_improvements(reviews),
-            reflection_questions=reflection_questions(reviews, reciprocity, request.preferences),
+            reflection_questions=reflection_questions(reviews, reciprocity, request.preferences, request.profile),
             patterns=conversation_patterns(request.messages),
         )
 

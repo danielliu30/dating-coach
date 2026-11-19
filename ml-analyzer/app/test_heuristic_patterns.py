@@ -362,7 +362,7 @@ def test_heuristic_analyze_reports_long_conversation_patterns_after_reciprocity(
     request = AnalyzeRequest(conversation_id="long-1", messages=_conversation(turns, sent_at=hours))
     response = asyncio.run(HeuristicScorer().analyze(request))
 
-    assert response.model_version == "heuristic-v5"
+    assert response.model_version == "heuristic-v6"
     reciprocity = reciprocity_patterns(request.messages)
     assert reciprocity
     long_patterns = [
