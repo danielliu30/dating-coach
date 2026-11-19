@@ -178,14 +178,50 @@ var ErrRevocationUnavailable = errors.New("session revocation unavailable")
 
 var ErrSessionRevoked = errors.New("session revoked")
 
+// SignOutRequest names the session a sign-out comes from and when it happened.
+type SignOutRequest struct {
+	// IssuedAt is the presented access token's issue time.
+	IssuedAt time.Time
+	// RefreshToken is the signing-out session's refresh token, current or spent.
+	RefreshToken string
+	// TokenAge is how long the client had held the access token when the user
+	// signed out, on the client's clock; negative for a token it obtained after.
+	TokenAge *time.Duration
+}
+
 // SignOut ends userID's sessions on every device.
 // The worker replays the Postgres cutoff after a Redis outage or flush.
-func (s *Service) SignOut(ctx context.Context, userID uuid.UUID) error {
-	if _, err := s.queries.RevokeUserRefreshTokens(ctx, userID); err != nil {
-		return fmt.Errorf("revoke refresh tokens: %w", err)
+//
+// The cutoff is when the user signed out, not when the request lands, so one
+// delayed past a fresh sign-in cannot end that session. It is placed on the
+// server's clock as the access token's issue time plus req.TokenAge, which
+// needs no agreement between the two clocks, and it is honoured only with the
+// session's refresh token, whose whole family is ended regardless of when its
+// tokens were issued. Without both, or for a time still ahead, it is now.
+func (s *Service) SignOut(ctx context.Context, userID uuid.UUID, req SignOutRequest) error {
+	at := time.Now()
+	family := uuid.Nil
+	if req.RefreshToken != "" && req.TokenAge != nil && !req.IssuedAt.IsZero() {
+		row, err := s.queries.GetRefreshToken(ctx, hashRefreshToken(req.RefreshToken))
+		switch {
+		case err == nil && row.UserID == userID:
+			family = row.FamilyID
+			if signedOut := req.IssuedAt.Add(*req.TokenAge); signedOut.Before(at) {
+				at = signedOut
+			}
+		case err != nil && !errors.Is(err, pgx.ErrNoRows):
+			return fmt.Errorf("lookup refresh token: %w", err)
+		}
 	}
 	// Match Postgres precision so replay preserves the cutoff exactly.
-	at := time.Now().Truncate(time.Microsecond)
+	at = at.Truncate(time.Microsecond)
+	if family == uuid.Nil {
+		if _, err := s.queries.RevokeUserRefreshTokens(ctx, userID); err != nil {
+			return fmt.Errorf("revoke refresh tokens: %w", err)
+		}
+	} else if _, err := s.queries.RevokeUserRefreshTokensIssuedBy(ctx, db.RevokeUserRefreshTokensIssuedByParams{UserID: userID, Cutoff: at, FamilyID: family}); err != nil {
+		return fmt.Errorf("revoke refresh tokens: %w", err)
+	}
 	if err := s.queries.RecordSessionRevocation(ctx, db.RecordSessionRevocationParams{ID: userID, RevokedAt: at}); err != nil {
 		return fmt.Errorf("record session revocation: %w", err)
 	}
@@ -399,8 +435,8 @@ func (s *Service) SignUp(ctx context.Context, in SignUpInput) (Session, error) {
 	if _, err := mail.ParseAddress(email); err != nil {
 		return Session{}, fmt.Errorf("%w: email is not valid", ErrInvalidInput)
 	}
-	if len(in.Password) < 8 {
-		return Session{}, fmt.Errorf("%w: password must be at least 8 characters", ErrInvalidInput)
+	if err := validatePassword(in.Password); err != nil {
+		return Session{}, err
 	}
 	displayName := strings.TrimSpace(in.DisplayName)
 	if displayName == "" {
@@ -471,7 +507,7 @@ type GoogleSignInInput struct {
 // account owning its email address, creating that account when it does not
 // exist. Google has already confirmed the address, so a new account is created
 // verified (skipping the emailed code) with NoPasswordHash, and an existing
-// unverified password account is marked verified on the spot. The role in
+// unverified account has its password and existing sessions revoked. The role in
 // `in` (user or coach, default user) applies to new accounts only; an existing
 // account keeps its role, and a coach created this way still starts unapproved.
 //
@@ -499,10 +535,9 @@ func (s *Service) SignInWithGoogle(ctx context.Context, in GoogleSignInInput) (S
 	user, err := s.queries.GetUserByEmail(ctx, identity.Email)
 	switch {
 	case err == nil:
-		if !user.EmailVerified {
-			if user, err = s.queries.VerifyUserEmail(ctx, user.ID); err != nil {
-				return Session{}, fmt.Errorf("mark google account verified: %w", err)
-			}
+		user, err = s.claimGoogleUser(ctx, user.ID)
+		if err != nil {
+			return Session{}, err
 		}
 	case errors.Is(err, pgx.ErrNoRows):
 		user, err = s.createGoogleUser(ctx, identity, role)
@@ -554,10 +589,47 @@ func (s *Service) createGoogleUser(ctx context.Context, identity GoogleIdentity,
 		}
 		return db.User{}, fmt.Errorf("lookup user: %w", err)
 	}
-	if !user.EmailVerified {
-		if user, err = s.queries.VerifyUserEmail(ctx, user.ID); err != nil {
-			return db.User{}, fmt.Errorf("mark google account verified: %w", err)
+	return s.claimGoogleUser(ctx, user.ID)
+}
+
+func (s *Service) claimGoogleUser(ctx context.Context, userID uuid.UUID) (db.User, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return db.User{}, fmt.Errorf("begin google claim: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := s.queries.WithTx(tx)
+	user, err := q.LockUserForRefresh(ctx, userID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return db.User{}, ErrInvalidCredentials
+	}
+	if err != nil {
+		return db.User{}, fmt.Errorf("lock google account: %w", err)
+	}
+	if user.EmailVerified {
+		return user, nil
+	}
+	at := time.Now().Truncate(time.Microsecond)
+	if _, err := tx.Exec(ctx, "UPDATE users SET password_hash = $2 WHERE id = $1", userID, NoPasswordHash); err != nil {
+		return db.User{}, fmt.Errorf("clear unverified password: %w", err)
+	}
+	if err := q.RecordSessionRevocation(ctx, db.RecordSessionRevocationParams{ID: userID, RevokedAt: at}); err != nil {
+		return db.User{}, fmt.Errorf("record google claim revocation: %w", err)
+	}
+	if _, err := q.RevokeUserRefreshTokens(ctx, userID); err != nil {
+		return db.User{}, fmt.Errorf("revoke unverified refresh tokens: %w", err)
+	}
+	user, err = q.VerifyUserEmail(ctx, userID)
+	if err != nil {
+		return db.User{}, fmt.Errorf("mark google account verified: %w", err)
+	}
+	if s.denylist != nil {
+		if err := s.denylist.RevokeSessionsAt(ctx, userID, at); err != nil {
+			return db.User{}, err
 		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return db.User{}, fmt.Errorf("commit google claim: %w", err)
 	}
 	return user, nil
 }
