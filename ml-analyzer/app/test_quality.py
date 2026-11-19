@@ -98,3 +98,10 @@ def test_unclosed_quote_does_not_swallow_the_next_citation() -> None:
     texts = ['Message 1 ("what was the last thing\nMessage 3 ("ok") got a short reply.']
     result = citations(texts, MESSAGES)
     assert result["citations"] == 2 and result["valid_citations"] == 2
+
+
+def test_quote_mentioning_message_n_stays_one_citation() -> None:
+    """Only a new ``Message N ("`` opening ends a quote, so quoted text that says "message 2" is kept whole."""
+    messages = [Message(position=0, sender="self", body="see message 2 above"), Message(position=1, sender="match", body="ok")]
+    result = citations(['Message 1 ("see message 2 above") pointed back.'], messages)
+    assert result["citations"] == 1 and result["valid_citations"] == 1
