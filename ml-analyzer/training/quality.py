@@ -26,7 +26,7 @@ from app.scoring.base import TranscriptMessage
 # ``Message N`` optionally followed by `` ("quote")`` or `` ('quote')``; the heuristic quotes with
 # ``repr`` (single quotes) and the LLM prompt mandates double quotes, so both are read.
 CITATION = re.compile(
-    r"\bmessages?\s+(?P<number>\d{1,6})(?:\s*\(\s*(?P<open>[\"'\u201c\u2018])(?P<quote>(?:(?!\bmessages?\s+\d{1,6}\s*\(\s*[\"\'\u201c\u2018]).)*?)[\"'\u201d\u2019]\s*\))?",
+    r"\bmessages?\s+(?P<number>\d{1,6})(?!\d|\s*[-–]\s*\d)(?:\s*\(\s*(?P<open>[\"'\u201c\u2018])(?P<quote>(?:(?!\bmessages?\s+\d{1,6}\s*\(\s*[\"\'\u201c\u2018]).)*?)[\"'\u201d\u2019]\s*\))?",
     re.IGNORECASE | re.DOTALL,
 )
 _WHITESPACE = re.compile(r"\s+")

@@ -105,3 +105,9 @@ def test_quote_mentioning_message_n_stays_one_citation() -> None:
     messages = [Message(position=0, sender="self", body="see message 2 above"), Message(position=1, sender="match", body="ok")]
     result = citations(['Message 1 ("see message 2 above") pointed back.'], messages)
     assert result["citations"] == 1 and result["valid_citations"] == 1
+
+
+def test_message_ranges_are_not_single_citations() -> None:
+    """"Messages 1-3" spans both senders; it is a range, not a claim about message 1."""
+    result = citations(["Early on (Messages 1-3) you wrote more; Message 3 ('ok') was short."], MESSAGES)
+    assert result["citations"] == 1
