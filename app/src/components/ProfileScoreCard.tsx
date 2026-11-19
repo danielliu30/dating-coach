@@ -105,6 +105,7 @@ export function ProfileScoreCard(): React.ReactElement | null {
               accessibilityLabel={`Review analysis ${index + 1}`}
               onPress={() => navigation.navigate('Analyse', {
                 screen: 'Result',
+                initial: false,
                 params: { analysisID: source.analysis_id, conversationID: source.conversation_id },
               })}
             />

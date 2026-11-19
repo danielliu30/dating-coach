@@ -49,6 +49,7 @@ it.each([
   fireEvent.press(screen.getByRole('button', { name: 'Review analysis 1' }));
   expect(mockNavigate).toHaveBeenLastCalledWith('Analyse', {
     screen: 'Result',
+    initial: false,
     params: { analysisID: 'a1', conversationID: 'c1' },
   });
 });
