@@ -41,6 +41,34 @@ WHERE conversation_id = $1
 ORDER BY created_at DESC
 LIMIT 1;
 
+-- name: ListProfileEvidenceCandidates :many
+SELECT a.id AS analysis_id, a.created_at AS analysis_created_at,
+       c.id AS conversation_id, c.created_at AS submitted_at,
+       (a.overall->'profile_evidence')::jsonb AS evidence,
+       transcript.fingerprint, transcript.self_positions
+FROM conversations c
+JOIN analysis_results a ON a.conversation_id = c.id
+CROSS JOIN LATERAL (
+    SELECT sha256(convert_to(jsonb_agg(
+               jsonb_build_array(m.sender, btrim(regexp_replace(m.body, '[[:space:]]+', ' ', 'g')))
+               ORDER BY m.position
+           )::text, 'UTF8'))::bytea AS fingerprint,
+           coalesce(array_agg(m.position) FILTER (WHERE m.sender = 'self'), '{}')::integer[] AS self_positions
+    FROM messages m
+    WHERE m.conversation_id = c.id
+) transcript
+WHERE c.user_id = sqlc.arg(owner_id)
+  AND c.created_at >= sqlc.arg(submitted_since)
+  AND a.status = 'succeeded'
+  AND a.overall->'profile_evidence'->>'rubric_version' = sqlc.arg(rubric)::text
+  AND a.overall->'profile_evidence'->>'coverage' = 'eligible'
+  AND (sqlc.narg(before_submission)::timestamptz IS NULL OR
+       (c.created_at, c.id, a.created_at, a.id) <
+       (sqlc.narg(before_submission)::timestamptz, sqlc.arg(before_conversation)::uuid,
+        sqlc.arg(before_analysis_created)::timestamptz, sqlc.arg(before_analysis)::uuid))
+ORDER BY c.created_at DESC, c.id DESC, a.created_at DESC, a.id DESC
+LIMIT sqlc.arg(batch_size);
+
 -- Claims a job for this delivery. Terminal rows return no row, so a redelivered
 -- job can be acked without scoring the conversation again.
 -- name: ClaimAnalysis :one

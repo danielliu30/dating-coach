@@ -395,6 +395,93 @@ func (q *Queries) ListMessages(ctx context.Context, conversationID uuid.UUID) ([
 	return items, nil
 }
 
+const listProfileEvidenceCandidates = `-- name: ListProfileEvidenceCandidates :many
+SELECT a.id AS analysis_id, a.created_at AS analysis_created_at,
+       c.id AS conversation_id, c.created_at AS submitted_at,
+       (a.overall->'profile_evidence')::jsonb AS evidence,
+       transcript.fingerprint, transcript.self_positions
+FROM conversations c
+JOIN analysis_results a ON a.conversation_id = c.id
+CROSS JOIN LATERAL (
+    SELECT sha256(convert_to(jsonb_agg(
+               jsonb_build_array(m.sender, btrim(regexp_replace(m.body, '[[:space:]]+', ' ', 'g')))
+               ORDER BY m.position
+           )::text, 'UTF8'))::bytea AS fingerprint,
+           coalesce(array_agg(m.position) FILTER (WHERE m.sender = 'self'), '{}')::integer[] AS self_positions
+    FROM messages m
+    WHERE m.conversation_id = c.id
+) transcript
+WHERE c.user_id = $1
+  AND c.created_at >= $2
+  AND a.status = 'succeeded'
+  AND a.overall->'profile_evidence'->>'rubric_version' = $3::text
+  AND a.overall->'profile_evidence'->>'coverage' = 'eligible'
+  AND ($4::timestamptz IS NULL OR
+       (c.created_at, c.id, a.created_at, a.id) <
+       ($4::timestamptz, $5::uuid,
+        $6::timestamptz, $7::uuid))
+ORDER BY c.created_at DESC, c.id DESC, a.created_at DESC, a.id DESC
+LIMIT $8
+`
+
+type ListProfileEvidenceCandidatesParams struct {
+	OwnerID               uuid.UUID  `json:"owner_id"`
+	SubmittedSince        time.Time  `json:"submitted_since"`
+	Rubric                string     `json:"rubric"`
+	BeforeSubmission      *time.Time `json:"before_submission"`
+	BeforeConversation    uuid.UUID  `json:"before_conversation"`
+	BeforeAnalysisCreated time.Time  `json:"before_analysis_created"`
+	BeforeAnalysis        uuid.UUID  `json:"before_analysis"`
+	BatchSize             int32      `json:"batch_size"`
+}
+
+type ListProfileEvidenceCandidatesRow struct {
+	AnalysisID        uuid.UUID       `json:"analysis_id"`
+	AnalysisCreatedAt time.Time       `json:"analysis_created_at"`
+	ConversationID    uuid.UUID       `json:"conversation_id"`
+	SubmittedAt       time.Time       `json:"submitted_at"`
+	Evidence          json.RawMessage `json:"evidence"`
+	Fingerprint       []byte          `json:"fingerprint"`
+	SelfPositions     []int32         `json:"self_positions"`
+}
+
+func (q *Queries) ListProfileEvidenceCandidates(ctx context.Context, arg ListProfileEvidenceCandidatesParams) ([]ListProfileEvidenceCandidatesRow, error) {
+	rows, err := q.db.Query(ctx, listProfileEvidenceCandidates,
+		arg.OwnerID,
+		arg.SubmittedSince,
+		arg.Rubric,
+		arg.BeforeSubmission,
+		arg.BeforeConversation,
+		arg.BeforeAnalysisCreated,
+		arg.BeforeAnalysis,
+		arg.BatchSize,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListProfileEvidenceCandidatesRow{}
+	for rows.Next() {
+		var i ListProfileEvidenceCandidatesRow
+		if err := rows.Scan(
+			&i.AnalysisID,
+			&i.AnalysisCreatedAt,
+			&i.ConversationID,
+			&i.SubmittedAt,
+			&i.Evidence,
+			&i.Fingerprint,
+			&i.SelfPositions,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTrainingExamples = `-- name: ListTrainingExamples :many
 SELECT id, conversation_id, label_source, outcome, reply_received, engagement_score, segment_labels, notes, consented, created_at FROM training_examples
 WHERE consented
