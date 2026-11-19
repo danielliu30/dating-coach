@@ -68,11 +68,11 @@ func (s *Service) ResetPassword(ctx context.Context, email, code, password strin
 		return err
 	}
 	userID := user.ID.String()
-	stored, _, err := s.resetCodes.Get(ctx, userID)
+	consumed, err := s.resetCodes.Consume(ctx, userID, strings.TrimSpace(code))
 	if err != nil {
 		return err
 	}
-	if stored == "" || stored != strings.TrimSpace(code) {
+	if !consumed {
 		count, err := s.resetCodes.IncrementAttempts(ctx, userID)
 		if err != nil {
 			return err
@@ -104,9 +104,6 @@ func (s *Service) ResetPassword(ctx context.Context, email, code, password strin
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return err
-	}
-	if err := s.resetCodes.Invalidate(ctx, userID); err != nil {
-		slog.Error("discard consumed reset code", "error", err, "user_id", user.ID)
 	}
 	return nil
 }

@@ -101,3 +101,15 @@ func (c *VerificationCache) IncrementAttempts(ctx context.Context, userID string
 func (c *VerificationCache) Invalidate(ctx context.Context, userID string) error {
 	return c.rdb.Del(ctx, c.codeKey(userID), c.attemptsKey(userID)).Err()
 }
+
+var consumeCodeScript = redis.NewScript(`
+if redis.call('GET', KEYS[1]) ~= ARGV[1] then
+  return 0
+end
+redis.call('DEL', KEYS[1], KEYS[2])
+return 1
+`)
+
+func (c *VerificationCache) Consume(ctx context.Context, userID, code string) (bool, error) {
+	return consumeCodeScript.Run(ctx, c.rdb, []string{c.codeKey(userID), c.attemptsKey(userID)}, code).Bool()
+}

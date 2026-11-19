@@ -177,3 +177,42 @@ func TestPasswordResetRoutes(t *testing.T) {
 	code, _, _ := svc.resetCodes.Get(ctx, signup.User.ID)
 	post("/reset-password", `{"email":"`+email+`","code":"`+code+`","password":"new-password"}`, 200)
 }
+
+func TestPasswordResetConcurrent(t *testing.T) {
+	svc, _, pool := newTestService(t)
+	ctx := context.Background()
+	email := "reset-concurrent-" + uuid.NewString() + "@example.com"
+	signup, err := svc.SignUp(ctx, SignUpInput{Email: email, Password: "old-password", DisplayName: "Reset"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM users WHERE email=$1", email) })
+	if err := svc.ForgotPassword(ctx, email); err != nil {
+		t.Fatal(err)
+	}
+	code, _, err := svc.resetCodes.Get(ctx, signup.User.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	for range 2 {
+		go func() {
+			<-start
+			results <- svc.ResetPassword(ctx, email, code, "new-password")
+		}()
+	}
+	close(start)
+	successes := 0
+	for range 2 {
+		err := <-results
+		if err == nil {
+			successes++
+		} else if !errors.Is(err, ErrInvalidResetCode) {
+			t.Fatal(err)
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("successful resets = %d, want 1", successes)
+	}
+}
