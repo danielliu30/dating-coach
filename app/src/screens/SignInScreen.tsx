@@ -68,7 +68,7 @@ export default function SignInScreen({
           title={signedOutReason === 'revoked' ? 'Your session was ended' : 'You were signed out'}
           text={
             signedOutReason === 'revoked'
-              ? 'We ended this session to keep your account safe. Sign in again, and change your password if you did not expect this.'
+              ? 'You were signed out. Your password was changed or you signed out on another device. Sign in again, and change your password if you did not expect this.'
               : 'Your session expired, so we signed you out to keep your account safe. Sign in to pick up where you left off.'
           }
           onDismiss={dismissSignedOutReason}

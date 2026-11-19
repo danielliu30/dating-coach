@@ -100,7 +100,7 @@ const AuthContext = createContext<AuthState | null>(null);
  * needs internally: the exchange was refused, but the session it asked about
  * had already been replaced, so the verdict is about a session no longer held.
  */
-type RotationResult = RenewalResult | 'stale';
+type RotationResult = RenewalResult | 'revoked' | 'stale';
 
 // Whether the stored access token is still worth sending. Restoring an expired
 // one lands the user in authenticated tabs where every request 401s — and the
@@ -215,7 +215,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
         return 'renewed';
       } catch (error) {
         if (!isRefused(error)) return 'unavailable';
-        return generation === generationRef.current ? 'rejected' : 'stale';
+        if (generation !== generationRef.current) return 'stale';
+        return error instanceof ApiError && error.message === 'session revoked' ? 'revoked' : 'rejected';
       }
     },
     [persist],
@@ -270,7 +271,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
             // an unreachable backend leaves the app signed out for now but
             // keeps the session for the next launch.
             if (isRefused(error)) {
-              setSignedOutReason('expired');
+              setSignedOutReason(error instanceof ApiError && error.message === 'session revoked' ? 'revoked' : 'expired');
               await forget();
             }
           }

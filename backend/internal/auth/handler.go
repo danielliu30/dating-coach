@@ -191,6 +191,8 @@ func (h *Handler) refresh(w http.ResponseWriter, r *http.Request) {
 	}
 	session, err := h.svc.Refresh(r.Context(), in.RefreshToken)
 	switch {
+	case errors.Is(err, ErrRevokedRefreshToken):
+		httpx.Error(w, http.StatusUnauthorized, "session revoked")
 	case errors.Is(err, ErrInvalidRefreshToken):
 		httpx.Error(w, http.StatusUnauthorized, err.Error())
 	case err != nil:
