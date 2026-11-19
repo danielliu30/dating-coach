@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"time"
 
@@ -77,7 +78,10 @@ func (h *Handler) forgotPassword(w http.ResponseWriter, r *http.Request) {
 	if err := h.svc.ForgotPassword(r.Context(), in.Email); err != nil {
 		slog.Error("request password reset", "error", err)
 	}
-	httpx.JSON(w, http.StatusAccepted, map[string]string{"status": "sent"})
+	httpx.JSON(w, http.StatusAccepted, map[string]any{
+		"status":               "sent",
+		"resend_after_seconds": int64(math.Ceil(h.svc.resetCodes.cooldown.Seconds())),
+	})
 }
 
 func (h *Handler) resetPassword(w http.ResponseWriter, r *http.Request) {

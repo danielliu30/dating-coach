@@ -39,11 +39,15 @@ export default function ForgotPasswordScreen({
     setError(null);
     setStatus(null);
     try {
-      await api.forgotPassword(email.trim());
+      const response = await api.forgotPassword(email.trim());
+      const configured = response.resend_after_seconds;
+      const cooldown = typeof configured === 'number' && Number.isFinite(configured) && configured > 0
+        ? Math.ceil(configured)
+        : 60;
       setSent(true);
       setCode('');
-      setRemaining(60);
-      setResendUntil(Date.now() + 60_000);
+      setRemaining(cooldown);
+      setResendUntil(Date.now() + cooldown * 1000);
       setStatus('If an account exists, a reset code has been sent. Codes expire after a short time or 3 wrong attempts.');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not send reset code');

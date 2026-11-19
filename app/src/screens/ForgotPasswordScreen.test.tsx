@@ -62,6 +62,21 @@ it('returns to email entry and clears the reset fields', async () => {
   expect(screen.getByLabelText('Reset code').props.value).toBe('');
 });
 
+it('uses the configured server cooldown after each send', async () => {
+  (api.forgotPassword as jest.Mock)
+    .mockResolvedValueOnce({ status: 'sent', resend_after_seconds: 90 })
+    .mockResolvedValueOnce({ status: 'sent', resend_after_seconds: 30 });
+  mount();
+  await send();
+  expect(screen.getByRole('button', { name: 'Resend code (90s)' })).toBeDisabled();
+  act(() => jest.advanceTimersByTime(60_000));
+  expect(screen.getByRole('button', { name: 'Resend code (30s)' })).toBeDisabled();
+  act(() => jest.advanceTimersByTime(30_000));
+  fireEvent.press(screen.getByRole('button', { name: 'Resend code' }));
+  await waitFor(() => expect(api.forgotPassword).toHaveBeenCalledTimes(2));
+  expect(screen.getByRole('button', { name: 'Resend code (30s)' })).toBeDisabled();
+});
+
 it.each([
   ['é'.repeat(37), 'Password must be at most 72 bytes.'],
   [' '.repeat(8), 'Password cannot be only whitespace.'],

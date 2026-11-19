@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -68,6 +69,33 @@ func TestForgotPasswordCooldown(t *testing.T) {
 	}
 	if notifier.sent != 2 {
 		t.Fatalf("emails=%d", notifier.sent)
+	}
+}
+
+func TestForgotPasswordReportsConfiguredCooldownForEveryEmail(t *testing.T) {
+	svc, _, pool := newTestService(t)
+	ctx := context.Background()
+	email := "reset-cooldown-response-" + uuid.NewString() + "@example.com"
+	if _, err := svc.SignUp(ctx, SignUpInput{Email: email, Password: "old-password", DisplayName: "Reset"}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM users WHERE email=$1", email) })
+	cache, _ := newTestCache(t)
+	svc.resetCodes = NewResetCache(cache.rdb, 15*time.Minute, 90*time.Second)
+	routes := NewHandler(svc, NewRateLimiter(svc.codes.rdb, 100, time.Minute)).Routes(rejectAll)
+	for _, address := range []string{email, email, "unknown-" + email} {
+		rec := httptest.NewRecorder()
+		routes.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/forgot-password", strings.NewReader(`{"email":"`+address+`"}`)))
+		var response struct {
+			Status             string `json:"status"`
+			ResendAfterSeconds int    `json:"resend_after_seconds"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+			t.Fatal(err)
+		}
+		if rec.Code != 202 || response.Status != "sent" || response.ResendAfterSeconds != 90 {
+			t.Fatalf("status=%d body=%s", rec.Code, rec.Body)
+		}
 	}
 }
 

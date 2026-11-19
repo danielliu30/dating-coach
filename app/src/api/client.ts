@@ -242,7 +242,7 @@ export class ApiClient {
   }
 
   forgotPassword(email: string) {
-    return this.request<{ status: string }>('POST', '/auth/forgot-password', { email });
+    return this.request<{ status: string; resend_after_seconds?: number }>('POST', '/auth/forgot-password', { email });
   }
 
   resetPassword(email: string, code: string, password: string) {
