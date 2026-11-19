@@ -113,11 +113,6 @@ export class ApiClient {
     return result;
   }
 
-  /** Settles once the renewal in flight, if any, has. Never rejects. */
-  async renewalSettled(): Promise<void> {
-    await this.renewal?.catch(() => undefined);
-  }
-
   /**
    * Runs the one renewal the concurrent callers share and pairs its verdict
    * with the reason they collectively gave, read at the moment it settles so a

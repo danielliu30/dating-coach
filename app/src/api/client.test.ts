@@ -347,29 +347,6 @@ describe('ApiClient wrappers', () => {
     expect(lastRequest().init.body).toBe(JSON.stringify({ coach_id: 'c1', session_id: null }));
   });
 
-  it('renewalSettled waits for the renewal in flight and never rejects', async () => {
-    fetchMock.mockResolvedValueOnce(reply(401, { error: 'expired' })).mockResolvedValueOnce(reply(200, {}));
-    const client = new ApiClient();
-    client.useToken(() => 'tok');
-    const renewal = deferred<'renewed'>();
-    client.useRenewal(() => renewal.promise);
-
-    await expect(client.renewalSettled()).resolves.toBeUndefined();
-    const request = client.me();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    let settled = false;
-    const waiting = client.renewalSettled().then(() => {
-      settled = true;
-    });
-    await Promise.resolve();
-    expect(settled).toBe(false);
-
-    renewal.resolve('renewed');
-    await waiting;
-    await request;
-    expect(settled).toBe(true);
-  });
-
   it('signOut posts to /auth/signout with the given token, not the one on hand', async () => {
     fetchMock.mockResolvedValueOnce(reply(200, { status: 'signed_out' }));
     const client = new ApiClient();
