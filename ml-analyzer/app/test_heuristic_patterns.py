@@ -1,9 +1,11 @@
 """Long-conversation patterns of the heuristic scorer: each one is deterministic, cites messages and passes the agency gate."""
 
+from datetime import timedelta
 import asyncio
 from typing import List, Optional, Sequence, Tuple
 
 from app.coaching import enforce_agency
+from app.scoring.base import _parse_sent_at
 from app.schemas import AnalyzeRequest, Message
 from app.scoring.heuristic import (
     HeuristicScorer,
@@ -148,6 +150,16 @@ def test_reinitiation_stays_silent_without_timestamps_or_balance() -> None:
     assert reinitiation_patterns(head_then_received) == []
     interleaved = [m if m.position % 2 else m.model_copy(update={"sent_at": received[m.position]}) for m in dated_head]
     assert reinitiation_patterns(interleaved) == []
+
+
+def test_reinitiation_keeps_quick_replies_after_a_pause() -> None:
+    # Each side restarts twice; the match's restarts draw an instant reply, which must not hide the pause before them.
+    messages = _timeline("smsmsmsmsmsm", gaps_after=[2, 4, 7, 9])
+    for i in (8, 10):
+        restart = _parse_sent_at(messages[i - 1].sent_at)
+        assert restart is not None
+        messages[i] = messages[i].model_copy(update={"sent_at": (restart + timedelta(milliseconds=500)).isoformat()})
+    assert reinitiation_patterns(messages) == []
 
 
 def _by_sender(senders: str) -> List[Message]:
@@ -318,8 +330,25 @@ def test_repeated_questions_tell_apart_different_question_words() -> None:
         ("self", "When do you usually go hiking?"),
         ("self", "How's your week going so far?"),
         ("self", "How's your week going so far?"),
+        ("self", "How was your day at the office?"),
+        ("self", "How was your day at the office?"),
+        ("self", "Are you free today?"),
+        ("self", "Are you free tonight?"),
     ]
     assert repeated_question_patterns(_conversation(turns)) == []
+
+
+def test_repeated_questions_read_contracted_question_words_alike() -> None:
+    turns = [
+        ("self", "What's your favourite film?"),
+        ("self", "Whats your favourite film?"),
+        ("self", "Where's your hometown?"),
+        ("self", "Wheres your hometown?"),
+    ]
+    assert repeated_question_patterns(_conversation(turns)) == [
+        "You asked close to the same question more than once: Message 2 ('Whats your favourite film?') repeats Message 1; "
+        "Message 4 ('Wheres your hometown?') repeats Message 3."
+    ]
 
 
 def test_heuristic_analyze_reports_long_conversation_patterns_after_reciprocity() -> None:

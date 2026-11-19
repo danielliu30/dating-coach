@@ -276,7 +276,7 @@ def energy_trend_patterns(messages: Sequence[Message]) -> List[str]:
 REINITIATION_GAP = timedelta(hours=6)
 # Fewest restarts by one side before who restarts the conversation is named.
 MIN_RESTARTS = 2
-# Timestamps this close to another message's read as backend receive-time stamps for missing sent_at, not send times.
+# Spacing of the backend's receive-time stamps for missing sent_at: they form the conversation's latest cluster.
 FILLED_STAMP_WINDOW = timedelta(seconds=1)
 # Most message numbers spelled out in one citation list before the rest are only counted.
 MAX_CITED = 5
@@ -298,19 +298,23 @@ def _times_word(count: int) -> str:
 
 
 def _send_times(ordered: Sequence[Message]) -> List[Optional[datetime]]:
-    """Parsed ``sent_at`` per message, ``None`` where absent, unparseable or within ``FILLED_STAMP_WINDOW`` of another.
+    """Parsed ``sent_at`` per message, ``None`` where absent, unparseable or filled in by the backend.
 
     The backend stamps a message submitted without ``sent_at`` with the time it
-    was received, so a partly dated thread has a cluster of near-identical
+    was received, so a partly dated thread ends in a cluster of near-identical
     stamps later than its real ones; reading those as send times would turn an
-    ordinary reply into a long pause.
+    ordinary reply into a long pause. That cluster is the run of two or more
+    latest stamps each within ``FILLED_STAMP_WINDOW`` of the next; quick
+    replies earlier in the conversation keep their stamps.
     """
     times = [_parse_sent_at(m.sent_at) for m in ordered]
-    dated = sorted((t, i) for i, t in enumerate(times) if t is not None)
-    filled = set()
-    for (prev, i), (cur, j) in zip(dated, dated[1:]):
-        if cur - prev <= FILLED_STAMP_WINDOW:
-            filled.update((i, j))
+    dated = sorted(((t, i) for i, t in enumerate(times) if t is not None), reverse=True)
+    cluster = dated[:1]
+    for (later, _), (earlier, i) in zip(dated, dated[1:]):
+        if later - earlier > FILLED_STAMP_WINDOW:
+            break
+        cluster.append((earlier, i))
+    filled = {i for _, i in cluster} if len(cluster) > 1 else set()
     return [None if i in filled else t for i, t in enumerate(times)]
 
 
@@ -511,10 +515,12 @@ QUESTION_FILLER = frozenset(
     "a an the and or but so to of in on at for with about from is are was were be been do does did you your yours "
     "u ur i me my we it its that this what what's whats why how how's hows when where which who have has had any there "
     "would will can could like just really ever much kind sort if then too also still up out get got anyway again "
-    "btw oh hey wait ok okay um hmm actually remind going far lately today tonight now".split()
+    "btw oh hey wait ok okay um hmm actually remind".split()
 )
 # Question words kept apart from the content words: "When do you go hiking?" does not repeat "Where do you go hiking?".
 INTERROGATIVES = frozenset("what why how when where which who whose whom".split())
+# Turn-passing lead-ins cut from a question before it is judged: "What about you, do you want kids?" asks about kids.
+LEAD_IN = re.compile(r"\b(what|how) about (you|u)\b,?", re.IGNORECASE)
 # Fewest words a question needs before it can count as a repeat.
 MIN_REPEAT_WORDS = 3
 # Overlap (Jaccard) of two questions' content words from which the later one repeats the earlier.
@@ -536,15 +542,28 @@ QuestionKey = Tuple[FrozenSet[str], FrozenSet[str]]
 def _content_words(question: str) -> Optional[QuestionKey]:
     """Question words and content words of a question worth comparing; ``None`` for short questions and check-ins.
 
-    ``SMALL_TALK`` check-ins are cut out first, so "What about you, do you
-    want kids?" is compared on "do you want kids" and "How was your day?"
-    leaves nothing to compare.
+    ``LEAD_IN`` phrases are cut out first, so "What about you, do you want
+    kids?" is compared on "do you want kids"; what is left is skipped when it
+    still holds a ``SMALL_TALK`` check-in ("How was your day at the office?").
+    Question words are read without their contraction ("what's", "whats").
     """
-    words = WORD.findall(SMALL_TALK.sub(" ", question).lower().replace("\u2019", "'"))
-    content = frozenset(w for w in words if w not in QUESTION_FILLER)
+    stripped = LEAD_IN.sub(" ", question)
+    if SMALL_TALK.search(stripped):
+        return None
+    words = WORD.findall(stripped.lower().replace("\u2019", "'"))
+    asks = {_interrogative(w) for w in words} - {None}
+    content = frozenset(w for w in words if w not in QUESTION_FILLER and _interrogative(w) is None)
     if len(words) < MIN_REPEAT_WORDS or not content:
         return None
-    return frozenset(w.split("'")[0] for w in words if w.split("'")[0] in INTERROGATIVES), content
+    return frozenset(asks), content
+
+
+def _interrogative(word: str) -> Optional[str]:
+    """The question word ``word`` is, with any contraction dropped ("what's", "whats" -> "what")."""
+    base = word.split("'")[0]
+    if base in INTERROGATIVES:
+        return base
+    return base[:-1] if base.endswith("s") and base[:-1] in INTERROGATIVES else None
 
 
 def _repeats(key: QuestionKey, earlier: QuestionKey) -> bool:
