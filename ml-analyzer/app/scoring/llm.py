@@ -112,6 +112,14 @@ you are an AI.
 # output contract and hard rules below are the scorer's own.
 SYSTEM_PROMPT = _PROMPT_INTRO + render_pillars() + _PROMPT_CONTRACT
 
+# Worst-case output tokens (~4 characters per token) for the JSON the parser
+# keeps: a segment entry with its 500-character comment, a goal score with its
+# 300-character comment, and the overall block (1000-character summary plus four
+# lists of five 300-character items).
+_SEGMENT_TOKENS = 150
+_GOAL_SCORE_TOKENS = 100
+_OVERALL_TOKENS = 1800
+
 
 class LLMScorer(Scorer):
     """Prompt-based scorer. Falls back to the heuristic scorer on any failure."""
@@ -242,6 +250,21 @@ class LLMScorer(Scorer):
                 goal_scores=goal_scores,
             ),
         )
+
+
+def output_token_budget(segment_count: int, focus_areas: Sequence[str], cap: int) -> int:
+    """Return the max output tokens for a response covering ``segment_count`` segments.
+
+    The estimate is the overall block plus one entry per segment and per
+    requested focus area (a repeated key counts once, as the prompt lists it),
+    limited to ``cap``.
+    """
+    estimate = (
+        _OVERALL_TOKENS
+        + _SEGMENT_TOKENS * segment_count
+        + _GOAL_SCORE_TOKENS * len(pillars_by_keys(focus_areas))
+    )
+    return min(cap, estimate)
 
 
 def focus_area_spec(focus_areas: Sequence[str]) -> str:
