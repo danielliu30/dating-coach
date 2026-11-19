@@ -14,9 +14,11 @@ __pycache__/
 .venv/
 ml-analyzer/models/
 ml-analyzer/artifacts/
-# Exported training data stays local; only the frozen eval holdout is committed.
+# Exported training data stays local; only the synthetic eval sets are committed.
 ml-analyzer/data/*
 !ml-analyzer/data/eval_holdout.jsonl
+!ml-analyzer/data/eval_extended.jsonl
+!ml-analyzer/data/personas.jsonl
 
 # Editors / OS
 .DS_Store
@@ -30,5 +32,3 @@ ml-analyzer/data/*
 /e2e/test-results/
 .deploy.lock
 
-# Exported training data (pseudonymised, but never committed)
-ml-analyzer/data/
