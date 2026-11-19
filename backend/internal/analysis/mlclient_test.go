@@ -80,6 +80,39 @@ func TestMLClientAnalyzeSurfacesNon200(t *testing.T) {
 	}
 }
 
+func TestMLOverallPreservesOptionalProfileEvidence(t *testing.T) {
+	const evidence = `{"rubric_version":"profile-v1","coverage":"eligible","engagement":{"level":"strong","self_positions":[2]}}`
+	for _, tc := range []struct {
+		name string
+		wire string
+		want string
+	}{
+		{"legacy", `{"summary":"original"}`, ""},
+		{"current", `{"summary":"original","profile_evidence":` + evidence + `}`, evidence},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var overall MLOverall
+			if err := json.Unmarshal([]byte(tc.wire), &overall); err != nil {
+				t.Fatal(err)
+			}
+			stored, err := json.Marshal(overall)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(stored, &fields); err != nil {
+				t.Fatal(err)
+			}
+			if got := string(fields["profile_evidence"]); got != tc.want {
+				t.Fatalf("persisted profile_evidence = %s, want %s", got, tc.want)
+			}
+			if got := string(fields["summary"]); got != `"original"` {
+				t.Fatalf("persisted summary = %s", got)
+			}
+		})
+	}
+}
+
 // TestMLRequestPreferencesWireFormat pins the analyzer contract: preferences
 // travel as the top-level "preferences" key and are omitted entirely when the
 // user has not written any, so the analyzer takes its untailored path.
