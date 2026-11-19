@@ -15,6 +15,11 @@ _DECLINE = re.compile(
     rf"(?:(?:sorry|no), )?(?:i (?:can't|cannot) (?:do|make) (?P<direct>{_DAY})"
     rf"|(?P<day_first>{_DAY}) (?:doesn't|does not) work for me)[.!]?"
 )
+_DIRECT_AVAILABILITY = re.compile(
+    rf"(?:actually,? )?(?:i can (?:do|make) (?P<direct>{_DAY})"
+    rf"|i(?:'m| am) (?:free|available) (?:on )?(?P<free>{_DAY})"
+    rf"|(?P<day_first>{_DAY}) (?:actually )?works(?: for me)?)(?: after all| now)?[.!]?"
+)
 _INDIRECT_AVAILABILITY = re.compile(
     r"(?:actually,? )?(?:(?:i'm|i am) (?:free|available) (?:then|that day)"
     r"|i can (?:do|make) (?:it then|that day|then)"
@@ -32,6 +37,7 @@ class _Constraint:
     stated: int
     first_miss: tuple[int, int] | None = None  # message position and last match message index
     open_miss: tuple[int, int] | None = None
+    suspended: bool = False
 
 
 def extract_profile_evidence(messages: Sequence[Message]) -> ProfileEvidence:
@@ -56,6 +62,7 @@ def extract_profile_evidence(messages: Sequence[Message]) -> ProfileEvidence:
     clarity: list[int] = []
     engagement: list[int] = []
     repair: list[int] = []
+    feedback: list[int] = []
 
     for i, message in enumerate(ordered):
         constraints = {
@@ -65,17 +72,30 @@ def extract_profile_evidence(messages: Sequence[Message]) -> ProfileEvidence:
         if message.sender == "match":
             last_match = i
             decline = _DECLINE.fullmatch(body)
+            available = _DIRECT_AVAILABILITY.fullmatch(body)
             if decline:
                 day = decline["direct"] or decline["day_first"]
                 if day not in constraints:
                     constraints[day] = _Constraint(i)
                     history.append(constraints[day])
-                constraints[day].stated = i
+                constraint = constraints[day]
+                constraint.stated = i
+                if constraint.suspended:
+                    constraint.suspended = False
+                    constraint.open_miss = None
+            elif available:
+                day = available["direct"] or available["free"] or available["day_first"]
+                constraint = constraints.pop(day, None)
+                if constraint and constraint.suspended:
+                    constraint.open_miss = None
             elif _INDIRECT_AVAILABILITY.fullmatch(body):
                 if proposed_day:
                     constraints.pop(proposed_day, None)
                 else:
-                    constraints.clear()
+                    # Don't assume what was accepted. Only a fresh explicit decline
+                    # can make these restrictions actionable again.
+                    for constraint in constraints.values():
+                        constraint.suspended = True
             else:
                 # The other person may be reopening or qualifying availability.
                 for day in _DAY_WORD.findall(body):
@@ -84,7 +104,7 @@ def extract_profile_evidence(messages: Sequence[Message]) -> ProfileEvidence:
             continue
 
         proposed_day = None
-        if not constraints:
+        if not any(not constraint.suspended for constraint in constraints.values()):
             continue
         repair_prefix = _REPAIR.match(body)
         acknowledgment = repair_prefix or _ACKNOWLEDGE.match(body)
@@ -95,7 +115,10 @@ def extract_profile_evidence(messages: Sequence[Message]) -> ProfileEvidence:
         proposed_day = day
         if day in constraints:
             constraint = constraints[day]
+            if constraint.suspended:
+                continue
             saw_miss = True
+            feedback = []
             if not constraint.open_miss or constraint.open_miss[1] != last_match:
                 constraint.open_miss = (message.position, last_match)
                 constraint.first_miss = constraint.first_miss or constraint.open_miss
@@ -105,7 +128,8 @@ def extract_profile_evidence(messages: Sequence[Message]) -> ProfileEvidence:
         if not acknowledgment:
             continue
         engagement = engagement or [message.position]
-        open_misses = [c for c in constraints.values() if c.open_miss]
+        feedback = feedback or [message.position]
+        open_misses = [c for c in constraints.values() if c.open_miss and not c.suspended]
         if len(open_misses) == 1:
             constraint = open_misses[0]
             assert constraint.open_miss is not None
@@ -118,7 +142,7 @@ def extract_profile_evidence(messages: Sequence[Message]) -> ProfileEvidence:
 
     for constraint in history:
         first, latest = constraint.first_miss, constraint.open_miss
-        if first and latest and first[1] != latest[1]:
+        if not constraint.suspended and first and latest and first[1] != latest[1]:
             issue = ProfileObservation(
                 level="needs_coaching",
                 self_positions=[first[0], latest[0]],
@@ -126,12 +150,13 @@ def extract_profile_evidence(messages: Sequence[Message]) -> ProfileEvidence:
             )
             return ProfileEvidence(coverage="eligible", feedback_needed=issue, self_correction=issue, engagement=issue)
 
+    # An ambiguous acceptance is neither a confirmed outstanding miss nor a repair.
     has_open_miss = any(c.open_miss for c in history)
     evidence = ProfileEvidence(
         coverage="eligible",
         clarity_of_approach=_strong(clarity),
         engagement=_strong(engagement),
-        feedback_needed=_strong(engagement if not has_open_miss else []),
+        feedback_needed=_strong(feedback if not has_open_miss else []),
     )
     if repair and not has_open_miss:
         evidence.self_correction = _strong(repair)

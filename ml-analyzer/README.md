@@ -166,6 +166,14 @@ Response:
 | `segments[]` | array | `start_position`, `end_position`, `engagement_score` (0–1), `label` (`engaging`\|`neutral`\|`flat`), `comment`. |
 | `overall` | object | `engagement_score`, `summary`, `strengths[]`, `improvements[]`, `reflection_questions[]`, `patterns[]`, `goal_scores[]`. |
 
+With `ML_PROFILE_EVIDENCE_ENABLED=true` (off by default), the response also
+includes `overall.profile_evidence`. This is a versioned set of observations
+from one conversation, not a profile score. The initial extractor only
+assesses explicit scheduling exchanges; other behavior stays unknown rather
+than lowering a score. Assessed observations cite the user's zero-based
+message positions and never return transcript text. The same extractor runs
+after any scoring backend, including fallback, without an extra model call.
+
 `overall.reflection_questions[]` are open, non-directive questions that turn the
 analysis inward ("did you actually enjoy this conversation?"); the heuristic
 always emits at least one when the customer wrote anything, plus one each for the

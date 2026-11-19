@@ -159,18 +159,88 @@ def test_different_availability_is_not_a_repeated_coaching_need(reply):
     assert evidence.self_correction.level == "unknown"
 
 
-def test_accepting_an_alternative_does_not_erase_the_original_restriction():
+@pytest.mark.parametrize("logistics", [
+    (),
+    ("me: The cafe has outdoor seating.",),
+    ("them: At the cafe near the station?",),
+])
+def test_accepting_an_alternative_does_not_erase_the_original_restriction(logistics):
     evidence = extract_profile_evidence(_conversation(
         "me: I'd like to try that cafe together.",
         "them: I can't make Friday.",
         "me: How about Friday?",
         "me: Would Saturday work?",
+        *logistics,
         "them: That works.",
         "them: I can't make Friday.",
         "me: Would Friday work?",
     ))
     assert evidence.feedback_needed.issue == "repeated_ignored_constraint"
-    assert evidence.feedback_needed.self_positions == [4, 12]
+    assert evidence.feedback_needed.self_positions == [4, 12 + 2 * len(logistics)]
+
+
+def test_ambiguous_acceptance_is_not_evidence_that_the_previous_restriction_still_holds():
+    evidence = extract_profile_evidence(_conversation(
+        "me: I'd like to try that cafe together.",
+        "them: I can't make Friday.",
+        "me: How about Friday?",
+        "me: Would Saturday work?",
+        "me: How about tomorrow instead?",
+        "them: That works.",
+        "me: Would Friday work?",
+    ))
+    assert evidence.coverage == "eligible"
+    assert evidence.feedback_needed.level == "unknown"
+
+
+def test_ambiguous_acceptance_is_not_evidence_of_repair_either():
+    evidence = extract_profile_evidence(_conversation(
+        "me: I'd like to try that cafe together.",
+        "them: I can't make Friday.",
+        "me: Got it, how about Saturday?",
+        "them: Let me check.",
+        "me: How about Friday?",
+        "me: How about the next day instead?",
+        "them: That works.",
+        "me: We could try the cafe by the station.",
+    ))
+    assert evidence.engagement.level == "strong"
+    assert evidence.feedback_needed.level == "unknown"
+    assert evidence.self_correction.level == "unknown"
+
+
+def test_explicit_availability_clears_ambiguity_for_a_separate_repair():
+    evidence = extract_profile_evidence(_conversation(
+        "me: I'd like to try that cafe together.",
+        "them: I can't make Friday.",
+        "me: How about Friday?",
+        "me: How about tomorrow instead?",
+        "them: That works.",
+        "them: Actually, Friday works now.",
+        "them: I can't make Saturday.",
+        "me: How about Saturday?",
+        "me: Sorry, I missed that. How about Sunday?",
+    ))
+    assert evidence.feedback_needed.level == "strong"
+    assert evidence.self_correction.level == "strong"
+    assert evidence.self_correction.self_positions == [14, 16]
+    assert evidence.feedback_needed.self_positions == [16]
+
+
+@pytest.mark.parametrize("clarification", ["Actually, Friday works now.", "I can't make Friday."])
+def test_clarification_does_not_turn_a_pre_miss_acknowledgment_into_feedback_credit(clarification):
+    evidence = extract_profile_evidence(_conversation(
+        "me: I'd like to try that cafe together.",
+        "them: I can't make Friday.",
+        "me: Got it, how about Saturday?",
+        "them: Let me check.",
+        "me: How about Friday?",
+        "me: How about the next day instead?",
+        "them: That works.",
+        f"them: {clarification}",
+    ))
+    assert evidence.engagement.level == "strong"
+    assert evidence.feedback_needed.level == "unknown"
 
 
 def test_no_reply_or_short_style_is_not_a_coaching_need():

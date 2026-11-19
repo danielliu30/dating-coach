@@ -23,6 +23,7 @@ class Settings:
     # Ceiling on the LLM scorer's output token budget, which otherwise grows
     # with the number of segments in the conversation.
     llm_max_output_tokens: int = 8192
+    profile_evidence_enabled: bool = False
 
     @property
     def llm_configured(self) -> bool:
@@ -64,4 +65,5 @@ def get_settings() -> Settings:
         model_dir=env("ML_MODEL_DIR", "artifacts/segment-scorer"),
         segment_size=int(env("ML_SEGMENT_SIZE", "4")),
         llm_max_output_tokens=positive_int("LLM_MAX_OUTPUT_TOKENS", "8192"),
+        profile_evidence_enabled=env("ML_PROFILE_EVIDENCE_ENABLED", "false").lower() == "true",
     )

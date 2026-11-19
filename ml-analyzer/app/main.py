@@ -16,8 +16,10 @@ from .schemas import (
     ReviewSummaryResponse,
 )
 from .scoring import build_image_scorer, build_review_summarizer, build_scorer
+from .scoring.profile_evidence import extract_profile_evidence
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+logger = logging.getLogger(__name__)
 
 settings = get_settings()
 scorer = build_scorer(settings)
@@ -44,10 +46,16 @@ async def healthz() -> dict[str, str]:
     }
 
 
-@app.post("/analyze", response_model=AnalyzeResponse)
+@app.post("/analyze", response_model=AnalyzeResponse, response_model_exclude_none=True)
 async def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
     """Score a conversation: per-segment engagement plus overall feedback."""
-    return await scorer.analyze(request)
+    result = await scorer.analyze(request)
+    if settings.profile_evidence_enabled:
+        try:
+            result.overall.profile_evidence = extract_profile_evidence(request.messages)
+        except Exception:  # noqa: BLE001 - optional evidence must never block feedback
+            logger.warning("profile evidence unavailable")
+    return result
 
 
 @app.post("/analyze/images", response_model=ImageAnalyzeResponse)
