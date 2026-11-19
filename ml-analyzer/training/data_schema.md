@@ -35,6 +35,11 @@ reads, and it mirrors the `training_examples` table in the Go backend.
 | `segments[].engagement_score` | float 0–1 | yes if segment given | 1 = clearly hooked, 0 = dead thread. |
 | `reply_received` | bool | no | Weak label: did the match reply to the last `self` message? |
 | `outcome` | enum | no | `ghosted`, `kept_talking`, `number_exchanged`, `date_set`. |
+| `source` | string | no | `app` (default), `synthetic` or `reddit`. `train.py` drops `reddit` rows unless `--allow-source reddit`. |
+| `persona_id` | string | no | Eval only: the `data/personas.jsonl` persona the row was written for. |
+| `profile` | object | no | Eval only: `dating_styles`, `phases_strong`, `phases_working_on`, `bio`, `prompts`. |
+| `focus_areas` | array | no | Eval only: coaching-brain pillar keys sent to `/analyze`. |
+| `expected_themes` | array | no | Eval only: `[{"id", "any": [keywords]}]`; a complete analysis mentions at least one keyword per theme (`training/quality.py`). |
 
 ## Label precedence
 
@@ -104,6 +109,15 @@ Use this schema with human `segments` labels on the served segment boundaries
 [training workflow](../README.md#training-your-own-model) for holdout handling.
 Optional string fields `preferences` (maximum 2,000 characters) and
 `match_name` carry pseudonymized context for LLM comparisons, not training.
+
+`data/eval_extended.jsonl` is a second synthetic set. Training always
+excludes its conversation and user IDs, even when `--eval-file` is disabled.
+It contains
+32–42 message conversations with nuanced situations (over-investing,
+ambivalence, double-texting, self-deprecation, early disclosure,
+people-pleasing, ex comparisons, defensiveness, repair). Each row names a
+persona from `data/personas.jsonl` and carries its `profile`, `preferences`
+and `focus_areas`, plus the `expected_themes` used to grade completeness.
 
 ## Annotation guidance
 

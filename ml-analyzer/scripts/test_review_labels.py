@@ -164,3 +164,13 @@ def test_same_named_files_without_annotator_field_are_rejected(tmp_path):
     b = _write(tmp_path / "bob" / "labels.jsonl", [_row("c1", [0.9])])
     with pytest.raises(SystemExit, match="set an annotator field"):
         _annotations(a, b)
+
+
+def test_final_rows_keep_the_source_so_reddit_stays_out_of_training(tmp_path):
+    """Annotated Reddit rows keep ``source``; dropping it would default them to ``app`` and train on them."""
+    path = _write(tmp_path / "alice.jsonl", [_row("c1", [0.7], source="reddit")])
+    ann = Annotations()
+    ann.add_file(path)
+    out = tmp_path / "final.jsonl"
+    review_labels.write_jsonl(final_rows(ann, {}), out)
+    assert load_jsonl(out, exclude_sources={"reddit"}) == []

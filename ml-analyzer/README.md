@@ -181,6 +181,9 @@ pauses of 6 hours or more (only when `sent_at` is present), runs of
 consecutive customer messages, small talk vs deeper messages, and questions
 the customer asked again. Each cites `Message N` (position + 1) where it
 points at specific messages.
+The LLM backend asks for and keeps at most 6 `strengths`, 8 `improvements`,
+5 `reflection_questions` and 5 `patterns` (`LIST_LIMITS` in
+`app/scoring/llm.py`), each item cut to 300 characters.
 `overall.goal_scores[]` holds `{goal, score (0–1), comment}` entries, at most
 one per requested focus area (`goal` is the pillar key); it is `[]` when no
 focus areas were requested.
