@@ -2,6 +2,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
@@ -92,3 +94,15 @@ def test_llm_run_without_key_refuses_instead_of_scoring_heuristics(tmp_path: Pat
         assert "LLM_API_KEY" in str(exc)
     else:
         raise AssertionError("expected SystemExit")
+
+
+@pytest.mark.parametrize("backend_args", [[], ["--backend", "llm"]])
+def test_llm_run_does_not_send_unconsented_rows(tmp_path: Path, monkeypatch, backend_args) -> None:
+    monkeypatch.setenv("ML_BACKEND", "llm")
+    monkeypatch.setenv("LLM_API_KEY", "test-key")
+    out = tmp_path / "x.jsonl"
+
+    with pytest.raises(SystemExit, match="--include-unconsented is not allowed"):
+        eval_compare.main(["run", "--include-unconsented", "--label", "x", "--out", str(out), *backend_args])
+
+    assert not out.exists()
