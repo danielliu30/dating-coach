@@ -258,6 +258,20 @@ export interface AnalysisResult {
   completed_at?: string;
 }
 
+export interface ProfileScoreSource {
+  analysis_id: string;
+  conversation_id: string;
+  submitted_at: string;
+}
+
+export interface ProfileScore {
+  band: 'collecting_evidence' | 'strong' | 'developing' | 'needs_more_coaching';
+  rubric_version: 'profile-v1';
+  conversations_counted: number;
+  minimum_conversations: number;
+  evidence: ProfileScoreSource[];
+}
+
 export interface SubmitMessage {
   sender: 'self' | 'match';
   body: string;

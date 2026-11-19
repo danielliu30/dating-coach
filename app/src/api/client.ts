@@ -14,6 +14,7 @@ import type {
   DatingProfileInput,
   Outcome,
   Profile,
+  ProfileScore,
   ReviewSummary,
   Role,
   Slot,
@@ -142,7 +143,9 @@ export class ApiClient {
     }
   }
 
-  private async request<T>(method: string, path: string, body?: unknown, renewed = false, bearer?: string): Promise<T> {
+  private async request<T>(
+    method: string, path: string, body?: unknown, renewed = false, bearer?: string, signal?: AbortSignal,
+  ): Promise<T> {
     const token = bearer ?? this.token();
     const principal = this.principal();
     let response: Response;
@@ -156,12 +159,13 @@ export class ApiClient {
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: body === undefined ? undefined : JSON.stringify(body),
+        ...(signal ? { signal } : {}),
       });
       text = await response.text();
     } catch (err) {
       // The browser's own wording ("Failed to fetch", "Network request failed")
       // means nothing to a user; keep it for the console only.
-      console.warn(`${method} ${path}`, err);
+      if (!signal?.aborted) console.warn(`${method} ${path}`, err);
       throw new ApiError(TRANSPORT_ERROR_STATUS, TRANSPORT_ERROR_MESSAGE);
     }
 
@@ -177,7 +181,7 @@ export class ApiClient {
     }
 
     if (!response.ok) {
-      if (response.status === 401 && token && !renewed && principal === this.principal()) {
+      if (response.status === 401 && token && !renewed && !signal?.aborted && principal === this.principal()) {
         // Access tokens expire within minutes, so a 401 on a request that
         // carried one usually means "renew", not "signed out". A request that
         // was already in flight when someone else renewed is retried with the
@@ -185,9 +189,9 @@ export class ApiClient {
         // whose principal is gone is never retried: its operation belongs to
         // the account that issued it, not to whoever is signed in now.
         const current = this.token();
-        if (current && current !== token) return this.request<T>(method, path, body, true);
-        if ((await this.renewSession()) === 'renewed' && principal === this.principal()) {
-          return this.request<T>(method, path, body, true);
+        if (current && current !== token) return this.request<T>(method, path, body, true, undefined, signal);
+        if ((await this.renewSession()) === 'renewed' && !signal?.aborted && principal === this.principal()) {
+          return this.request<T>(method, path, body, true, undefined, signal);
         }
       }
       const message =
@@ -494,6 +498,10 @@ export class ApiClient {
 
   analysisResult(analysisID: string) {
     return this.request<AnalysisResult>('GET', `/analysis/results/${analysisID}`);
+  }
+
+  profileScore(signal: AbortSignal) {
+    return this.request<ProfileScore>('GET', '/analysis/profile-score', undefined, false, undefined, signal);
   }
 
   latestResult(conversationID: string) {
