@@ -8,6 +8,10 @@ import { requestGoogleIdToken } from '../lib/googleIdentity';
 
 const STORAGE_KEY = 'dating-coach.session';
 
+// How long sign-out waits for the API to revoke the session before signing out
+// locally anyway, so a hung connection cannot keep the user signed in.
+export const SIGN_OUT_TIMEOUT_MS = 5000;
+
 /**
  * Why the app signed the user out without being asked to. `expired` is the
  * default reading of a refused refresh token; `revoked` is used only where the
@@ -298,7 +302,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
         // session restored from it cannot be renewed and is dropped.
         await clearSession().catch(() => undefined);
       },
-      signOut: clearSession,
+      // Revokes the session server-side so the refresh token stops working, then
+      // drops it locally whatever the API said: a user who asked to sign out is
+      // signed out on this device even offline. The local drop also clears any
+      // `expired` reason a refused renewal raised on the way, since the user
+      // asked for this sign-out.
+      signOut: async () => {
+        if (tokenRef.current) {
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          await Promise.race([
+            api.signOut().catch(() => undefined),
+            new Promise<void>((resolve) => {
+              timer = setTimeout(resolve, SIGN_OUT_TIMEOUT_MS);
+            }),
+          ]);
+          clearTimeout(timer);
+        }
+        await clearSession();
+      },
     }),
     [clearSession, persist, persistUser, ready, signedOutReason, token, user],
   );

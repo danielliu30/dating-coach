@@ -347,6 +347,37 @@ describe('ApiClient wrappers', () => {
     expect(lastRequest().init.body).toBe(JSON.stringify({ coach_id: 'c1', session_id: null }));
   });
 
+  it('signOut posts to /auth/signout with the bearer token', async () => {
+    fetchMock.mockResolvedValueOnce(reply(200, { status: 'signed_out' }));
+    const client = new ApiClient();
+    client.useToken(() => 'tok');
+
+    await expect(client.signOut()).resolves.toEqual({ status: 'signed_out' });
+
+    const { url, init } = lastRequest();
+    expect(url).toBe(`${API_BASE_URL}${API_PREFIX}/auth/signout`);
+    expect(init.method).toBe('POST');
+    expect(init.headers).toMatchObject({ Authorization: 'Bearer tok' });
+  });
+
+  it('signOut renews an expired access token and retries, so the revocation still lands', async () => {
+    let token = 'old';
+    fetchMock
+      .mockResolvedValueOnce(reply(401, { error: 'expired' }))
+      .mockResolvedValueOnce(reply(200, { status: 'signed_out' }));
+    const client = new ApiClient();
+    client.useToken(() => token);
+    client.useRenewal(async () => {
+      token = 'new';
+      return 'renewed';
+    });
+
+    await expect(client.signOut()).resolves.toEqual({ status: 'signed_out' });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(lastRequest().init.headers).toMatchObject({ Authorization: 'Bearer new' });
+  });
+
   it('refreshSession never triggers a renewal on 401', async () => {
     fetchMock.mockResolvedValueOnce(reply(401, { error: 'spent' }));
     const client = new ApiClient();

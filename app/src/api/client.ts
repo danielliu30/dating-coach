@@ -251,6 +251,15 @@ export class ApiClient {
   }
 
   /**
+   * Revokes every refresh token the authenticated account holds and denylists
+   * its live access tokens. An expired access token is renewed first like any
+   * other request, so the revocation still reaches the API.
+   */
+  signOut() {
+    return this.request<{ status: string }>('POST', '/auth/signout');
+  }
+
+  /**
    * Mints a single-use, ~30s ticket a WebSocket presents as ?ticket= in place
    * of the access token. Going through request() means an expired access
    * token is renewed here, over HTTP, before the socket is attempted.
