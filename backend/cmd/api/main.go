@@ -90,7 +90,11 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	coachingHandler := coaching.NewHandler(coaching.NewService(pg.Pool, pg.Queries, provider, cfg.PaymentHoldTTL, cfg.PublicAppURL, cfg.MailFrom, analysis.NewMLClient(cfg.MLServiceURL, cfg.MLServiceTimeout)), limiter)
+	ml, err := analysis.NewAuthenticatedMLClient(ctx, cfg.MLServiceURL, cfg.MLServiceTimeout, cfg.MLServiceAuth)
+	if err != nil {
+		return err
+	}
+	coachingHandler := coaching.NewHandler(coaching.NewService(pg.Pool, pg.Queries, provider, cfg.PaymentHoldTTL, cfg.PublicAppURL, cfg.MailFrom, ml), limiter)
 	hub := chat.NewHub(rdb)
 	// Sockets authenticated before a deletion would otherwise keep running
 	// until their next scheduled re-check; this closes them as it happens.

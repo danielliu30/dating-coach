@@ -49,9 +49,13 @@ func run() error {
 	defer pg.Close()
 
 	notifier := notify.New(cfg)
+	ml, err := analysis.NewAuthenticatedMLClient(ctx, cfg.MLServiceURL, cfg.MLServiceTimeout, cfg.MLServiceAuth)
+	if err != nil {
+		return err
+	}
 	worker := analysis.NewWorker(
 		pg.Queries,
-		analysis.NewMLClient(cfg.MLServiceURL, cfg.MLServiceTimeout),
+		ml,
 		notifier,
 	)
 	provider, err := payments.New(cfg.PaymentsEnabled)

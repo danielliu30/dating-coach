@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"google.golang.org/api/idtoken"
+
 	"github.com/danielliu30/dating-coach/backend/internal/coaching"
 )
 
@@ -115,6 +117,20 @@ func NewMLClient(baseURL string, timeout time.Duration) *MLClient {
 		baseURL: strings.TrimRight(baseURL, "/"),
 		http:    &http.Client{Timeout: timeout},
 	}
+}
+
+// NewAuthenticatedMLClient optionally attaches Google ID tokens for baseURL.
+func NewAuthenticatedMLClient(ctx context.Context, baseURL string, timeout time.Duration, auth string) (*MLClient, error) {
+	c := NewMLClient(baseURL, timeout)
+	if auth == "google" {
+		h, err := idtoken.NewClient(ctx, baseURL)
+		if err != nil {
+			return nil, fmt.Errorf("ML identity client: %w", err)
+		}
+		h.Timeout = timeout
+		c.http = h
+	}
+	return c, nil
 }
 
 // Analyze scores one conversation by POSTing it to /analyze. Non-200 responses
