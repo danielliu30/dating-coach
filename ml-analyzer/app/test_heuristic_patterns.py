@@ -283,3 +283,28 @@ def test_repeated_questions_skip_check_ins_short_questions_and_the_match() -> No
 
     different = [("self", "What is your favourite film?"), ("self", "What is your favourite book?"), ("self", "I like this.")]
     assert repeated_question_patterns(_conversation(different)) == []
+
+
+def test_repeated_questions_read_questions_inside_brackets_and_after_check_ins() -> None:
+    turns = [
+        ("self", "(Where did you grow up?) I grew up in Boston."),
+        ("self", "What about you, do you want kids?"),
+        ("self", "Where did you grow up?"),
+        ("self", "How about you, do you want kids?"),
+    ]
+    assert repeated_question_patterns(_conversation(turns)) == [
+        "You asked close to the same question more than once: Message 3 ('Where did you grow up?') repeats Message 1; "
+        "Message 4 ('How about you, do you want kids?') repeats Message 2."
+    ]
+
+
+def test_repeated_questions_tell_apart_different_question_words() -> None:
+    turns = [
+        ("self", "When did you two meet?"),
+        ("self", "Where did you two meet?"),
+        ("self", "Where do you usually go hiking?"),
+        ("self", "When do you usually go hiking?"),
+        ("self", "How's your week going so far?"),
+        ("self", "How's your week going so far?"),
+    ]
+    assert repeated_question_patterns(_conversation(turns)) == []

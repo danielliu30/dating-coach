@@ -511,15 +511,17 @@ QUESTION_FILLER = frozenset(
     "a an the and or but so to of in on at for with about from is are was were be been do does did you your yours "
     "u ur i me my we it its that this what what's whats why how how's hows when where which who have has had any there "
     "would will can could like just really ever much kind sort if then too also still up out get got anyway again "
-    "btw oh hey wait ok okay um hmm actually remind".split()
+    "btw oh hey wait ok okay um hmm actually remind going far lately today tonight now".split()
 )
+# Question words kept apart from the content words: "When do you go hiking?" does not repeat "Where do you go hiking?".
+INTERROGATIVES = frozenset("what why how when where which who whose whom".split())
 # Fewest words a question needs before it can count as a repeat.
 MIN_REPEAT_WORDS = 3
 # Overlap (Jaccard) of two questions' content words from which the later one repeats the earlier.
 REPEAT_OVERLAP = 0.75
 # Most repeats spelled out in the pattern.
 MAX_REPEATS_CITED = 3
-SENTENCE_END = re.compile(r"(?<=[?.!])\s+")
+SENTENCE_END = re.compile(r"(?:(?<=[?.!])|(?<=[?.!][)\]\"'\u201d\u2019]))\s+")
 WORD = re.compile(r"[a-z0-9']+")
 
 
@@ -528,23 +530,37 @@ def _questions(message: Message) -> List[str]:
     return [part for part in SENTENCE_END.split(message.body.strip()) if QUESTION_MARK.search(part)]
 
 
-def _content_words(question: str) -> Optional[FrozenSet[str]]:
-    """Content words of a question worth comparing; ``None`` for short questions and routine check-ins."""
-    words = WORD.findall(question.lower().replace("\u2019", "'"))
+QuestionKey = Tuple[FrozenSet[str], FrozenSet[str]]
+
+
+def _content_words(question: str) -> Optional[QuestionKey]:
+    """Question words and content words of a question worth comparing; ``None`` for short questions and check-ins.
+
+    ``SMALL_TALK`` check-ins are cut out first, so "What about you, do you
+    want kids?" is compared on "do you want kids" and "How was your day?"
+    leaves nothing to compare.
+    """
+    words = WORD.findall(SMALL_TALK.sub(" ", question).lower().replace("\u2019", "'"))
     content = frozenset(w for w in words if w not in QUESTION_FILLER)
-    if len(words) < MIN_REPEAT_WORDS or not content or SMALL_TALK.search(question):
+    if len(words) < MIN_REPEAT_WORDS or not content:
         return None
-    return content
+    return frozenset(w.split("'")[0] for w in words if w.split("'")[0] in INTERROGATIVES), content
+
+
+def _repeats(key: QuestionKey, earlier: QuestionKey) -> bool:
+    (asks, content), (earlier_asks, earlier_content) = key, earlier
+    return asks == earlier_asks and len(content & earlier_content) / len(content | earlier_content) >= REPEAT_OVERLAP
 
 
 def repeated_question_patterns(messages: Sequence[Message]) -> List[str]:
     """Name it when the customer asked close to the same question again later in the conversation.
 
     Each ``self`` message's question sentences (``_questions``) are reduced to
-    their content words (``_content_words``: ``QUESTION_FILLER`` dropped;
-    questions under ``MIN_REPEAT_WORDS`` words and ``SMALL_TALK`` check-ins,
-    which recur by nature, are skipped). A question repeats an earlier one
-    from a different customer message when their content words overlap by at
+    their question and content words (``_content_words``: ``SMALL_TALK``
+    check-ins, which recur by nature, cut out and ``QUESTION_FILLER`` dropped;
+    questions left under ``MIN_REPEAT_WORDS`` words are skipped). A question
+    repeats an earlier one from a different customer message when both ask
+    with the same ``INTERROGATIVES`` and their content words overlap by at
     least ``REPEAT_OVERLAP`` (Jaccard). Each later message is reported once,
     against the first earlier message it repeats, and up to
     ``MAX_REPEATS_CITED`` repeats are spelled out with the total, e.g. "You
@@ -553,27 +569,27 @@ def repeated_question_patterns(messages: Sequence[Message]) -> List[str]:
     compared, and nothing is said about whether the match answered.
     """
     own = sorted((m for m in messages if m.sender == "self"), key=lambda m: m.position)
-    asked: List[Tuple[Message, FrozenSet[str]]] = []
+    asked: List[Tuple[Message, QuestionKey]] = []
     repeats: List[Tuple[Message, str, Message]] = []
     for message in own:
         repeated = False
         for question in _questions(message):
-            content = _content_words(question)
-            if content is None:
+            key = _content_words(question)
+            if key is None:
                 continue
             if not repeated:
                 earlier = next(
                     (
                         first
-                        for first, words in asked
-                        if first.position != message.position and len(content & words) / len(content | words) >= REPEAT_OVERLAP
+                        for first, earlier_key in asked
+                        if first.position != message.position and _repeats(key, earlier_key)
                     ),
                     None,
                 )
                 if earlier is not None:
                     repeats.append((message, question, earlier))
                     repeated = True
-            asked.append((message, content))
+            asked.append((message, key))
     if not repeats:
         return []
     shown = "; ".join(
