@@ -50,6 +50,10 @@ bind "$INVOKER_SA" roles/run.invoker
 # deployer: Cloud Run services/jobs, subscriptions, scheduler jobs
 bind "$DEPLOY_SA" roles/run.admin
 bind "$DEPLOY_SA" roles/pubsub.editor
+worker_subscriptions="resource.name=='projects/$PROJECT_ID/subscriptions/$ANALYSIS_TOPIC.worker-push' || resource.name=='projects/$PROJECT_ID/subscriptions/$DELETION_TOPIC.worker-push' || resource.name=='projects/$PROJECT_ID/subscriptions/$EMAIL_TOPIC.worker-push'"
+g projects add-iam-policy-binding "$PROJECT_ID" --member "serviceAccount:$DEPLOY_SA" \
+  --role roles/pubsub.admin \
+  --condition "title=worker-push-subscription-iam,expression=$worker_subscriptions" >/dev/null
 bind "$DEPLOY_SA" roles/cloudscheduler.admin
 for sa in "$RUNTIME_SA" "$INVOKER_SA"; do
   g iam service-accounts add-iam-policy-binding "$sa" --member "serviceAccount:$DEPLOY_SA" \

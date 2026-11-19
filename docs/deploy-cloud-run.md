@@ -63,6 +63,11 @@ condition. Only `.github/workflows/release.yml` on `refs/heads/main`, in the
 request workflows cannot obtain deployment credentials. Protect `main` and
 configure required reviewers / deployment branch rules on `production`.
 
+The deployer retains `roles/pubsub.editor` to manage subscriptions, plus a
+conditional `roles/pubsub.admin` grant restricted to the three
+`<topic>.worker-push` subscription resource names. This permits setting their
+dead-letter subscriber IAM policies without project-wide Pub/Sub IAM access.
+
 ### 3. GitHub settings (Settings > Secrets and variables > Actions)
 
 Secrets (already present): `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`.
