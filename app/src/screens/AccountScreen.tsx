@@ -14,6 +14,8 @@ import {
 } from '../api/types';
 import { Avatar, Divider, GradientCard, SectionHeader, StatusPill } from '../components/kit';
 import { Badge, Button, Chip, Field, Screen } from '../components/ui';
+import { ProfileScoreCard } from '../components/ProfileScoreCard';
+import { PROFILE_SCORE_UI_ENABLED } from '../config';
 import { COACHING_GOAL_LABELS } from '../lib/coachingGoals';
 import { PHASE_LABELS, toggle } from '../lib/phases';
 import { useAuth } from '../state/auth';
@@ -212,6 +214,8 @@ export default function AccountScreen(): React.ReactElement {
           </View>
         </View>
       </GradientCard>
+
+      {PROFILE_SCORE_UI_ENABLED && user?.role === 'user' ? <ProfileScoreCard key={user.id} /> : null}
 
       <View style={shared.card}>
         <SectionHeader
