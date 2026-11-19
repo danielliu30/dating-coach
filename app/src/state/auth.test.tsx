@@ -340,6 +340,23 @@ describe('AuthProvider sign out / delete', () => {
     }
   });
 
+  it('signOut replays a refresh token a concurrent renewal spent, so the server revokes the account', async () => {
+    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(session()));
+    mocked.signOut.mockRejectedValueOnce(new ApiError(401, 'expired'));
+    mocked.refreshSession.mockRejectedValue(new ApiError(401, 'spent'));
+    const { result } = await renderAuth();
+
+    await act(async () => {
+      await result.current.signOut();
+    });
+
+    expect(mocked.refreshSession).toHaveBeenCalledTimes(2);
+    expect(mocked.refreshSession).toHaveBeenNthCalledWith(2, 'refresh');
+    expect(mocked.signOut).toHaveBeenCalledTimes(1);
+    expect(result.current.token).toBeNull();
+    expect(await stored()).toBeNull();
+  });
+
   it('a second signOut tap does not revoke again', async () => {
     await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(session()));
     const { result } = await renderAuth();

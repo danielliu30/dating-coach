@@ -31,10 +31,22 @@ const withinSignOutTimeout = async (work: Promise<unknown>): Promise<void> => {
 const revoke = async (token: string, refreshToken: string): Promise<void> => {
   try {
     await api.signOut(token);
+    return;
   } catch (error) {
     if (!isRefused(error) || !refreshToken) return;
-    await api.signOut((await api.refreshSession(refreshToken)).token);
   }
+  let renewed: AuthSession;
+  try {
+    renewed = await api.refreshSession(refreshToken);
+  } catch (error) {
+    // Usually a renewal in flight spent the token first, and the session it
+    // minted is dropped unheld. Presenting the spent token again trips the
+    // server's replay detection, which revokes every session the account has:
+    // the same end state as the sign-out.
+    if (isRefused(error)) await api.refreshSession(refreshToken).catch(() => undefined);
+    return;
+  }
+  await api.signOut(renewed.token);
 };
 
 /**
