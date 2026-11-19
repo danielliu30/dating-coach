@@ -65,12 +65,12 @@ func (s *Service) ResetPassword(ctx context.Context, email, code, password strin
 		return err
 	}
 	var consumedUntil time.Time
-	committed := false
+	commitAttempted := false
 	defer func() {
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
 		_ = tx.Rollback(cleanup)
-		if !committed && !consumedUntil.IsZero() {
+		if !commitAttempted && !consumedUntil.IsZero() {
 			if err := s.resetCodes.Restore(cleanup, user.ID.String(), strings.TrimSpace(code), time.Until(consumedUntil)); err != nil {
 				slog.Error("restore reset code after failed transaction", "error", err, "user_id", user.ID)
 			}
@@ -120,9 +120,9 @@ func (s *Service) ResetPassword(ctx context.Context, email, code, password strin
 			return err
 		}
 	}
+	commitAttempted = true
 	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
-	committed = true
 	return nil
 }

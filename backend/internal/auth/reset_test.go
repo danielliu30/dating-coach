@@ -208,6 +208,40 @@ func TestResetCacheRestorePreservesNewerCode(t *testing.T) {
 	}
 }
 
+func TestPasswordResetCommitFailureDoesNotRestoreCode(t *testing.T) {
+	svc, _, pool := newTestService(t)
+	ctx := context.Background()
+	email := "reset-commit-" + uuid.NewString() + "@example.com"
+	signup, err := svc.SignUp(ctx, SignUpInput{Email: email, Password: "old-password", DisplayName: "Reset"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM users WHERE email=$1", email) })
+	name := "reset_commit_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	if _, err := pool.Exec(ctx, "CREATE FUNCTION "+name+"() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected reset commit failure'; END $$"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DROP FUNCTION "+name+"()") })
+	if _, err := pool.Exec(ctx, "CREATE CONSTRAINT TRIGGER "+name+" AFTER UPDATE ON users DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (NEW.id = '"+signup.User.ID+"'::uuid) EXECUTE FUNCTION "+name+"()"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DROP TRIGGER "+name+" ON users") })
+	if err := svc.ForgotPassword(ctx, email); err != nil {
+		t.Fatal(err)
+	}
+	code, _, _ := svc.resetCodes.Get(ctx, signup.User.ID)
+	err = svc.ResetPassword(ctx, email, code, "new-password")
+	if err == nil || !strings.Contains(err.Error(), "injected reset commit failure") {
+		t.Fatalf("commit error = %v", err)
+	}
+	if restored, _, err := svc.resetCodes.Get(ctx, signup.User.ID); err != nil || restored != "" {
+		t.Fatalf("code after commit failure=%q err=%v", restored, err)
+	}
+	if err := svc.ResetPassword(ctx, email, code, "new-password"); !errors.Is(err, ErrInvalidResetCode) {
+		t.Fatalf("reused code: %v", err)
+	}
+}
+
 func TestPasswordResetGoogleAndDeletedAccounts(t *testing.T) {
 	svc, _, pool := newTestService(t)
 	ctx := context.Background()
