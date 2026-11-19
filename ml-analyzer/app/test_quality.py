@@ -80,3 +80,8 @@ def test_aggregate_collects_metrics_missing_from_the_first_result() -> None:
     """A metric that is ``None`` (e.g. after a JSON round trip of ``nan``) in the first row is still averaged."""
     results = [{"theme_recall": None}, {"theme_recall": 0.5}]
     assert aggregate(results) == {"conversations": 2.0, "theme_recall": 0.5}
+
+
+def test_multiline_misquote_is_invalid() -> None:
+    """A quote spanning a newline is still read as a quote, so a fabricated one is rejected."""
+    assert citations(['Message 1 ("what was\nthe thing you hated") was long.'], MESSAGES)["valid_citations"] == 0
