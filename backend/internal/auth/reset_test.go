@@ -123,7 +123,7 @@ func TestPasswordResetGoogleAndDeletedAccounts(t *testing.T) {
 
 func TestPasswordResetCacheIsolationAndExpiry(t *testing.T) {
 	verify, mr := newTestCache(t)
-	reset := NewResetCache(verify.rdb, ResetCodeTTL)
+	reset := NewResetCache(verify.rdb, 15*time.Minute)
 	ctx := context.Background()
 	if err := verify.Store(ctx, "user", "111111"); err != nil {
 		t.Fatal(err)
@@ -143,9 +143,33 @@ func TestPasswordResetCacheIsolationAndExpiry(t *testing.T) {
 	if code, _, _ := reset.Get(ctx, "user"); code != "333333" {
 		t.Fatal("reset did not replace outstanding code")
 	}
-	mr.FastForward(ResetCodeTTL)
+	mr.FastForward(15 * time.Minute)
 	if code, _, _ := reset.Get(ctx, "user"); code != "" {
 		t.Fatal("expired reset code remains")
+	}
+}
+
+func TestPasswordResetRejectsExpiredCode(t *testing.T) {
+	svc, _, pool := newTestService(t)
+	cache, mr := newTestCache(t)
+	svc.resetCodes = NewResetCache(cache.rdb, 2*time.Minute)
+	ctx := context.Background()
+	email := "reset-expired-" + uuid.NewString() + "@example.com"
+	signup, err := svc.SignUp(ctx, SignUpInput{Email: email, Password: "old-password", DisplayName: "Reset"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM users WHERE email=$1", email) })
+	if err := svc.ForgotPassword(ctx, email); err != nil {
+		t.Fatal(err)
+	}
+	code, _, err := svc.resetCodes.Get(ctx, signup.User.ID)
+	if err != nil || code == "" {
+		t.Fatalf("code=%q err=%v", code, err)
+	}
+	mr.FastForward(2 * time.Minute)
+	if err := svc.ResetPassword(ctx, email, code, "new-password"); !errors.Is(err, ErrInvalidResetCode) {
+		t.Fatalf("expired code: %v", err)
 	}
 }
 

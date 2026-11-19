@@ -14,8 +14,6 @@ import (
 	"github.com/danielliu30/dating-coach/backend/internal/store/db"
 )
 
-const ResetCodeTTL = 15 * time.Minute
-
 var ErrInvalidResetCode = errors.New("invalid or expired reset code")
 
 func (s *Service) ForgotPassword(ctx context.Context, email string) error {
@@ -33,7 +31,7 @@ func (s *Service) ForgotPassword(ctx context.Context, email string) error {
 	if err := s.resetCodes.Store(ctx, user.ID.String(), code); err != nil {
 		return fmt.Errorf("store reset code: %w", err)
 	}
-	body := fmt.Sprintf("Your password reset code is: %s\n\nThis code expires in %d minutes and is discarded after %d wrong attempts.", code, int(ResetCodeTTL.Minutes()), maxVerificationAttempts)
+	body := fmt.Sprintf("Your password reset code is: %s\n\nThis code expires in %g minutes and is discarded after %d wrong attempts.", code, s.resetCodes.ttl.Minutes(), maxVerificationAttempts)
 	if err := s.notifier.Email(ctx, user.Email, "Reset your Dating Coach password", body); err != nil {
 		slog.Error("send password reset email", "error", err, "user_id", user.ID)
 	}

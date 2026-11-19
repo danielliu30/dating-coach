@@ -25,6 +25,7 @@ type Config struct {
 	JWTTTL          time.Duration
 	VerifyTokenTTL  time.Duration
 	RefreshTokenTTL time.Duration
+	ResetCodeTTL    time.Duration
 	BcryptCost      int
 	AuthRateLimit   int
 	AuthRateWindow  time.Duration
@@ -116,6 +117,7 @@ func Load() (*Config, error) {
 		JWTTTL:               envDuration("JWT_TTL", 15*time.Minute),
 		VerifyTokenTTL:       envDuration("VERIFY_TOKEN_TTL", 30*time.Minute),
 		RefreshTokenTTL:      envDuration("REFRESH_TOKEN_TTL", 30*24*time.Hour),
+		ResetCodeTTL:         envDuration("RESET_CODE_TTL", 15*time.Minute),
 		BcryptCost:           envInt("BCRYPT_COST", 12),
 		AuthRateLimit:        envInt("AUTH_RATE_LIMIT", 20),
 		AuthRateWindow:       envDuration("AUTH_RATE_WINDOW", time.Minute),
@@ -157,6 +159,7 @@ func Load() (*Config, error) {
 		{"JWT_TTL", cfg.JWTTTL},
 		{"VERIFY_TOKEN_TTL", cfg.VerifyTokenTTL},
 		{"REFRESH_TOKEN_TTL", cfg.RefreshTokenTTL},
+		{"RESET_CODE_TTL", cfg.ResetCodeTTL},
 		{"AUTH_RATE_WINDOW", cfg.AuthRateWindow},
 		{"ML_SERVICE_TIMEOUT", cfg.MLServiceTimeout},
 		{"DEAD_LETTER_ALERT_PERIOD", cfg.DeadLetterAlertPeriod},

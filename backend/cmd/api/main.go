@@ -77,7 +77,7 @@ func run() error {
 	denylist := auth.NewDenylist(rdb, max(cfg.JWTTTL, cfg.VerifyTokenTTL, cfg.RefreshTokenTTL))
 	verificationCodes := auth.NewVerificationCache(rdb, auth.VerificationCodeTTL)
 
-	authSvc := auth.NewService(pg.Pool, pg.Queries, issuer, notifier, cfg.BcryptCost, cfg.PublicAppURL, verificationCodes, auth.NewResetCache(rdb, auth.ResetCodeTTL), denylist, deletions, cfg.JWTTTL, cfg.VerifyTokenTTL, cfg.RefreshTokenTTL)
+	authSvc := auth.NewService(pg.Pool, pg.Queries, issuer, notifier, cfg.BcryptCost, cfg.PublicAppURL, verificationCodes, auth.NewResetCache(rdb, cfg.ResetCodeTTL), denylist, deletions, cfg.JWTTTL, cfg.VerifyTokenTTL, cfg.RefreshTokenTTL)
 	if cfg.GoogleClientID != "" {
 		authSvc.SetGoogleVerifier(auth.NewGoogleVerifier(cfg.GoogleClientID, auth.GoogleJWKSURL, nil))
 	} else {
