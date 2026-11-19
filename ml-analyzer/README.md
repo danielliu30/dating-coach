@@ -222,6 +222,7 @@ The response is synchronous and the service stores nothing.
 | `LLM_MODEL` | `gpt-4o-mini` / `claude-3-5-haiku-latest` | Per provider. |
 | `LLM_BASE_URL` | provider default | Point at a self-hosted gateway. |
 | `LLM_TIMEOUT_SECONDS` | `45` | |
+| `LLM_MAX_OUTPUT_TOKENS` | `8192` | Cap on the conversation scorer's output token budget, which grows with the number of segments. Keep it at or below the model's output limit. Must be at least 1. |
 | `ML_MODEL_DIR` | `artifacts/segment-scorer` | Checkpoint used when `ML_BACKEND=trained`. |
 | `ML_SEGMENT_SIZE` | `4` | Messages per segment. |
 
