@@ -99,7 +99,11 @@ The first run creates every service, the push subscriptions and the scheduler jo
 ## Deploys and rollback
 
 Each run: migrations job, ml-analyzer, worker, subscriptions and scheduler jobs,
-API, web, then a health check of the API `/healthz` and the web root. On a failed
+API, web, then a health check of the new API `/healthz` and web root via their
+`release-check` revision-tag URLs (never an older revision's service URL).
+Each service deployment, including private services, explicitly routes 100%
+of traffic to latest, clearing any traffic pin left by a previous rollback.
+On a failed
 check the API and web traffic goes back to the revisions that served before the
 run and the job fails. To roll back by hand, run the workflow with `image_tag` set
 to an earlier SHA. Migrations only go `up`, so keep them backward-compatible.

@@ -199,7 +199,9 @@ jobs:
         run: |
           for svc in dating-coach-api dating-coach-web; do
             rev="$(gcloud run services describe "$svc" --project "$PROJECT" --region "$REGION" \
-              --format='value(status.traffic[0].revisionName)' 2>/dev/null || true)"
+              --flatten='status.traffic[]' --filter='status.traffic.percent>0' \
+              --format='csv[no-heading](status.traffic.revisionName,status.traffic.percent)' 2>/dev/null \
+              | sed 's/,/=/g' | paste -sd, - || true)"
             echo "PREV_${svc//-/_}=$rev" >> "$GITHUB_ENV"
           done
 
@@ -220,6 +222,7 @@ jobs:
             --memory 1Gi --min-instances 0 --max-instances "$ML_MAX_INSTANCES" --timeout 120 \
             --set-env-vars "ML_BACKEND=llm,LLM_PROVIDER=${{ vars.LLM_PROVIDER || 'anthropic' }},LLM_MODEL=${{ vars.LLM_MODEL || 'claude-sonnet-4-5' }}" \
             --set-secrets LLM_API_KEY=LLM_API_KEY:latest
+          gcloud run services update-traffic dating-coach-ml --project "$PROJECT" --region "$REGION" --to-latest
 
       - name: Deploy worker (private, push-driven)
         run: |
@@ -229,6 +232,7 @@ jobs:
             --min-instances 0 --max-instances "$WORKER_MAX_INSTANCES" --timeout 600 \
             --env-vars-file backend.env.yaml \
             --set-secrets DATABASE_URL=DATABASE_URL:latest,REDIS_URL=REDIS_URL:latest,JWT_SECRET=JWT_SECRET:latest,SMTP_PASSWORD=SMTP_PASSWORD:latest
+          gcloud run services update-traffic dating-coach-worker --project "$PROJECT" --region "$REGION" --to-latest
 
       - name: Point Pub/Sub push subscriptions and Cloud Scheduler at the worker
         run: |
@@ -273,24 +277,35 @@ jobs:
         run: |
           gcloud run deploy dating-coach-api --project "$PROJECT" --region "$REGION" \
             --image "$IMAGES/dating-coach-backend:$DEPLOY_TAG" --command api \
+            --tag release-check \
             --service-account "$RUNTIME_SA" --allow-unauthenticated \
             --min-instances "$API_MIN_INSTANCES" --max-instances "$API_MAX_INSTANCES" \
             --timeout 3600 --session-affinity \
             --env-vars-file backend.env.yaml \
             --set-secrets DATABASE_URL=DATABASE_URL:latest,REDIS_URL=REDIS_URL:latest,JWT_SECRET=JWT_SECRET:latest,SMTP_PASSWORD=SMTP_PASSWORD:latest
+          gcloud run services update-traffic dating-coach-api --project "$PROJECT" --region "$REGION" --to-latest
 
       - name: Deploy web (public)
         run: |
           gcloud run deploy dating-coach-web --project "$PROJECT" --region "$REGION" \
             --image "$IMAGES/dating-coach-web:$DEPLOY_TAG" --port 80 \
+            --tag release-check \
             --service-account "$WEB_SA" \
             --allow-unauthenticated --min-instances "$WEB_MIN_INSTANCES" --max-instances "$WEB_MAX_INSTANCES"
+          gcloud run services update-traffic dating-coach-web --project "$PROJECT" --region "$REGION" --to-latest
 
       - name: Health check, roll back on failure
         run: |
+          revision_url() {
+            gcloud run services describe "$1" --project "$PROJECT" --region "$REGION" \
+              --flatten='status.traffic[]' --filter='status.traffic.tag=release-check' \
+              --format='value(status.traffic.url)'
+          }
+          api_check="$(revision_url dating-coach-api)"
+          web_check="$(revision_url dating-coach-web)"
           healthy() {
             for i in $(seq 1 30); do
-              curl -fsS "$API_URL/healthz" >/dev/null 2>&1 && curl -fsS -o /dev/null "$WEB_URL/" && return 0
+              curl -fsS "$api_check/healthz" >/dev/null 2>&1 && curl -fsS -o /dev/null "$web_check/" && return 0
               sleep 4
             done
             return 1
@@ -301,7 +316,7 @@ jobs:
             var="PREV_${svc//-/_}"; prev="${!var}"
             if [ -n "$prev" ]; then
               echo "reverting $svc to $prev"
-              gcloud run services update-traffic "$svc" --project "$PROJECT" --region "$REGION" --to-revisions "$prev=100"
+              gcloud run services update-traffic "$svc" --project "$PROJECT" --region "$REGION" --to-revisions "$prev"
             fi
           done
           exit 1
