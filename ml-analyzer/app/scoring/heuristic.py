@@ -14,10 +14,11 @@ from __future__ import annotations
 import re
 import statistics
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Dict, List, Literal, Optional, Sequence
 
 from ..schemas import AnalyzeRequest, AnalyzeResponse, GoalScore, Message, Overall, Segment
-from .base import Scorer, align_segments, chunk, clamp, label_for
+from .base import Scorer, _parse_sent_at, align_segments, chunk, clamp, label_for
 
 OPEN_QUESTION = re.compile(r"\b(what|why|how|where|when|which|who)\b", re.IGNORECASE)
 # A question mark closing a sentence anywhere in the text (merged bubbles keep theirs mid-body).
@@ -269,6 +270,70 @@ def energy_trend_patterns(messages: Sequence[Message]) -> List[str]:
             f"early on ({_span(early)}) against about {max(1, round(after))} in the last stretch ({_span(late)})."
         )
     return patterns
+
+
+# Silence between two consecutive messages from which the next message counts as picking the conversation back up.
+REINITIATION_GAP = timedelta(hours=6)
+# Fewest restarts by one side before who restarts the conversation is named.
+MIN_RESTARTS = 2
+# Most message numbers spelled out in one citation list before the rest are only counted.
+MAX_CITED = 5
+
+
+def _cite(messages: Sequence[Message]) -> str:
+    """List message numbers the way clients count them: "Message 4", "Messages 4 and 9", "Messages 1, 2, 3, 4, 5 and 2 more"."""
+    numbers = [str(m.position + 1) for m in messages]
+    if len(numbers) == 1:
+        return f"Message {numbers[0]}"
+    shown = numbers[:MAX_CITED]
+    if len(numbers) > MAX_CITED:
+        return f"Messages {', '.join(shown)} and {len(numbers) - MAX_CITED} more"
+    return f"Messages {', '.join(shown[:-1])} and {shown[-1]}"
+
+
+def _times_word(count: int) -> str:
+    return "once" if count == 1 else "twice" if count == 2 else f"{count} times"
+
+
+def reinitiation_patterns(messages: Sequence[Message]) -> List[str]:
+    """Name it when one side is clearly the one picking the conversation back up after long pauses.
+
+    A restart is a message sent at least ``REINITIATION_GAP`` after the message
+    before it (in position order), judged only where both messages carry a
+    parseable ``sent_at`` (``_parse_sent_at``); pairs missing a timestamp or
+    going backwards in time are skipped, so timestamp-less conversations stay
+    silent. When one side made at least ``MIN_RESTARTS`` restarts and at
+    least ``RECIPROCITY_RATIO`` times as many as the other, one sentence names
+    who did it and cites the restarting messages, e.g. "After each of the 3
+    long pauses in this conversation (6 hours or more), you were the one who
+    picked it back up (Messages 12, 30 and 41)." Only who restarted is
+    described, never why the other side did not.
+    """
+    ordered = sorted(messages, key=lambda m: m.position)
+    times = [_parse_sent_at(m.sent_at) for m in ordered]
+    restarts: Dict[str, List[Message]] = {"self": [], "match": []}
+    for prev_at, (cur, cur_at) in zip(times, zip(ordered[1:], times[1:])):
+        if prev_at is None or cur_at is None or cur.sender not in restarts:
+            continue
+        if cur_at - prev_at >= REINITIATION_GAP:
+            restarts[cur.sender].append(cur)
+
+    hours = round(REINITIATION_GAP.total_seconds() / 3600)
+    total = len(restarts["self"]) + len(restarts["match"])
+    for sender, other, subject, other_subject in (("self", "match", "you", "they"), ("match", "self", "they", "you")):
+        mine, theirs = restarts[sender], restarts[other]
+        if len(mine) < MIN_RESTARTS or len(mine) < RECIPROCITY_RATIO * len(theirs):
+            continue
+        if not theirs:
+            return [
+                f"After each of the {total} long pauses in this conversation ({hours} hours or more), "
+                f"{subject} were the one who picked it back up ({_cite(mine)})."
+            ]
+        return [
+            f"{subject.capitalize()} picked the conversation back up after {len(mine)} of its {total} long pauses "
+            f"({hours} hours or more; {_cite(mine)}); {other_subject} did {_times_word(len(theirs))} ({_cite(theirs)})."
+        ]
+    return []
 
 
 def reflection_questions(
