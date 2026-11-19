@@ -27,7 +27,7 @@ from app.scoring.base import TranscriptMessage
 # ``repr`` (single quotes) and the LLM prompt mandates double quotes, so both are read.
 CITATION = re.compile(
     r"\bmessages?\s+(?P<number>\d{1,6})(?:\s*\(\s*(?P<open>[\"'\u201c\u2018])(?P<quote>.*?)[\"'\u201d\u2019]\s*\))?",
-    re.IGNORECASE,
+    re.IGNORECASE | re.DOTALL,
 )
 _WHITESPACE = re.compile(r"\s+")
 
@@ -47,6 +47,8 @@ def _squash(text: str) -> str:
 
 def _quote_matches(quote: str, body: str) -> bool:
     """A quote is faithful when it is (after trimming a trailing ellipsis) a substring of the body."""
+    # The heuristic quotes with ``repr``, which escapes quotes and backslashes inside the excerpt.
+    quote = quote.replace("\\\\", "\\").replace("\\'", "'").replace('\\"', '"')
     wanted = _squash(quote).rstrip("…").rstrip(".").strip()
     return bool(wanted) and wanted in _squash(body)
 
