@@ -471,7 +471,7 @@ type GoogleSignInInput struct {
 // account owning its email address, creating that account when it does not
 // exist. Google has already confirmed the address, so a new account is created
 // verified (skipping the emailed code) with NoPasswordHash, and an existing
-// unverified password account is marked verified on the spot. The role in
+// unverified account has its password and existing sessions revoked. The role in
 // `in` (user or coach, default user) applies to new accounts only; an existing
 // account keeps its role, and a coach created this way still starts unapproved.
 //
@@ -499,10 +499,9 @@ func (s *Service) SignInWithGoogle(ctx context.Context, in GoogleSignInInput) (S
 	user, err := s.queries.GetUserByEmail(ctx, identity.Email)
 	switch {
 	case err == nil:
-		if !user.EmailVerified {
-			if user, err = s.queries.VerifyUserEmail(ctx, user.ID); err != nil {
-				return Session{}, fmt.Errorf("mark google account verified: %w", err)
-			}
+		user, err = s.claimGoogleUser(ctx, user.ID)
+		if err != nil {
+			return Session{}, err
 		}
 	case errors.Is(err, pgx.ErrNoRows):
 		user, err = s.createGoogleUser(ctx, identity, role)
@@ -554,10 +553,47 @@ func (s *Service) createGoogleUser(ctx context.Context, identity GoogleIdentity,
 		}
 		return db.User{}, fmt.Errorf("lookup user: %w", err)
 	}
-	if !user.EmailVerified {
-		if user, err = s.queries.VerifyUserEmail(ctx, user.ID); err != nil {
-			return db.User{}, fmt.Errorf("mark google account verified: %w", err)
+	return s.claimGoogleUser(ctx, user.ID)
+}
+
+func (s *Service) claimGoogleUser(ctx context.Context, userID uuid.UUID) (db.User, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return db.User{}, fmt.Errorf("begin google claim: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := s.queries.WithTx(tx)
+	user, err := q.LockUserForRefresh(ctx, userID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return db.User{}, ErrInvalidCredentials
+	}
+	if err != nil {
+		return db.User{}, fmt.Errorf("lock google account: %w", err)
+	}
+	if user.EmailVerified {
+		return user, nil
+	}
+	at := time.Now().Truncate(time.Microsecond)
+	if _, err := tx.Exec(ctx, "UPDATE users SET password_hash = $2 WHERE id = $1", userID, NoPasswordHash); err != nil {
+		return db.User{}, fmt.Errorf("clear unverified password: %w", err)
+	}
+	if err := q.RecordSessionRevocation(ctx, db.RecordSessionRevocationParams{ID: userID, RevokedAt: at}); err != nil {
+		return db.User{}, fmt.Errorf("record google claim revocation: %w", err)
+	}
+	if _, err := q.RevokeUserRefreshTokens(ctx, userID); err != nil {
+		return db.User{}, fmt.Errorf("revoke unverified refresh tokens: %w", err)
+	}
+	user, err = q.VerifyUserEmail(ctx, userID)
+	if err != nil {
+		return db.User{}, fmt.Errorf("mark google account verified: %w", err)
+	}
+	if s.denylist != nil {
+		if err := s.denylist.RevokeSessionsAt(ctx, userID, at); err != nil {
+			return db.User{}, err
 		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return db.User{}, fmt.Errorf("commit google claim: %w", err)
 	}
 	return user, nil
 }
