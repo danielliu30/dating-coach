@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, List, Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .coaching import pillars_by_keys
 
@@ -158,6 +158,51 @@ class GoalScore(BaseModel):
         return pillars_by_keys([value])[0].key
 
 
+ProfileLevel = Literal["unknown", "not_applicable", "strong", "needs_coaching"]
+ProfileIssue = Literal["repeated_ignored_constraint"]
+
+
+class ProfileObservation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    level: ProfileLevel = "unknown"
+    self_positions: List[int] = Field(default_factory=list, max_length=6)
+    issue: Optional[ProfileIssue] = None
+
+    @model_validator(mode="after")
+    def _require_evidence(self) -> "ProfileObservation":
+        assessed = self.level in ("strong", "needs_coaching")
+        if assessed != bool(self.self_positions):
+            raise ValueError("only assessed observations require message positions")
+        if self.self_positions != sorted(set(self.self_positions)) or any(p < 0 for p in self.self_positions):
+            raise ValueError("positions must be distinct, non-negative and ordered")
+        if (self.level == "needs_coaching") != (self.issue is not None):
+            raise ValueError("a coaching need requires an issue code, and only coaching needs may have one")
+        return self
+
+
+class ProfileEvidence(BaseModel):
+    """Observations about one conversation, not a score of the person."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    rubric_version: Literal["profile-v1"] = "profile-v1"
+    coverage: Literal["insufficient", "eligible"]
+    feedback_needed: ProfileObservation = Field(default_factory=ProfileObservation)
+    self_correction: ProfileObservation = Field(default_factory=ProfileObservation)
+    engagement: ProfileObservation = Field(default_factory=ProfileObservation)
+    clarity_of_approach: ProfileObservation = Field(default_factory=ProfileObservation)
+
+    @model_validator(mode="after")
+    def _check_coverage(self) -> "ProfileEvidence":
+        core = (self.feedback_needed, self.engagement, self.clarity_of_approach)
+        if any(o.level == "not_applicable" for o in core):
+            raise ValueError("only self-correction can be not applicable")
+        if self.coverage == "insufficient" and any(o.level != "unknown" for o in (*core, self.self_correction)):
+            raise ValueError("insufficient conversations cannot supply assessed observations")
+        return self
+
+
 class Overall(BaseModel):
     """Conversation-level verdict on the customer's own messages.
 
@@ -184,6 +229,7 @@ class Overall(BaseModel):
         default_factory=list,
         description="One score per requested focus area, in PILLARS order; empty when no focus areas were requested",
     )
+    profile_evidence: Optional[ProfileEvidence] = None
 
 
 class AnalyzeResponse(BaseModel):
