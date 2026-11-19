@@ -4,7 +4,7 @@ import React from 'react';
 
 import { ApiError, api } from '../api/client';
 import type { AuthSession, Profile } from '../api/types';
-import { AuthProvider, useAuth } from './auth';
+import { AuthProvider, SIGN_OUT_TIMEOUT_MS, useAuth } from './auth';
 
 jest.mock('../api/client', () => {
   const actual = jest.requireActual<typeof import('../api/client')>('../api/client');
@@ -23,6 +23,7 @@ jest.mock('../api/client', () => {
       me: jest.fn(),
       updateDatingProfile: jest.fn(),
       deleteAccount: jest.fn(),
+      signOut: jest.fn(),
     },
   };
 });
@@ -81,6 +82,7 @@ const registeredRejection = () => {
 
 beforeEach(async () => {
   await AsyncStorage.clear();
+  mocked.signOut.mockResolvedValue({ status: 'signed_out' });
 });
 
 describe('AuthProvider sign in / sign up', () => {
@@ -237,7 +239,7 @@ describe('AuthProvider verify', () => {
 });
 
 describe('AuthProvider sign out / delete', () => {
-  it('signOut clears state and storage without a signed-out reason', async () => {
+  it('signOut revokes the held access token server-side and clears state and storage without a signed-out reason', async () => {
     await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(session()));
     const { result } = await renderAuth();
 
@@ -245,10 +247,165 @@ describe('AuthProvider sign out / delete', () => {
       await result.current.signOut();
     });
 
+    expect(mocked.signOut).toHaveBeenCalledTimes(1);
+    expect(mocked.signOut).toHaveBeenCalledWith('access');
     expect(result.current.token).toBeNull();
     expect(result.current.user).toBeNull();
     expect(result.current.signedOutReason).toBeNull();
     expect(await stored()).toBeNull();
+  });
+
+  it('signOut drops the stored session before the revocation answers', async () => {
+    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(session()));
+    let answer!: () => void;
+    mocked.signOut.mockReturnValue(
+      new Promise((resolve) => {
+        answer = () => resolve({ status: 'signed_out' });
+      }),
+    );
+    const { result } = await renderAuth();
+
+    let signingOut!: Promise<void>;
+    await act(async () => {
+      signingOut = result.current.signOut();
+      await waitFor(async () => expect(await stored()).toBeNull());
+    });
+    expect(result.current.token).toBeNull();
+
+    await act(async () => {
+      answer();
+      await signingOut;
+    });
+  });
+
+  it.each([
+    ['an API error', new ApiError(503, 'could not sign out, try again')],
+    ['a transport failure', new ApiError(0, 'offline')],
+  ])('signOut still signs out locally after %s', async (_name, error) => {
+    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(session()));
+    mocked.signOut.mockRejectedValue(error);
+    const { result } = await renderAuth();
+
+    await act(async () => {
+      await expect(result.current.signOut()).resolves.toBeUndefined();
+    });
+
+    expect(mocked.signOut).toHaveBeenCalledTimes(1);
+    expect(mocked.refreshSession).not.toHaveBeenCalled();
+    expect(result.current.token).toBeNull();
+    expect(result.current.signedOutReason).toBeNull();
+    expect(await stored()).toBeNull();
+  });
+
+  it('signOut renews an expired access token from the captured refresh token and revokes with the new one', async () => {
+    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(session()));
+    mocked.signOut.mockRejectedValueOnce(new ApiError(401, 'expired'));
+    mocked.refreshSession.mockResolvedValue(session({ token: 'renewed', refresh_token: 'refresh2' }));
+    const { result } = await renderAuth();
+
+    await act(async () => {
+      await result.current.signOut();
+    });
+
+    expect(mocked.refreshSession).toHaveBeenCalledWith('refresh');
+    expect(mocked.signOut).toHaveBeenNthCalledWith(1, 'access');
+    expect(mocked.signOut).toHaveBeenNthCalledWith(2, 'renewed');
+    expect(result.current.token).toBeNull();
+    expect(result.current.signedOutReason).toBeNull();
+    expect(await stored()).toBeNull();
+  });
+
+  it('signOut resolves when the API does not answer in time', async () => {
+    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(session()));
+    mocked.signOut.mockReturnValue(new Promise(() => undefined));
+    const { result } = await renderAuth();
+
+    jest.useFakeTimers();
+    try {
+      let done = false;
+      await act(async () => {
+        void result.current.signOut().then(() => {
+          done = true;
+        });
+        await Promise.resolve();
+      });
+      expect(result.current.token).toBeNull();
+
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(SIGN_OUT_TIMEOUT_MS);
+      });
+      expect(done).toBe(true);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('signOut replays a refresh token a concurrent renewal spent, so the server revokes the account', async () => {
+    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(session()));
+    mocked.signOut.mockRejectedValueOnce(new ApiError(401, 'expired'));
+    mocked.refreshSession.mockRejectedValue(new ApiError(401, 'spent'));
+    const { result } = await renderAuth();
+
+    await act(async () => {
+      await result.current.signOut();
+    });
+
+    expect(mocked.refreshSession).toHaveBeenCalledTimes(2);
+    expect(mocked.refreshSession).toHaveBeenNthCalledWith(2, 'refresh');
+    expect(mocked.signOut).toHaveBeenCalledTimes(1);
+    expect(result.current.token).toBeNull();
+    expect(await stored()).toBeNull();
+  });
+
+  it('a second signOut tap does not revoke again', async () => {
+    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(session()));
+    const { result } = await renderAuth();
+
+    await act(async () => {
+      await Promise.all([result.current.signOut(), result.current.signOut()]);
+    });
+
+    expect(mocked.signOut).toHaveBeenCalledTimes(1);
+  });
+
+  it('signIn waits for a pending revocation, so it cannot revoke the new session', async () => {
+    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(session()));
+    let answer!: () => void;
+    mocked.signOut.mockReturnValue(
+      new Promise((resolve) => {
+        answer = () => resolve({ status: 'signed_out' });
+      }),
+    );
+    mocked.signIn.mockResolvedValue(session({ token: 'fresh' }));
+    const { result } = await renderAuth();
+
+    let signingIn!: Promise<Profile>;
+    await act(async () => {
+      void result.current.signOut();
+      await Promise.resolve();
+      signingIn = result.current.signIn('a@b.c', 'pw');
+      await Promise.resolve();
+    });
+    expect(mocked.signIn).not.toHaveBeenCalled();
+
+    await act(async () => {
+      answer();
+      await signingIn;
+    });
+    expect(mocked.signIn).toHaveBeenCalledTimes(1);
+    expect(result.current.token).toBe('fresh');
+    expect((await stored())?.token).toBe('fresh');
+  });
+
+  it('signOut without a session skips the API call', async () => {
+    const { result } = await renderAuth();
+
+    await act(async () => {
+      await result.current.signOut();
+    });
+
+    expect(mocked.signOut).not.toHaveBeenCalled();
+    expect(result.current.token).toBeNull();
   });
 
   it('deleteAccount clears the session even when storage removal fails', async () => {
