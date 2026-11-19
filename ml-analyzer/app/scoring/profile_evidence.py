@@ -15,6 +15,11 @@ _DECLINE = re.compile(
     rf"(?:(?:sorry|no), )?(?:i (?:can't|cannot) (?:do|make) (?P<direct>{_DAY})"
     rf"|(?P<day_first>{_DAY}) (?:doesn't|does not) work for me)[.!]?"
 )
+_INDIRECT_AVAILABILITY = re.compile(
+    r"(?:actually,? )?(?:(?:i'm|i am) (?:free|available) (?:then|that day)"
+    r"|i can (?:do|make) (?:it then|that day|then)"
+    r"|that (?:actually )?works(?: for me)?)(?: after all| now)?[.!]?"
+)
 _PROPOSE = re.compile(rf"(?:(?:how|what) about ({_DAY})|(?:does|would) ({_DAY}) work)\?")
 _ACKNOWLEDGE = re.compile(r"^(?:got it|understood|thanks for letting me know)[,.!] ")
 _REPAIR = re.compile(r"^(?:sorry|oops), i (?:missed|misread) that[.!] ")
@@ -65,6 +70,9 @@ def extract_profile_evidence(messages: Sequence[Message]) -> ProfileEvidence:
                     constraints[day] = _Constraint(i)
                     history.append(constraints[day])
                 constraints[day].stated = i
+            elif _INDIRECT_AVAILABILITY.fullmatch(body):
+                # Without a named day, don't guess which restriction still applies.
+                constraints.clear()
             else:
                 # The other person may be reopening or qualifying availability.
                 for day in _DAY_WORD.findall(body):
