@@ -1,9 +1,11 @@
 """Long-conversation patterns of the heuristic scorer: each one is deterministic, cites messages and passes the agency gate."""
 
+from datetime import timedelta
 from typing import List, Optional, Sequence, Tuple
 
 from app.coaching import enforce_agency
 from app.schemas import Message
+from app.scoring.base import _parse_sent_at
 from app.scoring.heuristic import energy_trend_patterns, reinitiation_patterns
 
 
@@ -136,3 +138,13 @@ def test_reinitiation_stays_silent_without_timestamps_or_balance() -> None:
     assert reinitiation_patterns(head_then_received) == []
     interleaved = [m if m.position % 2 else m.model_copy(update={"sent_at": received[m.position]}) for m in dated_head]
     assert reinitiation_patterns(interleaved) == []
+
+
+def test_reinitiation_keeps_quick_replies_after_a_pause() -> None:
+    # Each side restarts twice; the match's restarts draw an instant reply, which must not hide the pause before them.
+    messages = _timeline("smsmsmsmsmsm", gaps_after=[2, 4, 7, 9])
+    for i in (8, 10):
+        restart = _parse_sent_at(messages[i - 1].sent_at)
+        assert restart is not None
+        messages[i] = messages[i].model_copy(update={"sent_at": (restart + timedelta(milliseconds=500)).isoformat()})
+    assert reinitiation_patterns(messages) == []
