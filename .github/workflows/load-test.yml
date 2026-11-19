@@ -1,0 +1,35 @@
+name: Load test
+
+# Gate for the "production" scaling profile in release.yml. It must pass before
+# a deploy may use the production settings. Placeholder: replace the step below
+# with the real load test (it receives the API URL and the image tag being
+# released) and keep it failing on an unmet threshold.
+on:
+  workflow_call:
+    inputs:
+      api_url:
+        type: string
+        required: true
+      image_tag:
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      api_url:
+        description: API base URL to load test
+        required: true
+      image_tag:
+        description: Image tag under test
+        required: true
+
+jobs:
+  load-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Load test (not implemented yet)
+        env:
+          API_URL: ${{ inputs.api_url }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          echo "::error::No load test is defined yet, so the production scaling profile stays locked. Implement it in .github/workflows/load-test.yml."
+          exit 1
