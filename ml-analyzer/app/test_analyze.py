@@ -234,6 +234,26 @@ def test_heuristic_never_diagnoses_why_the_match_pulled_back() -> None:
         assert hint.endswith("is it worth thinking about?")
 
 
+def test_heuristic_keeps_up_to_five_strengths_and_eight_improvements() -> None:
+    """Long conversations surface up to MAX_STRENGTHS strengths and MAX_IMPROVEMENTS improvements, in order."""
+    from app.scoring.heuristic import MAX_IMPROVEMENTS, MAX_STRENGTHS
+
+    assert (MAX_STRENGTHS, MAX_IMPROVEMENTS) == (5, 8)
+    detailed = "That sounds great, I spent the whole weekend hiking up by the lake with my sister and loved it."
+    messages = []
+    for i in range(7):
+        messages.append(Message(position=len(messages), sender="self", body=f"What was the best part of trip {i}?"))
+        messages.append(Message(position=len(messages), sender="match", body=detailed))
+    for i in range(10):
+        messages.append(Message(position=len(messages), sender="self", body=f"Flat question {i}?"))
+        messages.append(Message(position=len(messages), sender="match", body="ok"))
+    response = asyncio.run(HeuristicScorer(segment_size=4).analyze(AnalyzeRequest(conversation_id="long", messages=messages)))
+
+    assert len(response.overall.strengths) == MAX_STRENGTHS
+    assert len(response.overall.improvements) == MAX_IMPROVEMENTS
+    assert [h.split(" (")[0] for h in response.overall.improvements] == [f"Message {15 + 2 * i}" for i in range(MAX_IMPROVEMENTS)]
+
+
 def test_heuristic_populates_reflection_questions_and_patterns() -> None:
     """analyze() fills ``overall.reflection_questions`` for any self messages and ``overall.patterns`` when the customer over-invests; neither drafts or directs."""
     over_investing = AnalyzeRequest(
