@@ -16,5 +16,12 @@ WHERE id = $1
 -- name: RevokeUserRefreshTokens :execrows
 DELETE FROM refresh_tokens WHERE user_id = $1;
 
+-- name: RevokeUserRefreshTokensIssuedBy :execrows
+-- Ends the sessions a sign-out at @cutoff reaches: those issued by then, and
+-- the signing-out session's own family whenever its tokens were issued.
+DELETE FROM refresh_tokens
+WHERE user_id = @user_id
+  AND (issued_at <= @cutoff::timestamptz OR family_id = @family_id::uuid);
+
 -- name: DeleteExpiredRefreshTokens :execrows
 DELETE FROM refresh_tokens WHERE expires_at <= now();

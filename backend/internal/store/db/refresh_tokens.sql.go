@@ -88,6 +88,28 @@ func (q *Queries) RevokeUserRefreshTokens(ctx context.Context, userID uuid.UUID)
 	return result.RowsAffected(), nil
 }
 
+const revokeUserRefreshTokensIssuedBy = `-- name: RevokeUserRefreshTokensIssuedBy :execrows
+DELETE FROM refresh_tokens
+WHERE user_id = $1
+  AND (issued_at <= $2::timestamptz OR family_id = $3::uuid)
+`
+
+type RevokeUserRefreshTokensIssuedByParams struct {
+	UserID   uuid.UUID `json:"user_id"`
+	Cutoff   time.Time `json:"cutoff"`
+	FamilyID uuid.UUID `json:"family_id"`
+}
+
+// Ends the sessions a sign-out at @cutoff reaches: those issued by then, and
+// the signing-out session's own family whenever its tokens were issued.
+func (q *Queries) RevokeUserRefreshTokensIssuedBy(ctx context.Context, arg RevokeUserRefreshTokensIssuedByParams) (int64, error) {
+	result, err := q.db.Exec(ctx, revokeUserRefreshTokensIssuedBy, arg.UserID, arg.Cutoff, arg.FamilyID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const useRefreshToken = `-- name: UseRefreshToken :execrows
 UPDATE refresh_tokens
 SET used_at = now()
