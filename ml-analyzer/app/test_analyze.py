@@ -928,7 +928,7 @@ def test_llm_goal_score_failure_falls_back_to_heuristic_goal_scores(monkeypatch,
         Message(position=1, sender="match", body="Great, we hiked the ridge trail and found a lake. You?"),
     ]
 
-    async def complete(prompt: str) -> str:
+    async def complete(prompt: str, max_tokens: int) -> str:
         return json.dumps(
             {
                 "segments": [{"start_position": 0, "end_position": 1, "engagement_score": 0.8, "comment": "Fine."}],
