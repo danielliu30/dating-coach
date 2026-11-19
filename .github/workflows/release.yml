@@ -113,7 +113,7 @@ jobs:
   deploy:
     needs: [build-push, scale-approval]
     if: >-
-      ${{ !cancelled() && (inputs.image_tag || needs.build-push.result == 'success')
+      ${{ !cancelled() && github.ref == 'refs/heads/main' && (inputs.image_tag || needs.build-push.result == 'success')
       && (vars.SCALE_PROFILE != 'production' || needs.scale-approval.result == 'success') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30

@@ -52,7 +52,11 @@ PROJECT_ID=<project> REGION=us-central1 ./scripts/gcp-bootstrap.sh
 It enables the APIs, creates the `dc-runtime`, `dc-invoker` and `dc-deploy`
 service accounts, GitHub OIDC trust for this repo (no JSON keys), the five
 Secret Manager secrets and the Pub/Sub topics, then prints the GitHub variables
-to set. Re-running it is safe.
+to set. Re-running it is safe and updates the existing WIF provider's trust
+condition. Only `.github/workflows/release.yml` on `refs/heads/main`, in the
+`production` GitHub environment, can impersonate `dc-deploy`. Branch and pull
+request workflows cannot obtain deployment credentials. Protect `main` and
+configure required reviewers / deployment branch rules on `production`.
 
 ### 3. GitHub settings (Settings > Secrets and variables > Actions)
 
@@ -72,7 +76,9 @@ Variables:
 | `LLM_PROVIDER`, `LLM_MODEL` | optional (default `anthropic`, `claude-sonnet-4-5`) |
 | `API_MIN_INSTANCES`, `API_MAX_INSTANCES`, `WORKER_MAX_INSTANCES`, `ML_MAX_INSTANCES`, `WEB_MAX_INSTANCES` | optional scaling (defaults 0 / 2) |
 
-Then run *Release (build, push, deploy)* from Actions (or merge to `main`).
+Then run *Release (build, push, deploy)* from Actions **on `main`** (or merge to `main`).
+Manual runs on other refs may build images but do not deploy. Manual rollback
+also runs on `main`, with `image_tag` selecting the previously published image.
 The first run creates every service, the push subscriptions and the scheduler jobs.
 
 ## Deploys and rollback

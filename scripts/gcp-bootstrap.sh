@@ -62,11 +62,14 @@ g iam service-accounts add-iam-policy-binding "$INVOKER_SA" --member "serviceAcc
 echo "== GitHub Actions workload identity federation ($GITHUB_REPO)"
 exists g iam workload-identity-pools describe github --location global \
   || g iam workload-identity-pools create github --location global --display-name "GitHub Actions"
-exists g iam workload-identity-pools providers describe github --location global --workload-identity-pool github \
-  || g iam workload-identity-pools providers create-oidc github --location global --workload-identity-pool github \
-       --issuer-uri "https://token.actions.githubusercontent.com" \
-       --attribute-mapping "google.subject=assertion.sub,attribute.repository=assertion.repository" \
-       --attribute-condition "assertion.repository=='$GITHUB_REPO'"
+provider_action=create-oidc
+if exists g iam workload-identity-pools providers describe github --location global --workload-identity-pool github; then
+  provider_action=update-oidc
+fi
+g iam workload-identity-pools providers "$provider_action" github --location global --workload-identity-pool github \
+  --issuer-uri "https://token.actions.githubusercontent.com" \
+  --attribute-mapping "google.subject=assertion.sub,attribute.repository=assertion.repository" \
+  --attribute-condition "assertion.repository=='$GITHUB_REPO' && assertion.ref=='refs/heads/main' && assertion.environment=='production' && assertion.workflow_ref=='$GITHUB_REPO/.github/workflows/release.yml@refs/heads/main'"
 g iam service-accounts add-iam-policy-binding "$DEPLOY_SA" --role roles/iam.workloadIdentityUser \
   --member "principalSet://iam.googleapis.com/projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/github/attribute.repository/$GITHUB_REPO" >/dev/null
 
