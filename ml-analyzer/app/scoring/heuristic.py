@@ -392,8 +392,8 @@ SMALL_TALK = re.compile(
 )
 # The customer saying what they think, feel or care about, or asking about the match's.
 DEPTH_MARKER = re.compile(
-    r"\b(i (feel|felt|think|believe|value|care about|always wanted|have always|'ve always|used to|realized|realised|"
-    r"worry|wish|hope|dream)|i'm (scared|afraid|proud|nervous|excited)|honestly|to me|for me|matters to me|"
+    r"\b(i (feel|felt|think|believe|value|care about|always wanted|used to|realized|realised|worry|wish|hope|dream)|"
+    r"i(['\u2019]ve| have) always|i(['\u2019]m| am) (scared|afraid|proud|nervous|excited)|honestly|to me|for me|matters to me|"
     r"means a lot|grew up|my (family|mom|mum|dad|parents|brother|sister|childhood|dream|goal|friends)|"
     r"what made you|why do you|what do you love|what matters|what drew you|how did you (get into|end up|decide))\b",
     re.IGNORECASE,

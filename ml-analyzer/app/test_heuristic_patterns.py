@@ -207,6 +207,14 @@ def test_topic_depth_compares_replies_drawn_by_deeper_messages() -> None:
     ]
 
 
+def test_topic_depth_reads_contracted_disclosures_as_deeper() -> None:
+    for body in ("I've always wanted to live abroad someday", "I\u2019ve always wanted to live abroad", "I'm nervous about the new job"):
+        turns = [("self", "hey"), ("match", "hi")] * 9 + [("self", body), ("match", "oh nice")]
+        assert topic_depth_patterns(_conversation(turns))[0].endswith(
+            "and 1 (Message 19) went into what you think, feel or care about."
+        ), body
+
+
 def test_topic_depth_stays_silent_when_short_or_mixed() -> None:
     few = [("self", "hey") if i % 2 == 0 else ("match", "hi") for i in range(18)]
     assert topic_depth_patterns(_conversation(few)) == []
