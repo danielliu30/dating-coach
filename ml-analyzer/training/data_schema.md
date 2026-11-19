@@ -110,7 +110,9 @@ Use this schema with human `segments` labels on the served segment boundaries
 Optional string fields `preferences` (maximum 2,000 characters) and
 `match_name` carry pseudonymized context for LLM comparisons, not training.
 
-`data/eval_extended.jsonl` is a second synthetic set, also never trained on:
+`data/eval_extended.jsonl` is a second synthetic set. Training always
+excludes its conversation and user IDs, even when `--eval-file` is disabled.
+It contains
 32–42 message conversations with nuanced situations (over-investing,
 ambivalence, double-texting, self-deprecation, early disclosure,
 people-pleasing, ex comparisons, defensiveness, repair). Each row names a

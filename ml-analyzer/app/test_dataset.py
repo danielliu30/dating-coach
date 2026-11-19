@@ -415,6 +415,22 @@ def test_report_holdout_fails_when_file_is_missing(tmp_path: Path) -> None:
         train.report_holdout(tmp_path / "missing.jsonl", [_example("c1")])
 
 
+def test_train_always_excludes_extended_eval(tmp_path: Path, monkeypatch, capsys) -> None:
+    held = json.loads(EXTENDED.read_text(encoding="utf-8").splitlines()[0])
+    data = _write(tmp_path, [
+        dict(held, source="app"),
+        _payload("same-user", ["not the same conversation"], user_id=held["user_id"]),
+        _payload("keep", ["different user"], user_id="training-user"),
+    ])
+    monkeypatch.setattr(sys, "argv", ["train.py", "--data", str(data), "--eval-file", "", "--dry-run"])
+
+    train.main()
+
+    out = capsys.readouterr().out
+    assert "excluded_from_training=2" in out
+    assert "conversations=1 segments=1 train=1 eval=0" in out
+
+
 def test_eval_fields_default_for_rows_without_them(tmp_path: Path) -> None:
     """Exports from the backend carry none of the eval-only fields; they default to an app row."""
     rows = [{"conversation_id": "c1", "consented": True, "messages": [{"position": 0, "sender": "self", "body": "hi"}]}]

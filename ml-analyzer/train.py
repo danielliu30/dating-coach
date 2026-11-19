@@ -39,6 +39,7 @@ from training.dataset import (
 # Frozen eval set for the serving gate (scripts/eval_vs_llm.py). Never trained
 # on: its conversations and users are removed from --data before the split.
 DEFAULT_EVAL_FILE = Path(__file__).resolve().parent / "data" / "eval_holdout.jsonl"
+EXTENDED_EVAL_FILE = DEFAULT_EVAL_FILE.with_name("eval_extended.jsonl")
 
 
 def parse_args() -> argparse.Namespace:
@@ -157,6 +158,7 @@ def main() -> None:
     )
     if args.eval_file:
         examples = report_holdout(Path(args.eval_file), examples, args.include_unconsented)
+    examples = report_holdout(EXTENDED_EVAL_FILE, examples)
     examples = deduplicate(examples)
     train_rows, eval_rows = split(
         examples,
