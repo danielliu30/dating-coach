@@ -111,6 +111,34 @@ def test_only_unresolved_repeated_misses_require_more_coaching():
     assert evidence.self_correction.self_positions == [8, 10]
 
 
+def test_new_miss_in_the_same_turn_as_a_repair_preserves_earlier_turn():
+    evidence = extract_profile_evidence(_conversation(
+        "me: I'd like to try that cafe together.",
+        "them: I can't make Friday.",
+        "me: How about Friday?",
+        "them: I can't make Friday.",
+        "me: Would Friday work?",
+        "me: Sorry, I missed that. How about Saturday?",
+        "me: How about Friday?",
+    ))
+    assert evidence.feedback_needed.issue == "repeated_ignored_constraint"
+    assert evidence.feedback_needed.self_positions == [4, 12]
+
+
+def test_new_miss_in_the_same_turn_as_a_first_repair_is_not_a_repeated_turn():
+    evidence = extract_profile_evidence(_conversation(
+        "me: I'd like to try that cafe together.",
+        "them: I can't make Friday.",
+        "me: Would Friday work?",
+        "me: Sorry, I missed that. How about Saturday?",
+        "me: How about Friday?",
+        "them: Let me check.",
+        "me: We could try the cafe by the station.",
+    ))
+    assert evidence.feedback_needed.level == "unknown"
+    assert evidence.self_correction.level == "unknown"
+
+
 @pytest.mark.parametrize("reply", ["Actually Friday works now.", "Sure, but Friday morning only."])
 def test_different_availability_is_not_a_repeated_coaching_need(reply):
     evidence = extract_profile_evidence(_conversation(
