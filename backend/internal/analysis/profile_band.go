@@ -50,6 +50,32 @@ type storedProfileEvidence struct {
 	ClarityOfApproach profileObservation `json:"clarity_of_approach"`
 }
 
+func qualifyingProfileEvidence(payload json.RawMessage) (storedProfileEvidence, bool) {
+	var row storedProfileEvidence
+	if json.Unmarshal(payload, &row) != nil || row.RubricVersion != profileRubric || row.Coverage != "eligible" {
+		return row, false
+	}
+	observations := [...]profileObservation{row.FeedbackNeeded, row.Engagement, row.ClarityOfApproach, row.SelfCorrection}
+	for i, observation := range observations {
+		if observation.assessed() {
+			continue
+		}
+		if len(observation.SelfPositions) > 0 || observation.Issue != "" {
+			return row, false
+		}
+		switch observation.Level {
+		case "", "unknown":
+		case "not_applicable":
+			if i != len(observations)-1 {
+				return row, false
+			}
+		default:
+			return row, false
+		}
+	}
+	return row, row.FeedbackNeeded.assessed() || row.Engagement.assessed() || row.ClarityOfApproach.assessed()
+}
+
 // profileBandForEvidence takes one payload per distinct transcript, newest
 // first and already scoped to an owner and the recent submission window.
 func profileBandForEvidence(payloads []json.RawMessage) (profileBand, int) {
@@ -57,14 +83,11 @@ func profileBandForEvidence(payloads []json.RawMessage) (profileBand, int) {
 	var uncertainRepair, recurringIssue bool
 	issues := map[string]int{}
 	for _, payload := range payloads {
-		var row storedProfileEvidence
-		if json.Unmarshal(payload, &row) != nil || row.RubricVersion != profileRubric || row.Coverage != "eligible" {
+		row, ok := qualifyingProfileEvidence(payload)
+		if !ok {
 			continue
 		}
 		feedback, engagement, clarity := row.FeedbackNeeded.assessed(), row.Engagement.assessed(), row.ClarityOfApproach.assessed()
-		if !feedback && !engagement && !clarity {
-			continue
-		}
 		count++
 
 		if feedback && row.FeedbackNeeded.Level == "needs_coaching" {
