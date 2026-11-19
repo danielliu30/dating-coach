@@ -37,7 +37,7 @@ func TestSinglePassTasksRespectCancellation(t *testing.T) {
 	if _, err := expireBookingsPass(ctx, svc); err == nil {
 		t.Error("expiry ignored cancellation")
 	}
-	if result, err := sweepPaymentsPass(ctx, svc); err != nil || result != (coaching.SweepResult{}) {
-		t.Fatalf("disabled payments: result=%+v err=%v", result, err)
+	if _, err := sweepPaymentsPass(ctx, svc); err == nil {
+		t.Error("payment sweep ignored cancellation")
 	}
 }
