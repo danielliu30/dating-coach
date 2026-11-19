@@ -8,9 +8,34 @@ import { requestGoogleIdToken } from '../lib/googleIdentity';
 
 const STORAGE_KEY = 'dating-coach.session';
 
-// How long sign-out waits for the API to revoke the session before signing out
-// locally anyway, so a hung connection cannot keep the user signed in.
+// How long anything waits on a sign-out's server-side revocation, so a hung
+// connection cannot stall the caller or the next sign-in.
 export const SIGN_OUT_TIMEOUT_MS = 5000;
+
+// Resolves once work settles or SIGN_OUT_TIMEOUT_MS passes, whichever is first.
+const withinSignOutTimeout = async (work: Promise<unknown>): Promise<void> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    work.catch(() => undefined),
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, SIGN_OUT_TIMEOUT_MS);
+    }),
+  ]);
+  clearTimeout(timer);
+};
+
+// Revokes the session these credentials belong to. It runs after the app has
+// dropped them, so an expired access token is renewed here from the captured
+// refresh token rather than through the shared renewal, which only knows the
+// session on hand.
+const revoke = async (token: string, refreshToken: string): Promise<void> => {
+  try {
+    await api.signOut(token);
+  } catch (error) {
+    if (!isRefused(error) || !refreshToken) return;
+    await api.signOut((await api.refreshSession(refreshToken)).token);
+  }
+};
 
 /**
  * Why the app signed the user out without being asked to. `expired` is the
@@ -94,6 +119,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
   // that outlives its principal must never be replayed under the next one.
   const principalRef = useRef(0);
   const userIDRef = useRef<string | null>(null);
+  // The last sign-out's server-side revocation. A sign-in waits for it, so a
+  // revocation that lands late cannot take the new session down with it.
+  const revocationRef = useRef<Promise<void>>(Promise.resolve());
 
   // The client reads the token through a ref so requests always use the latest
   // one without re-creating the client on every render.
@@ -258,11 +286,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
       user,
       signedOutReason,
       dismissSignedOutReason: () => setSignedOutReason(null),
-      signIn: async (email, password) => persist(await api.signIn({ email, password })),
-      signUp: async ({ email, password, displayName, role }) =>
-        persist(await api.signUp({ email, password, display_name: displayName, role })),
-      signInWithGoogle: async (role) =>
-        persist(await api.signInWithGoogle({ id_token: await requestGoogleIdToken(), role })),
+      signIn: async (email, password) => {
+        await withinSignOutTimeout(revocationRef.current);
+        return persist(await api.signIn({ email, password }));
+      },
+      signUp: async ({ email, password, displayName, role }) => {
+        await withinSignOutTimeout(revocationRef.current);
+        return persist(await api.signUp({ email, password, display_name: displayName, role }));
+      },
+      signInWithGoogle: async (role) => {
+        const idToken = await requestGoogleIdToken();
+        await withinSignOutTimeout(revocationRef.current);
+        return persist(await api.signInWithGoogle({ id_token: idToken, role }));
+      },
       verify: async (email, code) => {
         // Verifying as the account being verified swaps the sign-up token for a
         // session one; the sign-up token cannot reach the private API the app is
@@ -302,23 +338,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
         // session restored from it cannot be renewed and is dropped.
         await clearSession().catch(() => undefined);
       },
-      // Revokes the session server-side so the refresh token stops working, then
-      // drops it locally whatever the API said: a user who asked to sign out is
-      // signed out on this device even offline. The local drop also clears any
-      // `expired` reason a refused renewal raised on the way, since the user
-      // asked for this sign-out.
+      // Drops the session locally first, so nothing a closed app or a second
+      // tap does can bring it back, then revokes it server-side so its refresh
+      // token stops working. A failed revocation still leaves this device
+      // signed out.
       signOut: async () => {
-        if (tokenRef.current) {
-          let timer: ReturnType<typeof setTimeout> | undefined;
-          await Promise.race([
-            api.signOut().catch(() => undefined),
-            new Promise<void>((resolve) => {
-              timer = setTimeout(resolve, SIGN_OUT_TIMEOUT_MS);
-            }),
-          ]);
-          clearTimeout(timer);
+        const token = tokenRef.current;
+        if (token) {
+          revocationRef.current = revoke(token, refreshRef.current).catch(() => undefined);
         }
-        await clearSession();
+        try {
+          await clearSession();
+        } finally {
+          await withinSignOutTimeout(revocationRef.current);
+        }
       },
     }),
     [clearSession, persist, persistUser, ready, signedOutReason, token, user],

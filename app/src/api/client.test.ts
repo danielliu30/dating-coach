@@ -347,35 +347,29 @@ describe('ApiClient wrappers', () => {
     expect(lastRequest().init.body).toBe(JSON.stringify({ coach_id: 'c1', session_id: null }));
   });
 
-  it('signOut posts to /auth/signout with the bearer token', async () => {
+  it('signOut posts to /auth/signout with the given token, not the one on hand', async () => {
     fetchMock.mockResolvedValueOnce(reply(200, { status: 'signed_out' }));
     const client = new ApiClient();
-    client.useToken(() => 'tok');
+    client.useToken(() => null);
 
-    await expect(client.signOut()).resolves.toEqual({ status: 'signed_out' });
+    await expect(client.signOut('captured')).resolves.toEqual({ status: 'signed_out' });
 
     const { url, init } = lastRequest();
     expect(url).toBe(`${API_BASE_URL}${API_PREFIX}/auth/signout`);
     expect(init.method).toBe('POST');
-    expect(init.headers).toMatchObject({ Authorization: 'Bearer tok' });
+    expect(init.headers).toMatchObject({ Authorization: 'Bearer captured' });
   });
 
-  it('signOut renews an expired access token and retries, so the revocation still lands', async () => {
-    let token = 'old';
-    fetchMock
-      .mockResolvedValueOnce(reply(401, { error: 'expired' }))
-      .mockResolvedValueOnce(reply(200, { status: 'signed_out' }));
+  it('signOut never triggers a renewal on 401', async () => {
+    fetchMock.mockResolvedValueOnce(reply(401, { error: 'expired' }));
     const client = new ApiClient();
-    client.useToken(() => token);
-    client.useRenewal(async () => {
-      token = 'new';
-      return 'renewed';
-    });
+    client.useToken(() => 'tok');
+    const renew = jest.fn(async () => 'renewed' as const);
+    client.useRenewal(renew);
 
-    await expect(client.signOut()).resolves.toEqual({ status: 'signed_out' });
-
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(lastRequest().init.headers).toMatchObject({ Authorization: 'Bearer new' });
+    await expect(client.signOut('captured')).rejects.toMatchObject({ status: 401 });
+    expect(renew).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('refreshSession never triggers a renewal on 401', async () => {

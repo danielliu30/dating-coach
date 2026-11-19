@@ -128,8 +128,8 @@ export class ApiClient {
     }
   }
 
-  private async request<T>(method: string, path: string, body?: unknown, renewed = false): Promise<T> {
-    const token = this.token();
+  private async request<T>(method: string, path: string, body?: unknown, renewed = false, bearer?: string): Promise<T> {
+    const token = bearer ?? this.token();
     const principal = this.principal();
     let response: Response;
     let text: string;
@@ -251,12 +251,13 @@ export class ApiClient {
   }
 
   /**
-   * Revokes every refresh token the authenticated account holds and denylists
-   * its live access tokens. An expired access token is renewed first like any
-   * other request, so the revocation still reaches the API.
+   * Revokes every refresh token the account behind token holds and denylists
+   * its live access tokens. The token is passed in because the app has already
+   * dropped it by the time it asks; for the same reason a 401 is final here
+   * rather than a cue to renew the session on hand.
    */
-  signOut() {
-    return this.request<{ status: string }>('POST', '/auth/signout');
+  signOut(token: string) {
+    return this.request<{ status: string }>('POST', '/auth/signout', undefined, true, token);
   }
 
   /**
