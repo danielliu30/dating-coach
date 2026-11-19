@@ -92,3 +92,9 @@ def test_repr_escaped_heuristic_excerpt_is_faithful() -> None:
     body = """she said "it's fine" ok"""
     messages = [Message(position=0, sender="self", body=body), Message(position=1, sender="match", body="hm")]
     assert citations([f"Message 1 ({body!r}) landed."], messages)["valid_citations"] == 1
+
+
+def test_unclosed_quote_does_not_swallow_the_next_citation() -> None:
+    texts = ['Message 1 ("what was the last thing\nMessage 3 ("ok") got a short reply.']
+    result = citations(texts, MESSAGES)
+    assert result["citations"] == 2 and result["valid_citations"] == 2
