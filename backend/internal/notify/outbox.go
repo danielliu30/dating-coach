@@ -112,15 +112,23 @@ func (r *Relay) WatchExhausted(ctx context.Context, period time.Duration) error 
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			n, err := r.queries.CountExhaustedEmails(ctx, MaxAttempts)
-			if err != nil {
-				return fmt.Errorf("count exhausted emails: %w", err)
-			}
-			if n > 0 {
-				slog.Warn("undelivered emails need an operator", "count", n, "max_attempts", MaxAttempts)
+			if _, err := r.CheckExhausted(ctx); err != nil {
+				return err
 			}
 		}
 	}
+}
+
+// CheckExhausted reports abandoned emails in one monitoring pass.
+func (r *Relay) CheckExhausted(ctx context.Context) (int64, error) {
+	n, err := r.queries.CountExhaustedEmails(ctx, MaxAttempts)
+	if err != nil {
+		return 0, fmt.Errorf("count exhausted emails: %w", err)
+	}
+	if n > 0 {
+		slog.Warn("undelivered emails need an operator", "count", n, "max_attempts", MaxAttempts)
+	}
+	return n, nil
 }
 
 // retryDelay is how long to wait before the next attempt after the given number

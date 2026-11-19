@@ -252,14 +252,7 @@ func expireBookings(ctx context.Context, svc *coaching.Service) error {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			n, err := svc.ExpirePending(ctx)
-			if err != nil {
-				slog.Error("expire session requests", "error", err)
-				continue
-			}
-			if n > 0 {
-				slog.Info("expired unanswered session requests", "count", n)
-			}
+			_, _ = expireBookingsPass(ctx, svc)
 		}
 	}
 }
@@ -276,18 +269,7 @@ func sweepPayments(ctx context.Context, svc *coaching.Service) error {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			res, err := svc.SweepPayments(ctx, time.Now())
-			if err != nil {
-				slog.Error("sweep payments", "error", err)
-			}
-			if res != (coaching.SweepResult{}) {
-				slog.Info("swept payments",
-					"holds_released", res.HoldsReleased,
-					"checkouts_expired", res.CheckoutsExpired,
-					"authorizations_released", res.AuthorizationsFreed,
-					"refunds_issued", res.RefundsIssued,
-				)
-			}
+			_, _ = sweepPaymentsPass(ctx, svc)
 		}
 	}
 }

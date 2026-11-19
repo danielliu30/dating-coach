@@ -94,19 +94,24 @@ func (w *Worker) PurgeExpiredRefreshTokens(ctx context.Context, interval time.Du
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
-		rows, err := w.queries.DeleteExpiredRefreshTokens(ctx)
-		switch {
-		case err != nil && ctx.Err() == nil:
-			slog.Warn("purge expired refresh tokens", "error", err)
-		case rows > 0:
-			slog.Info("purged expired refresh tokens", "rows", rows)
-		}
+		_, _ = w.PurgeRefreshTokens(ctx)
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 		}
 	}
+}
+
+// PurgeRefreshTokens removes expired refresh tokens in one pass.
+func (w *Worker) PurgeRefreshTokens(ctx context.Context) (int64, error) {
+	rows, err := w.queries.DeleteExpiredRefreshTokens(ctx)
+	if err != nil && ctx.Err() == nil {
+		slog.Warn("purge expired refresh tokens", "error", err)
+	} else if rows > 0 {
+		slog.Info("purged expired refresh tokens", "rows", rows)
+	}
+	return rows, err
 }
 
 // deleted reports that userID has no row left at all, which makes the rest of
