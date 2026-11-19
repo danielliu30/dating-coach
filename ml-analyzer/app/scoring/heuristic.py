@@ -16,7 +16,17 @@ import statistics
 from dataclasses import dataclass
 from typing import Dict, List, Literal, Optional, Sequence
 
-from ..schemas import AnalyzeRequest, AnalyzeResponse, GoalScore, Message, Overall, Segment
+from ..schemas import (
+    DATING_PHASE_LABELS,
+    AnalyzeRequest,
+    AnalyzeResponse,
+    GoalScore,
+    Message,
+    Overall,
+    Segment,
+    UserProfile,
+    profile_label,
+)
 from .base import Scorer, align_segments, chunk, clamp, label_for
 
 OPEN_QUESTION = re.compile(r"\b(what|why|how|where|when|which|who)\b", re.IGNORECASE)
@@ -212,7 +222,10 @@ def reciprocity_patterns(messages: Sequence[Message]) -> List[str]:
 
 
 def reflection_questions(
-    reviews: Sequence[SelfMessageReview], patterns: Sequence[str], preferences: Optional[str]
+    reviews: Sequence[SelfMessageReview],
+    patterns: Sequence[str],
+    preferences: Optional[str],
+    profile: Optional[UserProfile] = None,
 ) -> List[str]:
     """Open questions that turn the analysis inward: "did I like them?", not only "did they like me?".
 
@@ -221,7 +234,8 @@ def reflection_questions(
     the conversation, not just how it landed. Adds an effort/reciprocity
     question when ``patterns`` (from ``reciprocity_patterns``) is non-empty
     and a preferences question when the customer stated what they are
-    looking for. Every question is non-directive: it never tells the
+    looking for, then ``profile_reflection_questions`` for the phases on the
+    customer's own profile. Every question is non-directive: it never tells the
     customer what to do, drafts nothing and never speculates about the
     match's reasons. Returns an empty list when ``reviews`` is empty, since
     there is nothing of the customer's to reflect on.
@@ -235,6 +249,40 @@ def reflection_questions(
     if preference:
         questions.append(
             f"You said you are looking for: {preference[:200]}. Did this conversation feel like it was heading there?"
+        )
+    questions.extend(profile_reflection_questions(profile))
+    return questions
+
+
+PROFILE_PHASES_NAMED = 2
+
+
+def _phase_list(keys: Sequence[str]) -> str:
+    """Join the first ``PROFILE_PHASES_NAMED`` phase labels as "a" or "a and b"."""
+    return " and ".join(profile_label(key, DATING_PHASE_LABELS) for key in keys[:PROFILE_PHASES_NAMED])
+
+
+def profile_reflection_questions(profile: Optional[UserProfile]) -> List[str]:
+    """Ask how the conversation sat with the dating phases the customer named on their own profile.
+
+    One question for ``phases_working_on`` and one for ``phases_strong``, each
+    naming at most ``PROFILE_PHASES_NAMED`` phases by label. They are about the
+    customer's own goals and how they felt, never about the match or whom to
+    date, and only the fixed phase labels are echoed (never the free-text bio
+    or prompts). Returns an empty list without a profile or without phases.
+    """
+    if profile is None:
+        return []
+    questions: List[str] = []
+    if profile.phases_working_on:
+        questions.append(
+            f"You told us you are working on {_phase_list(profile.phases_working_on)}. "
+            "Looking at your own messages here, how do you feel that part went, and how did it feel to you?"
+        )
+    if profile.phases_strong:
+        questions.append(
+            f"You count {_phase_list(profile.phases_strong)} among your strengths. "
+            "Did this conversation feel like you at your best there, or did something get in the way for you?"
         )
     return questions
 
@@ -297,7 +345,7 @@ def goal_scores(
 
 
 class HeuristicScorer(Scorer):
-    version = "heuristic-v4"
+    version = "heuristic-v5"
 
     def __init__(self, segment_size: int = 4) -> None:
         self.segment_size = segment_size
@@ -334,7 +382,7 @@ class HeuristicScorer(Scorer):
                 summary=_summary(reviews, request.preferences),
                 strengths=_strengths(reviews),
                 improvements=_improvements(reviews),
-                reflection_questions=reflection_questions(reviews, patterns, request.preferences),
+                reflection_questions=reflection_questions(reviews, patterns, request.preferences, request.profile),
                 patterns=patterns,
                 goal_scores=goal_scores(reviews, request.messages, request.focus_areas),
             ),
