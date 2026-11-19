@@ -14,10 +14,20 @@ from __future__ import annotations
 import re
 import statistics
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Dict, List, Literal, Optional, Sequence
 
-from ..schemas import AnalyzeRequest, AnalyzeResponse, GoalScore, Message, Overall, Segment
-from .base import Scorer, align_segments, chunk, clamp, label_for
+from ..schemas import (
+    DATING_PHASE_LABELS,
+    AnalyzeRequest,
+    AnalyzeResponse,
+    GoalScore,
+    Message,
+    Overall,
+    Segment,
+    UserProfile,
+)
+from .base import Scorer, _parse_sent_at, align_segments, chunk, clamp, label_for
 
 OPEN_QUESTION = re.compile(r"\b(what|why|how|where|when|which|who)\b", re.IGNORECASE)
 # A question mark closing a sentence anywhere in the text (merged bubbles keep theirs mid-body).
@@ -211,8 +221,158 @@ def reciprocity_patterns(messages: Sequence[Message]) -> List[str]:
     return patterns
 
 
+# Fewest messages in a conversation before its early and late stretches are compared.
+MIN_MESSAGES_FOR_TREND = 30
+# Fewest messages one side needs in each compared stretch for its average length to mean anything.
+MIN_TREND_SIDE_MESSAGES = 3
+# Early-to-late (or late-to-early) ratio of average words per message from which a trend is named.
+TREND_RATIO = 1.75
+
+
+def _span(messages: Sequence[Message]) -> str:
+    """Name a contiguous stretch of position-ordered messages the way clients count them ("Messages 1-10")."""
+    return f"Messages {messages[0].position + 1}-{messages[-1].position + 1}"
+
+
+def _mean_words(messages: Sequence[Message]) -> float:
+    return statistics.fmean(_word_count(m) for m in messages)
+
+
+def energy_trend_patterns(messages: Sequence[Message]) -> List[str]:
+    """Name it when either side's message length changed clearly between the start and the end of a long conversation.
+
+    The position-ordered conversation is cut into thirds; the first and last
+    third are compared and the middle is ignored. For each side with at least
+    ``MIN_TREND_SIDE_MESSAGES`` messages in both stretches, the average words
+    per message is compared, and a change of at least ``TREND_RATIO`` in
+    either direction (where the longer average reaches ``GOOD_REPLY_WORDS``,
+    so 2 words against 4 stays silent) yields one sentence citing both
+    stretches, e.g. "Their messages got shorter over the conversation: about
+    14 words each early on (Messages 1-15) against about 4 in the last stretch
+    (Messages 31-45)." The customer's side comes first. Only lengths are
+    described; nothing is said about why. Conversations under
+    ``MIN_MESSAGES_FOR_TREND`` messages return an empty list.
+    """
+    ordered = sorted(messages, key=lambda m: m.position)
+    if len(ordered) < MIN_MESSAGES_FOR_TREND:
+        return []
+    third = len(ordered) // 3
+    early, late = ordered[:third], ordered[-third:]
+
+    patterns: List[str] = []
+    for sender, subject in (("self", "Your"), ("match", "Their")):
+        early_side = [m for m in early if m.sender == sender]
+        late_side = [m for m in late if m.sender == sender]
+        if min(len(early_side), len(late_side)) < MIN_TREND_SIDE_MESSAGES:
+            continue
+        before, after = _mean_words(early_side), _mean_words(late_side)
+        if max(before, after) < GOOD_REPLY_WORDS:
+            continue
+        if before >= TREND_RATIO * after:
+            direction = "shorter"
+        elif after >= TREND_RATIO * before:
+            direction = "longer"
+        else:
+            continue
+        patterns.append(
+            f"{subject} messages got {direction} over the conversation: about {max(1, round(before))} words each "
+            f"early on ({_span(early)}) against about {max(1, round(after))} in the last stretch ({_span(late)})."
+        )
+    return patterns
+
+
+# Silence between two consecutive messages from which the next message counts as picking the conversation back up.
+REINITIATION_GAP = timedelta(hours=6)
+# Fewest restarts by one side before who restarts the conversation is named.
+MIN_RESTARTS = 2
+# Spacing of the backend's receive-time stamps for missing sent_at: they form the conversation's latest cluster.
+FILLED_STAMP_WINDOW = timedelta(seconds=1)
+# Most message numbers spelled out in one citation list before the rest are only counted.
+MAX_CITED = 5
+
+
+def _cite(messages: Sequence[Message]) -> str:
+    """List message numbers the way clients count them: "Message 4", "Messages 4 and 9", "Messages 1, 2, 3, 4, 5 and 2 more"."""
+    numbers = [str(m.position + 1) for m in messages]
+    if len(numbers) == 1:
+        return f"Message {numbers[0]}"
+    shown = numbers[:MAX_CITED]
+    if len(numbers) > MAX_CITED:
+        return f"Messages {', '.join(shown)} and {len(numbers) - MAX_CITED} more"
+    return f"Messages {', '.join(shown[:-1])} and {shown[-1]}"
+
+
+def _times_word(count: int) -> str:
+    return "once" if count == 1 else "twice" if count == 2 else f"{count} times"
+
+
+def _send_times(ordered: Sequence[Message]) -> List[Optional[datetime]]:
+    """Parsed ``sent_at`` per message, ``None`` where absent, unparseable or filled in by the backend.
+
+    The backend stamps a message submitted without ``sent_at`` with the time it
+    was received, so a partly dated thread ends in a cluster of near-identical
+    stamps later than its real ones; reading those as send times would turn an
+    ordinary reply into a long pause. That cluster is the run of two or more
+    latest stamps each within ``FILLED_STAMP_WINDOW`` of the next; quick
+    replies earlier in the conversation keep their stamps.
+    """
+    times = [_parse_sent_at(m.sent_at) for m in ordered]
+    dated = sorted(((t, i) for i, t in enumerate(times) if t is not None), reverse=True)
+    cluster = dated[:1]
+    for (later, _), (earlier, i) in zip(dated, dated[1:]):
+        if later - earlier > FILLED_STAMP_WINDOW:
+            break
+        cluster.append((earlier, i))
+    filled = {i for _, i in cluster} if len(cluster) > 1 else set()
+    return [None if i in filled else t for i, t in enumerate(times)]
+
+
+def reinitiation_patterns(messages: Sequence[Message]) -> List[str]:
+    """Name it when one side is clearly the one picking the conversation back up after long pauses.
+
+    A restart is a message sent at least ``REINITIATION_GAP`` after the message
+    before it (in position order), judged only where both messages carry a
+    parseable ``sent_at`` (``_parse_sent_at``); pairs missing a timestamp or
+    going backwards in time are skipped, as are receive-time stamps the backend
+    filled in (``_send_times``), so timestamp-less conversations stay silent. When one side made at least ``MIN_RESTARTS`` restarts and at
+    least ``RECIPROCITY_RATIO`` times as many as the other, one sentence names
+    who did it and cites the restarting messages, e.g. "After each of the 3
+    long pauses in this conversation (6 hours or more), you were the one who
+    picked it back up (Messages 12, 30 and 41)." Only who restarted is
+    described, never why the other side did not.
+    """
+    ordered = sorted(messages, key=lambda m: m.position)
+    times = _send_times(ordered)
+    restarts: Dict[str, List[Message]] = {"self": [], "match": []}
+    for prev_at, (cur, cur_at) in zip(times, zip(ordered[1:], times[1:])):
+        if prev_at is None or cur_at is None or cur.sender not in restarts:
+            continue
+        if cur_at - prev_at >= REINITIATION_GAP:
+            restarts[cur.sender].append(cur)
+
+    hours = round(REINITIATION_GAP.total_seconds() / 3600)
+    total = len(restarts["self"]) + len(restarts["match"])
+    for sender, other, subject, other_subject in (("self", "match", "you", "they"), ("match", "self", "they", "you")):
+        mine, theirs = restarts[sender], restarts[other]
+        if len(mine) < MIN_RESTARTS or len(mine) < RECIPROCITY_RATIO * len(theirs):
+            continue
+        if not theirs:
+            return [
+                f"After each of the {total} long pauses in this conversation ({hours} hours or more), "
+                f"{subject} were the one who picked it back up ({_cite(mine)})."
+            ]
+        return [
+            f"{subject.capitalize()} picked the conversation back up after {len(mine)} of its {total} long pauses "
+            f"({hours} hours or more; {_cite(mine)}); {other_subject} did {_times_word(len(theirs))} ({_cite(theirs)})."
+        ]
+    return []
+
+
 def reflection_questions(
-    reviews: Sequence[SelfMessageReview], patterns: Sequence[str], preferences: Optional[str]
+    reviews: Sequence[SelfMessageReview],
+    patterns: Sequence[str],
+    preferences: Optional[str],
+    profile: Optional[UserProfile] = None,
 ) -> List[str]:
     """Open questions that turn the analysis inward: "did I like them?", not only "did they like me?".
 
@@ -221,7 +381,8 @@ def reflection_questions(
     the conversation, not just how it landed. Adds an effort/reciprocity
     question when ``patterns`` (from ``reciprocity_patterns``) is non-empty
     and a preferences question when the customer stated what they are
-    looking for. Every question is non-directive: it never tells the
+    looking for, then ``profile_reflection_questions`` for the phases on the
+    customer's own profile. Every question is non-directive: it never tells the
     customer what to do, drafts nothing and never speculates about the
     match's reasons. Returns an empty list when ``reviews`` is empty, since
     there is nothing of the customer's to reflect on.
@@ -235,6 +396,48 @@ def reflection_questions(
     if preference:
         questions.append(
             f"You said you are looking for: {preference[:200]}. Did this conversation feel like it was heading there?"
+        )
+    questions.extend(profile_reflection_questions(profile))
+    return questions
+
+
+PROFILE_PHASES_NAMED = 2
+
+
+def _known_phases(keys: Sequence[str]) -> List[str]:
+    """Return the keys that have a fixed label, so caller-supplied text is never echoed."""
+    return [key for key in keys if key in DATING_PHASE_LABELS]
+
+
+def _phase_list(keys: Sequence[str]) -> str:
+    """Join the first ``PROFILE_PHASES_NAMED`` phase labels as "a" or "a and b"."""
+    return " and ".join(DATING_PHASE_LABELS[key] for key in keys[:PROFILE_PHASES_NAMED])
+
+
+def profile_reflection_questions(profile: Optional[UserProfile]) -> List[str]:
+    """Ask how the conversation sat with the dating phases the customer named on their own profile.
+
+    One question for ``phases_working_on`` and one for ``phases_strong``, each
+    naming at most ``PROFILE_PHASES_NAMED`` phases by label. They are about the
+    customer's own goals and how they felt, never about the match or whom to
+    date, and only the fixed phase labels are echoed (unknown phase keys, the
+    free-text bio and prompts never are). Returns an empty list without a
+    profile or without known phases.
+    """
+    if profile is None:
+        return []
+    questions: List[str] = []
+    working_on = _known_phases(profile.phases_working_on)
+    strong = _known_phases(profile.phases_strong)
+    if working_on:
+        questions.append(
+            f"You told us you are working on {_phase_list(working_on)}. "
+            "Looking at your own messages here, how do you feel that part went, and how did it feel to you?"
+        )
+    if strong:
+        questions.append(
+            f"You count {_phase_list(strong)} among your strengths. "
+            "Did this conversation feel like you at your best there, or did something get in the way for you?"
         )
     return questions
 
@@ -297,7 +500,7 @@ def goal_scores(
 
 
 class HeuristicScorer(Scorer):
-    version = "heuristic-v4"
+    version = "heuristic-v5"
 
     def __init__(self, segment_size: int = 4) -> None:
         self.segment_size = segment_size
@@ -334,7 +537,7 @@ class HeuristicScorer(Scorer):
                 summary=_summary(reviews, request.preferences),
                 strengths=_strengths(reviews),
                 improvements=_improvements(reviews),
-                reflection_questions=reflection_questions(reviews, patterns, request.preferences),
+                reflection_questions=reflection_questions(reviews, patterns, request.preferences, request.profile),
                 patterns=patterns,
                 goal_scores=goal_scores(reviews, request.messages, request.focus_areas),
             ),

@@ -168,11 +168,16 @@ Response:
 
 `overall.reflection_questions[]` are open, non-directive questions that turn the
 analysis inward ("did you actually enjoy this conversation?"); the heuristic
-always emits at least one when the customer wrote anything.
+always emits at least one when the customer wrote anything, plus one each for the
+`profile.phases_working_on` and `profile.phases_strong` it was given (naming
+the customer's own phases, never echoing the bio or prompts).
 `overall.patterns[]` are short observations naming recurring behaviour across
 the whole conversation — e.g. "You sent about twice as many messages as they
 did in this conversation (5 to 2)." — and are empty when nothing recurs. Both
 default to `[]`, so clients that predate them are unaffected.
+The LLM backend asks for and keeps at most 6 `strengths`, 8 `improvements`,
+5 `reflection_questions` and 5 `patterns` (`LIST_LIMITS` in
+`app/scoring/llm.py`), each item cut to 300 characters.
 `overall.goal_scores[]` holds `{goal, score (0–1), comment}` entries, at most
 one per requested focus area (`goal` is the pillar key); it is `[]` when no
 focus areas were requested.

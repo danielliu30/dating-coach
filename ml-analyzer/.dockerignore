@@ -4,3 +4,4 @@ __pycache__/
 artifacts/
 data/
 !data/eval_holdout.jsonl
+!data/eval_extended.jsonl
