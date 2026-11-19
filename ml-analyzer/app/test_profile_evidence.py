@@ -72,6 +72,18 @@ def test_repeating_the_same_proposal_after_a_constraint_is_a_material_issue():
     assert evidence.clarity_of_approach.level == "unknown"
 
 
+def test_acknowledging_a_reminder_resolves_the_miss_but_is_not_self_correction():
+    evidence = extract_profile_evidence(_conversation(
+        "me: I'd like to try that cafe together.",
+        "them: I can't make Friday.",
+        "me: How about Friday?",
+        "them: I can't make Friday.",
+        "me: Got it, how about Saturday?",
+    ))
+    assert evidence.feedback_needed.level == "strong"
+    assert evidence.self_correction.level == "unknown"
+
+
 @pytest.mark.parametrize("reply", ["Actually Friday works now.", "Sure, but Friday morning only."])
 def test_different_availability_is_not_a_repeated_coaching_need(reply):
     evidence = extract_profile_evidence(_conversation(
