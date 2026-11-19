@@ -43,7 +43,7 @@ def extract_profile_evidence(messages: Sequence[Message]) -> ProfileEvidence:
         return ProfileEvidence(coverage="insufficient")
 
     constraints: dict[str, _Constraint] = {}
-    unresolved: set[int] = set()
+    unresolved: dict[int, int | None] = {}  # Current missed position and any earlier miss on another turn.
     last_match = -1
     saw_miss = False
     clarity: list[int] = []
@@ -78,33 +78,39 @@ def extract_profile_evidence(messages: Sequence[Message]) -> ProfileEvidence:
         if day in constraints:
             constraint = constraints[day]
             saw_miss = True
-            if constraint.missed is None:
-                constraint.missed = (message.position, last_match)
-                unresolved.add(message.position)
-            elif constraint.missed[1] != last_match:
-                issue = ProfileObservation(
-                    level="needs_coaching",
-                    self_positions=[constraint.missed[0], message.position],
-                    issue="repeated_ignored_constraint",
-                )
-                return ProfileEvidence(coverage="eligible", feedback_needed=issue, self_correction=issue, engagement=issue)
+            previous = constraint.missed
+            if previous and previous[1] == last_match and previous[0] in unresolved:
+                continue
+            earlier = previous[0] if previous and previous[1] != last_match else None
+            if previous:
+                unresolved.pop(previous[0], None)
+            constraint.missed = (message.position, last_match)
+            unresolved[message.position] = earlier
             continue
 
         clarity = clarity or [message.position]
         if not acknowledgment:
             continue
         engagement = engagement or [message.position]
-        open_misses = [c for c in constraints.values() if c.missed is not None]
+        open_misses = [c for c in constraints.values() if c.missed and c.missed[0] in unresolved]
         if len(open_misses) == 1:
             constraint = open_misses[0]
             assert constraint.missed is not None
             prior, match_turn = constraint.missed
             prompted = match_turn != last_match
             if repair_prefix or (prompted and constraint.stated == last_match):
-                unresolved.discard(prior)
-                constraint.missed = None
+                del unresolved[prior]
                 if repair_prefix and not prompted:
                     repair = repair or [prior, message.position]
+
+    for latest, earlier in unresolved.items():
+        if earlier is not None:
+            issue = ProfileObservation(
+                level="needs_coaching",
+                self_positions=[earlier, latest],
+                issue="repeated_ignored_constraint",
+            )
+            return ProfileEvidence(coverage="eligible", feedback_needed=issue, self_correction=issue, engagement=issue)
 
     evidence = ProfileEvidence(
         coverage="eligible",
