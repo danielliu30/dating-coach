@@ -939,7 +939,7 @@ def test_llm_goal_score_failure_falls_back_to_heuristic_goal_scores(monkeypatch,
     monkeypatch.setattr(scorer, "_complete", complete)
     request = AnalyzeRequest(conversation_id="f2", messages=messages, focus_areas=["feedback", "support"])
     response = asyncio.run(scorer.analyze(request))
-    assert response.model_version.endswith("+fallback:heuristic-v4")
+    assert response.model_version.endswith("+fallback:heuristic-v5")
     assert [g.goal for g in response.overall.goal_scores] == ["feedback"]
 
 
