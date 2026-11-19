@@ -150,7 +150,7 @@ func TestMiddlewareTicketOnWebSocketUpgrade(t *testing.T) {
 
 func TestWSTicketEndpoint(t *testing.T) {
 	tickets, mr := newTestTickets(t)
-	svc := NewService(nil, nil, nil, nil, 0, "", nil, nil, &stubPublisher{}, 15*time.Minute, time.Minute, time.Hour)
+	svc := NewService(nil, nil, nil, nil, 0, "", nil, nil, nil, &stubPublisher{}, 15*time.Minute, time.Minute, time.Hour)
 	h := NewHandler(svc, failOpenLimiter(t))
 	h.SetWSTickets(tickets, NewRateLimiter(redis.NewClient(&redis.Options{Addr: mr.Addr()}), 2, time.Minute))
 	owner := Principal{UserID: uuid.New(), Role: RoleUser, Scope: ScopeSession}

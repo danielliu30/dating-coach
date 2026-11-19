@@ -65,6 +65,7 @@ type Service struct {
 	bcryptCost     int
 	appURL         string
 	codes          *VerificationCache
+	resetCodes     *VerificationCache
 	denylist       *Denylist
 	deletions      DeletionPublisher
 	sessionTTL     time.Duration
@@ -96,6 +97,7 @@ func NewService(
 	bcryptCost int,
 	appURL string,
 	codes *VerificationCache,
+	resetCodes *VerificationCache,
 	denylist *Denylist,
 	deletions DeletionPublisher,
 	sessionTTL time.Duration,
@@ -110,6 +112,7 @@ func NewService(
 		bcryptCost:     bcryptCost,
 		appURL:         appURL,
 		codes:          codes,
+		resetCodes:     resetCodes,
 		denylist:       denylist,
 		deletions:      deletions,
 		sessionTTL:     sessionTTL,
@@ -660,9 +663,28 @@ func (s *Service) SignIn(ctx context.Context, email, password string) (Session, 
 		return Session{}, ErrEmailNotVerified
 	}
 
-	session, err := s.openSession(ctx, s.queries, user, uuid.Nil)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Session{}, fmt.Errorf("begin sign in: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := s.queries.WithTx(tx)
+	locked, err := q.LockUserForRefresh(ctx, user.ID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Session{}, ErrInvalidCredentials
+	}
+	if err != nil {
+		return Session{}, fmt.Errorf("lock sign-in account: %w", err)
+	}
+	if locked.PasswordHash != user.PasswordHash {
+		return Session{}, ErrInvalidCredentials
+	}
+	session, err := s.openSession(ctx, q, locked, uuid.Nil)
 	if err != nil {
 		return Session{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Session{}, fmt.Errorf("commit sign in: %w", err)
 	}
 	slog.Info("session issued", "user_id", user.ID, "reason", "sign in",
 		"expires_at", session.ExpiresAt)

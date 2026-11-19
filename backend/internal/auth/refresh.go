@@ -16,9 +16,10 @@ import (
 )
 
 // ErrInvalidRefreshToken is returned for a refresh token that is unknown,
-// expired, or already spent. The cases are deliberately indistinguishable to
-// the client, which can only react by signing in again.
+// expired, or already spent.
 var ErrInvalidRefreshToken = errors.New("invalid or expired refresh token")
+
+var ErrRevokedRefreshToken = fmt.Errorf("%w: session revoked", ErrInvalidRefreshToken)
 
 // openSession issues the pair a signed-in caller needs: a short-lived
 // session-scoped access token, and a refresh token to mint the next one with.
@@ -99,9 +100,19 @@ func (s *Service) Refresh(ctx context.Context, raw string) (Session, error) {
 	row, err := s.queries.GetRefreshToken(ctx, hashRefreshToken(raw))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
+			revoked, err := s.queries.RefreshTokenRevoked(ctx, hashRefreshToken(raw))
+			if err != nil {
+				return Session{}, fmt.Errorf("lookup refresh revocation: %w", err)
+			}
+			if revoked {
+				return Session{}, ErrRevokedRefreshToken
+			}
 			return Session{}, ErrInvalidRefreshToken
 		}
 		return Session{}, fmt.Errorf("lookup refresh token: %w", err)
+	}
+	if row.UsedAt == nil && !row.ExpiresAt.After(time.Now()) {
+		return Session{}, ErrInvalidRefreshToken
 	}
 	if row.UsedAt != nil {
 		slog.Warn("refresh token reused", "user_id", row.UserID)
@@ -126,7 +137,7 @@ func (s *Service) Refresh(ctx context.Context, raw string) (Session, error) {
 		if recordErr != nil {
 			return Session{}, recordErr
 		}
-		return Session{}, ErrInvalidRefreshToken
+		return Session{}, ErrRevokedRefreshToken
 	}
 
 	// A token issued before the account's last revocation is dead even if it
@@ -137,7 +148,7 @@ func (s *Service) Refresh(ctx context.Context, raw string) (Session, error) {
 			return Session{}, err
 		}
 		if !since.IsZero() && !row.IssuedAt.After(since) {
-			return Session{}, ErrInvalidRefreshToken
+			return Session{}, ErrRevokedRefreshToken
 		}
 	}
 
@@ -161,7 +172,7 @@ func (s *Service) Refresh(ctx context.Context, raw string) (Session, error) {
 		return Session{}, fmt.Errorf("get user: %w", err)
 	}
 	if user.SessionsRevokedAt != nil && !row.IssuedAt.After(*user.SessionsRevokedAt) {
-		return Session{}, ErrInvalidRefreshToken
+		return Session{}, ErrRevokedRefreshToken
 	}
 	// The update is the rotation: it only matches a token that is still unspent
 	// and unexpired, so two concurrent requests cannot both be served.
