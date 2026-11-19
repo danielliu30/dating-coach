@@ -587,13 +587,13 @@ func (s *Service) claimGoogleUser(ctx context.Context, userID uuid.UUID) (db.Use
 	if err != nil {
 		return db.User{}, fmt.Errorf("mark google account verified: %w", err)
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return db.User{}, fmt.Errorf("commit google claim: %w", err)
-	}
 	if s.denylist != nil {
 		if err := s.denylist.RevokeSessionsAt(ctx, userID, at); err != nil {
 			return db.User{}, err
 		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return db.User{}, fmt.Errorf("commit google claim: %w", err)
 	}
 	return user, nil
 }

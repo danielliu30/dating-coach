@@ -3,10 +3,13 @@ package auth
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 )
 
 // stubGoogle is a GoogleTokenVerifier that maps token strings to identities;
@@ -203,7 +206,7 @@ func TestClaimGoogleUserMissing(t *testing.T) {
 }
 
 func TestSignInWithGoogleRevocationFailure(t *testing.T) {
-	svc, _, pool := newTestService(t)
+	svc, issuer, pool := newTestService(t)
 	ctx := context.Background()
 	email := "google-revoke-failure-" + uuid.NewString() + "@example.com"
 	t.Cleanup(func() {
@@ -212,10 +215,12 @@ func TestSignInWithGoogleRevocationFailure(t *testing.T) {
 		}
 	})
 	const password = "correct-horse"
-	if _, err := svc.SignUp(ctx, SignUpInput{Email: email, Password: password, DisplayName: "Failure"}); err != nil {
+	attacker, err := svc.SignUp(ctx, SignUpInput{Email: email, Password: password, DisplayName: "Failure"})
+	if err != nil {
 		t.Fatal(err)
 	}
 	svc.SetGoogleVerifier(stubGoogle{"good": {Email: email}})
+	redisOptions := svc.denylist.rdb.Options()
 	if err := svc.denylist.rdb.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -224,8 +229,39 @@ func TestSignInWithGoogleRevocationFailure(t *testing.T) {
 		t.Fatalf("revocation failure returned session: %+v, err=%v", session, err)
 	}
 	user, err := svc.queries.GetUserByEmail(ctx, email)
-	if err != nil || user.PasswordHash != NoPasswordHash || user.SessionsRevokedAt == nil {
-		t.Fatalf("durable claim lost after Redis failure: %+v, err=%v", user, err)
+	if err != nil || user.EmailVerified || user.PasswordHash == NoPasswordHash || user.SessionsRevokedAt != nil {
+		t.Fatalf("claim did not roll back after Redis failure: %+v, err=%v", user, err)
+	}
+	rdb := redis.NewClient(redisOptions)
+	t.Cleanup(func() { _ = rdb.Close() })
+	svc.denylist = NewDenylist(rdb, 15*time.Minute)
+	session, err = svc.SignInWithGoogle(ctx, GoogleSignInInput{IDToken: "good"})
+	if err != nil || !session.User.EmailVerified {
+		t.Fatalf("retry Google sign in: verified=%v, err=%v", session.User.EmailVerified, err)
+	}
+	protected := Middleware(issuer, nil, svc.denylist)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	for _, tc := range []struct {
+		name   string
+		token  string
+		status int
+	}{
+		{"attacker", attacker.Token, http.StatusUnauthorized},
+		{"victim", session.Token, http.StatusNoContent},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+			req.Header.Set("Authorization", "Bearer "+tc.token)
+			resp := httptest.NewRecorder()
+			protected.ServeHTTP(resp, req)
+			if resp.Code != tc.status {
+				t.Fatalf("status = %d, want %d", resp.Code, tc.status)
+			}
+		})
+	}
+	if _, err := svc.Refresh(ctx, session.RefreshToken); err != nil {
+		t.Fatalf("victim refresh after retry: %v", err)
 	}
 	if _, err := svc.SignIn(ctx, email, password); !errors.Is(err, ErrInvalidCredentials) {
 		t.Fatalf("password after revocation failure = %v, want invalid credentials", err)
