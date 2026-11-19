@@ -95,14 +95,16 @@ def extract_profile_evidence(messages: Sequence[Message]) -> ProfileEvidence:
             continue
         engagement = engagement or [message.position]
         open_misses = [c for c in constraints.values() if c.missed is not None]
-        if repair_prefix and len(open_misses) == 1:
+        if len(open_misses) == 1:
             constraint = open_misses[0]
             assert constraint.missed is not None
             prior, match_turn = constraint.missed
-            unresolved.discard(prior)
-            constraint.missed = None
-            if match_turn == last_match:
-                repair = repair or [prior, message.position]
+            prompted = match_turn != last_match
+            if repair_prefix or (prompted and constraint.stated == last_match):
+                unresolved.discard(prior)
+                constraint.missed = None
+                if repair_prefix and not prompted:
+                    repair = repair or [prior, message.position]
 
     evidence = ProfileEvidence(
         coverage="eligible",
