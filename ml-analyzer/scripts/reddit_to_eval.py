@@ -41,11 +41,11 @@ SPEAKER = re.compile(
 SCRUB = [
     (re.compile(r"https?://\S+|www\.\S+"), "[link]"),
     (re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.]+\b"), "[email]"),
+    (re.compile(r"(?<!\w)@[\w.]{2,}"), "[handle]"),
     (re.compile(r"\b[\w-]+\.(?:com|net|org|io|me|co|app|gg|tv|ly)(?:/\S*)?", re.IGNORECASE), "[link]"),
     (re.compile(r"(?<!\w)(?:\+?\d[\d\s().-]{7,}\d)(?!\w)"), "[phone]"),
     (re.compile(r"(?<!\w)\d{3}[\s.-]\d{4}(?!\w)"), "[phone]"),
     (re.compile(r"(?<!\w)/?u/[\w-]+"), "[user]"),
-    (re.compile(r"(?<!\w)@[\w.]{2,}"), "[handle]"),
 ]
 
 

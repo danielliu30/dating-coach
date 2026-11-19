@@ -107,3 +107,7 @@ def test_bold_labels_and_bold_edits_are_parsed():
 def test_scrub_removes_short_phones_bare_domains_and_name_parts():
     out = reddit_to_eval.scrub("Jane says call 555-0199 or see instagram.com/jess_private", ["Jane Doe", "Jane", "Doe"])
     assert out == "Match says call [phone] or see [link]"
+
+
+def test_dotted_handles_are_removed_whole():
+    assert reddit_to_eval.scrub("add me @jess.cooper or mail a@b.com") == "add me [handle] or mail [email]"
