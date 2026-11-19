@@ -617,6 +617,32 @@ def test_brain_renders_all_three_pillars() -> None:
     assert "FEEDBACK:" not in agency
 
 
+def test_brain_v3_principles_cover_the_clients_own_feelings() -> None:
+    """brain-v3 adds own-feelings principles that surface only via patterns and reflection questions."""
+    from app.coaching import AGENCY, BRAIN_VERSION, SUPPORT, enforce_agency
+    from app.scoring.llm import SYSTEM_PROMPT
+
+    assert BRAIN_VERSION == "brain-v3"
+    support = " ".join(SUPPORT.principles)
+    for phrase in ("anxiety", "over-investing", "ambivalence", "mixed feelings", "only in patterns and reflection questions"):
+        assert phrase in support
+        assert phrase in SYSTEM_PROMPT
+    assert "never attribute feelings, motives or interest to the match" in support
+    assert any("what they actually want" in p for p in AGENCY.principles)
+
+    # The feelings named are the client's own, so the gate lets them through...
+    enforce_agency(
+        [
+            "You followed up three times after Message 2 went unanswered; was waiting on a reply making you anxious?",
+            "You were putting in more than came back here. Part of you seems keen and part unsure; what does each part want?",
+            "What do you actually want from this conversation, and did your messages move toward it?",
+        ]
+    )
+    # ...while attributing feelings to the match is still mind-reading.
+    with pytest.raises(ValueError, match="mind-read"):
+        enforce_agency(["She seems nervous about meeting up."])
+
+
 def test_pillars_are_looked_up_by_stable_key() -> None:
     """Each pillar has a unique lowercase key; lookups normalise case and keep PILLARS order."""
     from app.coaching import AGENCY, FEEDBACK, PILLAR_KEYS, PILLARS, SUPPORT, pillar_by_key, pillars_by_keys
