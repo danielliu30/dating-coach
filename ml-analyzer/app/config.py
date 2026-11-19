@@ -20,6 +20,9 @@ class Settings:
     # Directory holding a fine-tuned checkpoint produced by train.py.
     model_dir: str
     segment_size: int
+    # Ceiling on the LLM scorer's output token budget, which otherwise grows
+    # with the number of segments in the conversation.
+    llm_max_output_tokens: int = 8192
 
     @property
     def llm_configured(self) -> bool:
@@ -29,6 +32,14 @@ class Settings:
 def env(name: str, fallback: str) -> str:
     """Read an env var, treating an empty value as unset."""
     return os.getenv(name, "").strip() or fallback
+
+
+def positive_int(name: str, fallback: str) -> int:
+    """Read an env var as an integer of at least 1, raising ValueError otherwise."""
+    value = int(env(name, fallback))
+    if value < 1:
+        raise ValueError(f"{name} must be at least 1, got {value}")
+    return value
 
 
 @lru_cache
@@ -52,4 +63,5 @@ def get_settings() -> Settings:
         llm_timeout=float(env("LLM_TIMEOUT_SECONDS", "45")),
         model_dir=env("ML_MODEL_DIR", "artifacts/segment-scorer"),
         segment_size=int(env("ML_SEGMENT_SIZE", "4")),
+        llm_max_output_tokens=positive_int("LLM_MAX_OUTPUT_TOKENS", "8192"),
     )
