@@ -63,9 +63,9 @@ func TestSignInWithGoogleCreatesVerifiedAccount(t *testing.T) {
 
 // TestSignInWithGoogleVerifiesExistingPasswordAccount covers an account that
 // signed up with a password but never entered its code: Google confirming the
-// same address marks it verified and signs it in, and its password still works.
+// same address removes the untrusted credentials before signing the owner in.
 func TestSignInWithGoogleVerifiesExistingPasswordAccount(t *testing.T) {
-	svc, _, pool := newTestService(t)
+	svc, issuer, pool := newTestService(t)
 	ctx := context.Background()
 
 	const password = "correct-horse"
@@ -75,8 +75,19 @@ func TestSignInWithGoogleVerifiesExistingPasswordAccount(t *testing.T) {
 			t.Errorf("delete test user: %v", err)
 		}
 	})
-	if _, err := svc.SignUp(ctx, SignUpInput{Email: email, Password: password, DisplayName: "Link Test"}); err != nil {
+	attacker, err := svc.SignUp(ctx, SignUpInput{Email: email, Password: password, DisplayName: "Link Test"})
+	if err != nil {
 		t.Fatalf("sign up: %v", err)
+	}
+	user, err := svc.queries.GetUserByEmail(ctx, email)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Unverified sign-ups receive only a verify token; seed a refresh token to
+	// cover sessions issued before that restriction too.
+	refresh, err := svc.issueRefreshToken(ctx, svc.queries, user, uuid.Nil)
+	if err != nil {
+		t.Fatal(err)
 	}
 	if _, err := svc.SignIn(ctx, email, password); !errors.Is(err, ErrEmailNotVerified) {
 		t.Fatalf("sign in before verifying = %v, want %v", err, ErrEmailNotVerified)
@@ -90,15 +101,33 @@ func TestSignInWithGoogleVerifiesExistingPasswordAccount(t *testing.T) {
 	if !session.User.EmailVerified || session.User.DisplayName != "Link Test" || session.User.Role != RoleUser {
 		t.Fatalf("profile after google sign in = %+v, want verified existing user", session.User)
 	}
-	if _, err := svc.SignIn(ctx, email, password); err != nil {
-		t.Fatalf("password sign in after google verified the address: %v", err)
+	if _, err := svc.SignIn(ctx, email, password); !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("attacker password sign in = %v, want invalid credentials", err)
+	}
+	if _, err := svc.Refresh(ctx, refresh); !errors.Is(err, ErrInvalidRefreshToken) {
+		t.Fatalf("attacker refresh = %v, want invalid refresh token", err)
+	}
+	claims, err := issuer.Parse(attacker.Token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	since, err := svc.denylist.RevokedSince(ctx, user.ID)
+	if err != nil || since.IsZero() || claims.IssuedAt.After(since) {
+		t.Fatalf("attacker session not revoked: cutoff=%v err=%v", since, err)
+	}
+	assertTokenScope(t, issuer, session.Token, ScopeSession, 15*time.Minute)
+	if _, err := svc.Refresh(ctx, session.RefreshToken); err != nil {
+		t.Fatalf("victim refresh: %v", err)
+	}
+	stored, err := svc.queries.GetUserByID(ctx, user.ID)
+	if err != nil || !stored.EmailVerified || stored.PasswordHash != NoPasswordHash || stored.SessionsRevokedAt == nil {
+		t.Fatalf("claimed account = %+v, err=%v", stored, err)
 	}
 }
 
 // TestCreateGoogleUserRecoversLostRace covers the insert losing to a password
 // sign-up that landed between lookup and insert: the unique violation resolves
-// to that account, marked verified because Google confirmed the address, so
-// both its password and Google keep working.
+// to that account, removing the unverified password before verifying it.
 func TestCreateGoogleUserRecoversLostRace(t *testing.T) {
 	svc, _, pool := newTestService(t)
 	ctx := context.Background()
@@ -118,11 +147,88 @@ func TestCreateGoogleUserRecoversLostRace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("createGoogleUser after a lost race: %v", err)
 	}
-	if !user.EmailVerified || user.DisplayName != "Race Test" || user.Role != RoleUser || user.PasswordHash == NoPasswordHash {
-		t.Fatalf("recovered user = %+v, want the verified password account", user)
+	if !user.EmailVerified || user.DisplayName != "Race Test" || user.Role != RoleUser || user.PasswordHash != NoPasswordHash {
+		t.Fatalf("recovered user = %+v, want verified password-less account", user)
+	}
+	if _, err := svc.SignIn(ctx, email, password); !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("password sign in after recovery = %v, want invalid credentials", err)
+	}
+}
+
+func TestSignInWithGooglePreservesVerifiedPasswordAccount(t *testing.T) {
+	svc, _, pool := newTestService(t)
+	ctx := context.Background()
+	email := "google-verified-" + uuid.NewString() + "@example.com"
+	t.Cleanup(func() {
+		if _, err := pool.Exec(ctx, "DELETE FROM users WHERE email = $1", email); err != nil {
+			t.Errorf("delete test user: %v", err)
+		}
+	})
+	const password = "correct-horse"
+	signup, err := svc.SignUp(ctx, SignUpInput{Email: email, Password: password, DisplayName: "Verified"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.queries.VerifyUserEmail(ctx, uuid.MustParse(signup.User.ID)); err != nil {
+		t.Fatal(err)
+	}
+	before, err := svc.SignIn(ctx, email, password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.SetGoogleVerifier(stubGoogle{"good": {Email: email, Name: "Ignored"}})
+	session, err := svc.SignInWithGoogle(ctx, GoogleSignInInput{IDToken: "good", Role: RoleCoach})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.User.ID != before.User.ID || !session.User.EmailVerified || session.User.DisplayName != "Verified" || session.User.Role != RoleUser {
+		t.Fatalf("linked profile = %+v", session.User)
 	}
 	if _, err := svc.SignIn(ctx, email, password); err != nil {
-		t.Fatalf("password sign in after recovery: %v", err)
+		t.Fatalf("verified password sign in: %v", err)
+	}
+	if _, err := svc.Refresh(ctx, before.RefreshToken); err != nil {
+		t.Fatalf("existing verified refresh: %v", err)
+	}
+	if since, err := svc.denylist.RevokedSince(ctx, uuid.MustParse(before.User.ID)); err != nil || !since.IsZero() {
+		t.Fatalf("verified account revoked: %v, err=%v", since, err)
+	}
+}
+
+func TestClaimGoogleUserMissing(t *testing.T) {
+	svc, _, _ := newTestService(t)
+	if _, err := svc.claimGoogleUser(context.Background(), uuid.New()); !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("claim missing account = %v, want invalid credentials", err)
+	}
+}
+
+func TestSignInWithGoogleRevocationFailure(t *testing.T) {
+	svc, _, pool := newTestService(t)
+	ctx := context.Background()
+	email := "google-revoke-failure-" + uuid.NewString() + "@example.com"
+	t.Cleanup(func() {
+		if _, err := pool.Exec(ctx, "DELETE FROM users WHERE email = $1", email); err != nil {
+			t.Errorf("delete test user: %v", err)
+		}
+	})
+	const password = "correct-horse"
+	if _, err := svc.SignUp(ctx, SignUpInput{Email: email, Password: password, DisplayName: "Failure"}); err != nil {
+		t.Fatal(err)
+	}
+	svc.SetGoogleVerifier(stubGoogle{"good": {Email: email}})
+	if err := svc.denylist.rdb.Close(); err != nil {
+		t.Fatal(err)
+	}
+	session, err := svc.SignInWithGoogle(ctx, GoogleSignInInput{IDToken: "good"})
+	if err == nil || session.Token != "" || session.RefreshToken != "" {
+		t.Fatalf("revocation failure returned session: %+v, err=%v", session, err)
+	}
+	user, err := svc.queries.GetUserByEmail(ctx, email)
+	if err != nil || user.PasswordHash != NoPasswordHash || user.SessionsRevokedAt == nil {
+		t.Fatalf("durable claim lost after Redis failure: %+v, err=%v", user, err)
+	}
+	if _, err := svc.SignIn(ctx, email, password); !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("password after revocation failure = %v, want invalid credentials", err)
 	}
 }
 
