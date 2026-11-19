@@ -141,8 +141,8 @@ def _long_request(message_count: int) -> AnalyzeRequest:
 @pytest.mark.parametrize(
     ("message_count", "cap", "expected"),
     [
-        pytest.param(4, 8192, 1800 + 2 * 150, id="short"),
-        pytest.param(40, 8192, 1800 + 20 * 150, id="long"),
+        pytest.param(4, 8192, output_token_budget(2, (), cap=100_000), id="short"),
+        pytest.param(40, 8192, output_token_budget(20, (), cap=100_000), id="long"),
         pytest.param(120, 8192, 8192, id="capped-default"),
         pytest.param(120, 3000, 3000, id="capped-configured"),
     ],
