@@ -104,7 +104,7 @@ def _install_fake_libraries(
 def test_missing_checkpoint_explains_llm_fallback(tmp_path) -> None:
     """A missing trained checkpoint reports its path and the ML_BACKEND=llm escape hatch."""
     scorer = TrainedScorer(_settings(str(tmp_path / "missing")))
-    assert scorer.version == "trained-v2-missing+agency-v3+transcript-v2"
+    assert scorer.version == "trained-v3-missing+agency-v3+transcript-v2"
     with pytest.raises(RuntimeError, match=r"no checkpoint at .*ML_BACKEND=llm"):
         asyncio.run(scorer.analyze(_request()))
 
@@ -117,7 +117,7 @@ def test_fake_checkpoint_inference_is_clamped_and_loaded_once(tmp_path, monkeypa
     _install_fake_libraries(monkeypatch, [1.7, -0.4, 0.5], load_counts)
     scorer = TrainedScorer(_settings(str(checkpoint)))
     result = asyncio.run(scorer.analyze(_request()))
-    assert result.model_version == "trained-v2-ckpt+agency-v3+transcript-v2"
+    assert result.model_version == "trained-v3-ckpt+agency-v3+transcript-v2"
     assert len(result.segments) == 3
     assert [segment.engagement_score for segment in result.segments] == [1.0, 0.0, 0.5]
     assert result.overall.engagement_score == 0.5
@@ -158,3 +158,18 @@ def test_inference_text_matches_training_rows(tmp_path, monkeypatch: pytest.Monk
     expected = training_transcript([LabeledMessage(i, sender, body, at) for i, (sender, body, at) in enumerate(rows)])
     assert seen == [expected]
     assert expected.startswith("[meta] match_latency_min=12 self_latency_min=na self_msgs=1 match_msgs=1\n")
+
+
+def test_trained_feedback_carries_the_long_conversation_patterns(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The trained scorer shows the same pattern list as the heuristic, not just the reciprocity ones."""
+    import app.scoring.trained as trained
+
+    checkpoint = tmp_path / "ckpt"
+    checkpoint.mkdir()
+    _install_fake_libraries(monkeypatch, [0.5, 0.5, 0.5], {"tokenizer": 0, "model": 0})
+    seen = []
+    monkeypatch.setattr(trained, "conversation_patterns", lambda messages: seen.append(messages) or ["long-pattern"])
+    request = _request()
+    result = asyncio.run(TrainedScorer(_settings(str(checkpoint))).analyze(request))
+    assert result.overall.patterns == ["long-pattern"]
+    assert seen == [request.messages]

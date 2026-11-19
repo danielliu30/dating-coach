@@ -331,7 +331,7 @@ def test_trained_scores_only_windows_with_self_messages(monkeypatch: pytest.Monk
     assert response.segments[1].comment == "No messages from you in this stretch; the match was carrying it."
     assert all(s.comment for s in response.segments)
     assert response.overall.engagement_score == pytest.approx(0.55)
-    assert response.model_version == "trained-v2-ckpt+agency-v3+transcript-v2"
+    assert response.model_version == "trained-v3-ckpt+agency-v3+transcript-v2"
     assert response.overall.strengths and response.overall.improvements
     assert response.overall.summary != "Scored by the fine-tuned engagement model."
 
