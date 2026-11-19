@@ -69,3 +69,26 @@ def test_diff_lists_conversations_missing_from_one_run() -> None:
     report = eval_compare.diff_report([record], [dict(record, conversation_id="c2", label="b")])
     assert "0 shared conversations" in report
     assert "only in base ['c1'], only in candidate ['c2']" in report
+
+
+def test_segment_error_uses_overlapping_predictions_when_boundaries_differ() -> None:
+    """A human label on [0-3] is still compared when the scorer emits [0-1] and [2-3]."""
+    import asyncio
+
+    from app.scoring.heuristic import HeuristicScorer
+    from training.dataset import TrainingExample
+
+    record = asyncio.run(eval_compare.run_one(TrainingExample.from_json(ROW), HeuristicScorer(2), "s"))
+    assert len(record["response"]["segments"]) == 2
+    assert record["quality"]["label_coverage"] == 1.0
+    assert record["quality"]["segment_mae"] is not None
+
+
+def test_llm_run_without_key_refuses_instead_of_scoring_heuristics(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    try:
+        eval_compare.main(["run", "--backend", "llm", "--label", "x", "--out", str(tmp_path / "x.jsonl")])
+    except SystemExit as exc:
+        assert "LLM_API_KEY" in str(exc)
+    else:
+        raise AssertionError("expected SystemExit")

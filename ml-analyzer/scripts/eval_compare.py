@@ -52,6 +52,7 @@ REPORT_METRICS = (
     "agency_ok",
     "fallback",
     "segment_mae",
+    "label_coverage",
 )
 # Lower is better for these; every other metric improves upward.
 LOWER_IS_BETTER = {"fallback", "segment_mae"}
@@ -87,13 +88,19 @@ async def run_one(example: TrainingExample, scorer: Scorer, label: str) -> Dict[
     request = to_request(example)
     response = await scorer.analyze(request)
     quality = score_response(response, request.messages, example.expected_themes, example.match_name)
-    human = {(s.start_position, s.end_position): s.engagement_score for s in example.segments}
-    pairs = [
-        (human[(s.start_position, s.end_position)], s.engagement_score)
-        for s in response.segments
-        if (s.start_position, s.end_position) in human
-    ]
+    # Each human segment is compared with the mean of the predicted segments overlapping it, so a
+    # backend with different boundaries is still scored on every labelled stretch.
+    pairs = []
+    for human in example.segments:
+        overlapping = [
+            s.engagement_score
+            for s in response.segments
+            if s.start_position <= human.end_position and s.end_position >= human.start_position
+        ]
+        if overlapping:
+            pairs.append((human.engagement_score, sum(overlapping) / len(overlapping)))
     quality["segment_mae"] = mae([h for h, _ in pairs], [p for _, p in pairs]) if pairs else math.nan
+    quality["label_coverage"] = len(pairs) / len(example.segments) if example.segments else math.nan
     return {
         "label": label,
         "conversation_id": example.conversation_id,
@@ -269,6 +276,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         settings = replace(settings, backend=args.backend)
     if args.checkpoint:
         settings = replace(settings, model_dir=args.checkpoint)
+    if settings.backend == "llm" and not settings.llm_configured:
+        # build_scorer would silently serve the heuristic, and the run would report 0 fallbacks.
+        raise SystemExit("eval_compare: --backend llm needs LLM_API_KEY; use --backend heuristic for a heuristic run")
     examples = [
         e for path in (args.data or DEFAULT_DATA) for e in load_jsonl(path, require_consent=not args.include_unconsented)
     ]
