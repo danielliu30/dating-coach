@@ -17,17 +17,25 @@ const (
 // VerificationCache stores short-lived email verification codes and their
 // failed-attempt counters in Redis.
 type VerificationCache struct {
-	rdb    *redis.Client
-	ttl    time.Duration
-	prefix string
+	rdb      *redis.Client
+	ttl      time.Duration
+	prefix   string
+	cooldown time.Duration
 }
 
 func NewVerificationCache(rdb *redis.Client, ttl time.Duration) *VerificationCache {
 	return &VerificationCache{rdb: rdb, ttl: ttl, prefix: "verify"}
 }
 
-func NewResetCache(rdb *redis.Client, ttl time.Duration) *VerificationCache {
-	return &VerificationCache{rdb: rdb, ttl: ttl, prefix: "reset"}
+func NewResetCache(rdb *redis.Client, ttl, cooldown time.Duration) *VerificationCache {
+	return &VerificationCache{rdb: rdb, ttl: ttl, prefix: "reset", cooldown: cooldown}
+}
+
+func (c *VerificationCache) AllowSend(ctx context.Context, userID string) (bool, error) {
+	if c.cooldown <= 0 {
+		return true, nil
+	}
+	return c.rdb.SetNX(ctx, c.prefix+":cooldown:"+userID, "1", c.cooldown).Result()
 }
 
 func (c *VerificationCache) codeKey(userID string) string {

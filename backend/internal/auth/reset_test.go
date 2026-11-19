@@ -15,6 +15,62 @@ import (
 	"github.com/danielliu30/dating-coach/backend/internal/store/db"
 )
 
+type resetNotifier struct {
+	silentNotifier
+	sent int
+}
+
+func (n *resetNotifier) Email(context.Context, string, string, string) error {
+	n.sent++
+	return nil
+}
+
+func TestForgotPasswordCooldown(t *testing.T) {
+	svc, _, pool := newTestService(t)
+	ctx := context.Background()
+	email := "reset-cooldown-" + uuid.NewString() + "@example.com"
+	signup, err := svc.SignUp(ctx, SignUpInput{Email: email, Password: "old-password", DisplayName: "Reset"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM users WHERE email=$1", email) })
+	cache, mr := newTestCache(t)
+	svc.resetCodes = NewResetCache(cache.rdb, 15*time.Minute, time.Minute)
+	notifier := &resetNotifier{}
+	svc.notifier = notifier
+	if err := svc.ForgotPassword(ctx, email); err != nil {
+		t.Fatal(err)
+	}
+	code, _, _ := svc.resetCodes.Get(ctx, signup.User.ID)
+	if err := svc.ForgotPassword(ctx, email); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, _ := svc.resetCodes.Get(ctx, signup.User.ID); got != code {
+		t.Fatal("cooldown replaced code")
+	}
+	for range 3 {
+		if err := svc.ResetPassword(ctx, email, "wrong", "new-password"); !errors.Is(err, ErrInvalidResetCode) {
+			t.Fatal(err)
+		}
+	}
+	if err := svc.ForgotPassword(ctx, email); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, _ := svc.resetCodes.Get(ctx, signup.User.ID); got != "" {
+		t.Fatal("cooldown bypassed after wrong attempts")
+	}
+	if notifier.sent != 1 {
+		t.Fatalf("emails=%d", notifier.sent)
+	}
+	mr.FastForward(time.Minute)
+	if err := svc.ForgotPassword(ctx, email); err != nil {
+		t.Fatal(err)
+	}
+	if notifier.sent != 2 {
+		t.Fatalf("emails=%d", notifier.sent)
+	}
+}
+
 func TestPasswordReset(t *testing.T) {
 	svc, _, pool := newTestService(t)
 	ctx := context.Background()
@@ -188,7 +244,7 @@ func TestPasswordResetGoogleAndDeletedAccounts(t *testing.T) {
 
 func TestPasswordResetCacheIsolationAndExpiry(t *testing.T) {
 	verify, mr := newTestCache(t)
-	reset := NewResetCache(verify.rdb, 15*time.Minute)
+	reset := NewResetCache(verify.rdb, 15*time.Minute, 0)
 	ctx := context.Background()
 	if err := verify.Store(ctx, "user", "111111"); err != nil {
 		t.Fatal(err)
@@ -217,7 +273,7 @@ func TestPasswordResetCacheIsolationAndExpiry(t *testing.T) {
 func TestPasswordResetRejectsExpiredCode(t *testing.T) {
 	svc, _, pool := newTestService(t)
 	cache, mr := newTestCache(t)
-	svc.resetCodes = NewResetCache(cache.rdb, 2*time.Minute)
+	svc.resetCodes = NewResetCache(cache.rdb, 2*time.Minute, 0)
 	ctx := context.Background()
 	email := "reset-expired-" + uuid.NewString() + "@example.com"
 	signup, err := svc.SignUp(ctx, SignUpInput{Email: email, Password: "old-password", DisplayName: "Reset"})

@@ -24,6 +24,13 @@ func (s *Service) ForgotPassword(ctx context.Context, email string) error {
 	if err != nil {
 		return fmt.Errorf("lookup reset account: %w", err)
 	}
+	allowed, err := s.resetCodes.AllowSend(ctx, user.ID.String())
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return nil
+	}
 	code, err := randomCode()
 	if err != nil {
 		return err
