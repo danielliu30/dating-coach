@@ -6,7 +6,7 @@ from typing import List, Optional, Sequence, Tuple
 from app.coaching import enforce_agency
 from app.schemas import Message
 from app.scoring.base import _parse_sent_at
-from app.scoring.heuristic import energy_trend_patterns, reinitiation_patterns
+from app.scoring.heuristic import energy_trend_patterns, reinitiation_patterns, streak_patterns
 
 
 def _conversation(turns: Sequence[Tuple[str, str]], sent_at: Optional[Sequence[Optional[str]]] = None) -> List[Message]:
@@ -148,3 +148,31 @@ def test_reinitiation_keeps_quick_replies_after_a_pause() -> None:
         assert restart is not None
         messages[i] = messages[i].model_copy(update={"sent_at": (restart + timedelta(milliseconds=500)).isoformat()})
     assert reinitiation_patterns(messages) == []
+
+
+def _by_sender(senders: str) -> List[Message]:
+    return [Message(position=i, sender="self" if c == "s" else "match", body=f"message {i}") for i, c in enumerate(senders)]
+
+
+def test_streaks_name_repeated_double_and_triple_texting() -> None:
+    messages = _by_sender("smssmsssmmsmssssmsm" + "sm" * 12 + "ss")
+    patterns = streak_patterns(messages)
+
+    assert patterns == [
+        "You sent two or more messages in a row without a reply in between 4 times "
+        "(starting at Messages 3, 6, 13 and 44); they did that once. The longest run was 4 messages (Messages 13-16)."
+    ]
+    _assert_agency_safe(patterns)
+
+    never = _by_sender("sssmssmssm")
+    assert streak_patterns(never) == [
+        "You sent two or more messages in a row without a reply in between 3 times "
+        "(starting at Messages 1, 5 and 8); they never did. The longest run was 3 messages (Messages 1-3)."
+    ]
+
+
+def test_streaks_stay_silent_when_rare_or_mutual() -> None:
+    assert streak_patterns(_by_sender("sm" * 30)) == []
+    assert streak_patterns(_by_sender("ssmsmssm" + "sm" * 20)) == []
+    # Both sides text in bursts: a texting style, not one side carrying it.
+    assert streak_patterns(_by_sender("ssmmssmmssmm")) == []

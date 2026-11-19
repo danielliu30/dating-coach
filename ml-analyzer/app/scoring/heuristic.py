@@ -368,6 +368,53 @@ def reinitiation_patterns(messages: Sequence[Message]) -> List[str]:
     return []
 
 
+# Fewest runs of consecutive customer messages before the habit is named.
+MIN_STREAKS = 3
+
+
+def _runs(ordered: Sequence[Message], sender: str) -> List[List[Message]]:
+    """Runs of two or more consecutive ``sender`` messages in already position-ordered ``ordered``."""
+    runs: List[List[Message]] = []
+    current: List[Message] = []
+    for message in ordered:
+        if message.sender == sender:
+            current.append(message)
+            continue
+        if len(current) >= 2:
+            runs.append(current)
+        current = []
+    if len(current) >= 2:
+        runs.append(current)
+    return runs
+
+
+def streak_patterns(messages: Sequence[Message]) -> List[str]:
+    """Name it when the customer habitually sends several messages in a row (double/triple texting).
+
+    A streak is a run of two or more consecutive ``self`` messages in position
+    order, with no match message in between (a run that ends the conversation
+    counts too). When the customer has at least ``MIN_STREAKS`` streaks and at
+    least ``RECIPROCITY_RATIO`` times as many as the match, one sentence gives
+    the count, how the match compares, where the streaks start and the longest
+    run, e.g. "You sent two or more messages in a row without a reply in
+    between 4 times (starting at Messages 3, 9, 20 and 31); they did that
+    once. The longest run was 4 messages (Messages 20-23)." Only the habit is
+    described, never what the customer should do about it.
+    """
+    ordered = sorted(messages, key=lambda m: m.position)
+    own = _runs(ordered, "self")
+    theirs = _runs(ordered, "match")
+    if len(own) < MIN_STREAKS or len(own) < RECIPROCITY_RATIO * len(theirs):
+        return []
+    longest = max(own, key=len)
+    comparison = f"they did that {_times_word(len(theirs))}" if theirs else "they never did"
+    return [
+        f"You sent two or more messages in a row without a reply in between {len(own)} times "
+        f"(starting at {_cite([run[0] for run in own])}); {comparison}. "
+        f"The longest run was {len(longest)} messages ({_span(longest)})."
+    ]
+
+
 def reflection_questions(
     reviews: Sequence[SelfMessageReview],
     patterns: Sequence[str],
@@ -549,18 +596,23 @@ def _label(message: Message) -> str:
     return f"Message {message.position + 1}"
 
 
+# Shared by the heuristic and trained backends, which word feedback the same way.
+MAX_STRENGTHS = 5
+MAX_IMPROVEMENTS = 8
+
+
 def _excerpt(message: Message, limit: int = 40) -> str:
     body = " ".join(message.body.split())
     return repr(body if len(body) <= limit else body[: limit - 1] + "…")
 
 
 def _strengths(reviews: Sequence[SelfMessageReview]) -> List[str]:
-    """Acknowledge the customer's messages that drew a substantive reply (at most three)."""
+    """Acknowledge the customer's messages that drew a substantive reply (at most ``MAX_STRENGTHS``)."""
     good = [r for r in reviews if r.outcome == "good_reply"]
     good.sort(key=lambda r: r.score, reverse=True)
     return [
         f"{_label(r.message)} landed: it drew a detailed reply ({_excerpt(r.reply)})."  # type: ignore[arg-type]
-        for r in good[:3]
+        for r in good[:MAX_STRENGTHS]
     ]
 
 
@@ -570,7 +622,7 @@ def _improvements(reviews: Sequence[SelfMessageReview]) -> List[str]:
     Each hint states only the observable outcome (no reply, a short reply) and
     hands it back as a question, never a diagnosis: the match's reasons are
     unknowable, so nothing here claims to know them, and nothing suggests what
-    to say instead. At most five hints, in conversation order.
+    to say instead. At most ``MAX_IMPROVEMENTS`` hints, in conversation order.
     """
     hints: List[str] = []
     for r in reviews:
@@ -584,7 +636,7 @@ def _improvements(reviews: Sequence[SelfMessageReview]) -> List[str]:
                 f"{_label(r.message)} ({_excerpt(r.message)}) only drew a short reply ({_excerpt(r.reply)}). "  # type: ignore[arg-type]
                 "That's the pattern, not the reason — is it worth thinking about?"
             )
-    return hints[:5]
+    return hints[:MAX_IMPROVEMENTS]
 
 
 def _outcome_counts(reviews: Sequence[SelfMessageReview]) -> Dict[Outcome, int]:
