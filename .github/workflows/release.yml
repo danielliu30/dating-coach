@@ -135,6 +135,7 @@ jobs:
       DELETION_TOPIC: account.deletion
       EMAIL_TOPIC: email.outbox
       MAX_DELIVERY_ATTEMPTS: '5'
+      PAYMENTS_ENABLED: 'false'
     steps:
       - uses: google-github-actions/auth@v2
         with:
@@ -189,7 +190,7 @@ jobs:
           SMTP_USERNAME: "${{ vars.SMTP_USERNAME }}"
           MAIL_FROM: "${{ vars.MAIL_FROM }}"
           GOOGLE_CLIENT_ID: "${{ vars.GOOGLE_CLIENT_ID }}"
-          PAYMENTS_ENABLED: "false"
+          PAYMENTS_ENABLED: "$PAYMENTS_ENABLED"
           YAML
           sed -i 's/^ *//' backend.env.yaml
 
@@ -260,8 +261,11 @@ jobs:
               gcloud scheduler jobs create http "$1" --project "$PROJECT" "${args[@]}"
             fi
           }
-          job dating-coach-every-minute '* * * * *' \
-            '/tasks/batch?task=relay-emails&task=relay-deletions&task=expire-bookings&task=replay-revocations&task=check-email-outbox&task=sweep-payments'
+          minute_batch='/tasks/batch?task=relay-emails&task=relay-deletions&task=expire-bookings&task=replay-revocations&task=check-email-outbox'
+          if [ "$PAYMENTS_ENABLED" = true ]; then
+            minute_batch+='&task=sweep-payments'
+          fi
+          job dating-coach-every-minute '* * * * *' "$minute_batch"
           job dating-coach-hourly '0 * * * *' '/tasks/batch?task=purge-refresh-tokens'
 
       - name: Deploy api (public)

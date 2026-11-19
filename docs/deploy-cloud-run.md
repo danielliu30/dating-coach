@@ -14,7 +14,7 @@ Cloud Scheduler calls it.
 | Postgres | Neon free plan | `DATABASE_URL` with `?sslmode=require` |
 | Redis | Upstash free plan | `REDIS_URL` as `rediss://default:<password>@<host>:6379` |
 | Queue | Pub/Sub push | Topics `conversation.analysis`, `account.deletion`, `email.outbox`; 5 attempts, then `<topic>.dlq` |
-| Timers | Cloud Scheduler, 2 jobs | Every minute: emails, deletions outbox, booking expiry, revocation replay, email-outbox check, payment sweep. Hourly: refresh-token purge |
+| Timers | Cloud Scheduler, 2 jobs | Every minute: emails, deletions outbox, booking expiry, revocation replay, email-outbox check; payment sweep only when enabled. Hourly: refresh-token purge |
 
 Images are still built and pushed to Docker Hub (`danielliu30/*`) by
 `.github/workflows/release.yml`; Cloud Run pulls them from there.
@@ -24,6 +24,11 @@ Images are still built and pushed to Docker Hub (`danielliu30/*`) by
 - `POST /pubsub/analysis`, `/pubsub/account-deletion`: Pub/Sub push of a job. 2xx acks, 5xx makes Pub/Sub retry (10 s to 10 min backoff); after 5 attempts the message goes to `<topic>.dlq`, held 7 days on the `<topic>.dlq-hold` pull subscription for inspection or replay.
 - `POST /pubsub/email-outbox`: the API publishes a nudge right after saving an email (verification, reset codes), so mail goes out at once; the minutely sweep is only a backup.
 - `POST /tasks/<name>` and `POST /tasks/batch?task=a&task=b`: one pass of a timed loop. Cloud Scheduler calls the batch endpoint.
+- Payments default to disabled in the release job's `PAYMENTS_ENABLED` setting;
+  the scheduler omits `sweep-payments` in that mode. To enable payments, provision
+  `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET`, add them to the backend
+  deployments' secret bindings, and set that shared setting to `true`.
+  A batch containing an unregistered task returns 404 before running any task.
 - Auth is Cloud Run IAM: only the `dc-invoker` service account can call the worker.
 
 Local `docker compose` is unchanged (RabbitMQ, long-running worker, `QUEUE_BACKEND=rabbitmq` by default).
