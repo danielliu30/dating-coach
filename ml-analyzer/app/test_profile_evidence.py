@@ -84,6 +84,33 @@ def test_acknowledging_a_reminder_resolves_the_miss_but_is_not_self_correction()
     assert evidence.self_correction.level == "unknown"
 
 
+def test_a_new_miss_after_acknowledgment_still_counts_as_repeated():
+    evidence = extract_profile_evidence(_conversation(
+        "me: I'd like to try that cafe together.",
+        "them: I can't make Friday.",
+        "me: How about Friday?",
+        "them: I can't make Friday.",
+        "me: Got it, how about Saturday?",
+        "them: Let me check.",
+        "me: Would Friday work?",
+    ))
+    assert evidence.feedback_needed.issue == "repeated_ignored_constraint"
+    assert evidence.feedback_needed.self_positions == [4, 12]
+
+
+def test_only_unresolved_repeated_misses_require_more_coaching():
+    evidence = extract_profile_evidence(_conversation(
+        "me: I'd like to try that cafe together.",
+        "them: I can't make Friday.",
+        "me: How about Friday?",
+        "them: I can't make Friday.",
+        "me: Would Friday work?",
+        "me: Sorry, I missed that. How about Saturday?",
+    ))
+    assert evidence.feedback_needed.level == "strong"
+    assert evidence.self_correction.self_positions == [8, 10]
+
+
 @pytest.mark.parametrize("reply", ["Actually Friday works now.", "Sure, but Friday morning only."])
 def test_different_availability_is_not_a_repeated_coaching_need(reply):
     evidence = extract_profile_evidence(_conversation(
