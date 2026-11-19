@@ -417,6 +417,12 @@ DEPTH_MARKER = re.compile(
     r"what made you|why do you|what do you love|what matters|what drew you|how did you (get into|end up|decide))\b",
     re.IGNORECASE,
 )
+# The customer naming their own feeling outright; counts as going deeper at any length ("I feel lonely lately").
+OWN_FEELING = re.compile(
+    r"\b(i (feel|felt|worry|care about|value|realized|realised)|i(['\u2019]ve| have) always|"
+    r"i(['\u2019]m| am) (scared|afraid|proud|nervous|excited|lonely|sad|hurt|anxious))\b",
+    re.IGNORECASE,
+)
 # Word count from which a customer message counts as going deeper even without a ``DEPTH_MARKER``.
 DEEP_WORDS = 15
 # Most words a small-talk message can have; longer ones are judged on their content.
@@ -434,13 +440,18 @@ Depth = Literal["deep", "small_talk", "other"]
 def _depth(message: Message) -> Depth:
     """Classify one customer message as going deeper, small talk, or neither.
 
-    A message is ``deep`` when it has at least ``DEEP_WORDS`` words or, from
-    ``SMALL_TALK_WORDS + 1`` words, a ``DEPTH_MARKER``. Otherwise it is
+    A message is ``deep`` when it has at least ``DEEP_WORDS`` words, an
+    ``OWN_FEELING`` at any length or, from ``SMALL_TALK_WORDS + 1`` words, a
+    ``DEPTH_MARKER``. Otherwise it is
     ``small_talk`` when it is low-effort, at most ``SMALL_TALK_WORDS`` words
     or a ``SMALL_TALK`` check-in, and ``other`` when none of these apply.
     """
     words = _word_count(message)
-    if words >= DEEP_WORDS or (words > SMALL_TALK_WORDS and DEPTH_MARKER.search(message.body)):
+    if (
+        words >= DEEP_WORDS
+        or OWN_FEELING.search(message.body)
+        or (words > SMALL_TALK_WORDS and DEPTH_MARKER.search(message.body))
+    ):
         return "deep"
     if _is_low_effort(message) or words <= SMALL_TALK_WORDS or SMALL_TALK.search(message.body):
         return "small_talk"
