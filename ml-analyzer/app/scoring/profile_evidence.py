@@ -51,6 +51,7 @@ def extract_profile_evidence(messages: Sequence[Message]) -> ProfileEvidence:
     constraints: dict[str, _Constraint] = {}
     history: list[_Constraint] = []
     last_match = -1
+    proposed_day: str | None = None
     saw_miss = False
     clarity: list[int] = []
     engagement: list[int] = []
@@ -71,14 +72,18 @@ def extract_profile_evidence(messages: Sequence[Message]) -> ProfileEvidence:
                     history.append(constraints[day])
                 constraints[day].stated = i
             elif _INDIRECT_AVAILABILITY.fullmatch(body):
-                # Without a named day, don't guess which restriction still applies.
-                constraints.clear()
+                if proposed_day:
+                    constraints.pop(proposed_day, None)
+                else:
+                    constraints.clear()
             else:
                 # The other person may be reopening or qualifying availability.
                 for day in _DAY_WORD.findall(body):
                     constraints.pop(day, None)
+            proposed_day = None
             continue
 
+        proposed_day = None
         if not constraints:
             continue
         repair_prefix = _REPAIR.match(body)
@@ -87,6 +92,7 @@ def extract_profile_evidence(messages: Sequence[Message]) -> ProfileEvidence:
         if not proposal:
             continue
         day = proposal[1] or proposal[2]
+        proposed_day = day
         if day in constraints:
             constraint = constraints[day]
             saw_miss = True
