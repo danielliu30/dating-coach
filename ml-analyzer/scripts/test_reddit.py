@@ -95,3 +95,15 @@ def test_reddit_rows_never_load_for_training(tmp_path):
     assert load_jsonl(out) == []
     assert load_jsonl(out, require_consent=False, exclude_sources=TEST_ONLY_SOURCES) == []
     assert len(load_jsonl(out, require_consent=False)) == 1
+
+
+def test_bold_labels_and_bold_edits_are_parsed():
+    text = "\n".join(["**Me:** hey", "**Jo:** hi", "**Me:** how are you", "**Jo:** good", "**Me:** nice", "**Jo:** yep", "**EDIT:** she unmatched"])
+    row = reddit_to_eval.to_row(_post(selftext=text), salt="s")
+    assert [m["sender"] for m in row["messages"]] == ["self", "match"] * 3
+    assert "unmatched" not in " ".join(m["body"] for m in row["messages"])
+
+
+def test_scrub_removes_short_phones_bare_domains_and_name_parts():
+    out = reddit_to_eval.scrub("Jane says call 555-0199 or see instagram.com/jess_private", ["Jane Doe", "Jane", "Doe"])
+    assert out == "Match says call [phone] or see [link]"

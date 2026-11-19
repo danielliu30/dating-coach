@@ -35,11 +35,15 @@ GONE = {"[deleted]", "[removed]"}
 META_LABELS = {"edit", "update", "tl;dr", "tldr", "note", "ps", "context"}
 
 SELF_LABELS = {"me", "i", "myself", "op"}
-SPEAKER = re.compile(r"^\s*(?:\*\*)?(?P<who>[A-Za-z][\w .;'-]{0,24}?)(?:\*\*)?\s*[:\-–—>]\s+(?P<body>\S.*)$")
+SPEAKER = re.compile(
+    r"^\s*(?:\*\*)?(?P<who>[A-Za-z][\w .;'-]{0,24}?)(?:\*\*)?\s*[:\-–—>]\s*(?:\*\*)?\s+(?P<body>\S.*)$"
+)
 SCRUB = [
     (re.compile(r"https?://\S+|www\.\S+"), "[link]"),
     (re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.]+\b"), "[email]"),
+    (re.compile(r"\b[\w-]+\.(?:com|net|org|io|me|co|app|gg|tv|ly)(?:/\S*)?", re.IGNORECASE), "[link]"),
     (re.compile(r"(?<!\w)(?:\+?\d[\d\s().-]{7,}\d)(?!\w)"), "[phone]"),
+    (re.compile(r"(?<!\w)\d{3}[\s.-]\d{4}(?!\w)"), "[phone]"),
     (re.compile(r"(?<!\w)/?u/[\w-]+"), "[user]"),
     (re.compile(r"(?<!\w)@[\w.]{2,}"), "[handle]"),
 ]
@@ -79,7 +83,9 @@ def assign_senders(lines: Sequence[Tuple[str, str]]) -> Optional[Tuple[List[Tupl
         return None
     other_name = next(who for who, _ in lines if who.lower() in others)
     senders = [("self" if who.lower() in own else "match", body) for who, body in lines]
-    names = [] if other_name.lower() in {"her", "him", "them", "she", "he", "they", "match"} else [other_name]
+    pronouns = {"her", "him", "them", "she", "he", "they", "match"}
+    # The full label and each part of it ("Jane Doe" also redacts a bare "Jane").
+    names = [] if other_name.lower() in pronouns else [other_name, *(w for w in other_name.split() if len(w) > 1)]
     return senders, names
 
 
