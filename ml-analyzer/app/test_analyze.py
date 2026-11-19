@@ -1437,6 +1437,27 @@ def test_llm_parse_reads_and_guards_reflection_fields() -> None:
             scorer._parse(json.dumps(bad), boundaries)
 
 
+def test_llm_overall_list_caps_match_the_prompt() -> None:
+    """Each overall list keeps up to its LIST_LIMITS count, and the prompt asks for the same counts."""
+    from app.scoring.llm import LIST_LIMITS, SYSTEM_PROMPT
+
+    assert LIST_LIMITS == {"strengths": 6, "improvements": 8, "reflection_questions": 5, "patterns": 5}
+    assert '"strengths" are up to 6' in SYSTEM_PROMPT
+    assert '"improvements" are up to 8' in SYSTEM_PROMPT
+    assert '"reflection_questions" are 1-5' in SYSTEM_PROMPT
+    assert '"patterns" are 0-5' in SYSTEM_PROMPT
+
+    scorer = _focus_scorer()
+    lists = {key: [f"Message 1 {key} note {i}." for i in range(limit + 3)] for key, limit in LIST_LIMITS.items()}
+    payload = {
+        "segments": [{"start_position": 0, "end_position": 1, "engagement_score": 0.7, "comment": "Message 1 drew a detailed reply."}],
+        "overall": {"engagement_score": 0.7, "summary": "Landing well.", **lists},
+    }
+    overall = scorer._parse(json.dumps(payload), [(0, 1)]).overall
+    for key, limit in LIST_LIMITS.items():
+        assert getattr(overall, key) == lists[key][:limit]
+
+
 def test_llm_parse_rejects_overall_lists_of_the_wrong_shape() -> None:
     """An overall list field returned as a string, object, number or mixed array is a failed completion, not a list of characters/keys."""
     from app.config import Settings
