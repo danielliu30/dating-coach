@@ -18,8 +18,10 @@ from typing import Dict, Optional, Sequence, Tuple
 
 # Bump whenever a pillar's principles, or how prompts are composed from them,
 # change so scorer outputs stay traceable. Changes to the enforcement gate bump
-# ``agency.AGENCY_VERSION`` instead. v2: focus areas and goal_scores.
-BRAIN_VERSION = "brain-v2"
+# ``agency.AGENCY_VERSION`` instead. v2: focus areas and goal_scores. v3: the
+# client's own feelings, mixed feelings and reasoning, surfaced only through
+# patterns and reflection questions.
+BRAIN_VERSION = "brain-v3"
 
 
 @dataclass(frozen=True)
@@ -49,6 +51,7 @@ AGENCY = Pillar(
         "Never prescribe who the client should date, keep seeing or drop, or where their dating life should go next.",
         "Never mind-read the other person: do not claim to know the match's motives, intent, interest level or feelings.",
         "Speak to what the client controls: who they pursue, how they show up, what they communicate, what they accept and what they learn from what happens.",
+        "Help the client get clear on what they actually want, from this person and from dating, and whether how they are showing up serves it; ask, never conclude it for them.",
     ),
 )
 
@@ -74,6 +77,9 @@ SUPPORT = Pillar(
         "Be honest and direct about outcomes, but non-directive about what to do with them.",
         "Judge concrete behaviour, never character, grammar or worth; never moralise.",
         "Know the limit of text feedback: when a pattern is about the client's wants, fears or history rather than a message, point them towards a human coach instead of resolving it yourself.",
+        "Make room for the client's own feelings and reasoning, such as anxiety while waiting on a reply, over-investing relative to what comes back, or ambivalence about the match: surface them only in patterns and reflection questions, anchored in what their own messages show, as something to notice, never a diagnosis.",
+        "Treat mixed feelings as information, not a problem to solve: the client can be keen and unsure at once, so never resolve the ambivalence for them or tell them which feeling to act on.",
+        "The feelings you name are only ever the client's own; never attribute feelings, motives or interest to the match.",
     ),
 )
 
