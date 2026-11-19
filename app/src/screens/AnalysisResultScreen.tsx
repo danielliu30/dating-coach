@@ -33,11 +33,11 @@ export default function AnalysisResultScreen({
   // polled outlives the one this screen was opened with.
   const [analysisID, setAnalysisID] = useState(route.params.analysisID);
   const [result, setResult] = useState<AnalysisResult | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [pollFailed, setPollFailed] = useState(false);
   const [retrying, setRetrying] = useState(false);
-  // Kept apart from `error`, whose retry re-polls: a queue request that failed
+  // Kept apart from `pollFailed`, whose retry re-polls: a queue request that failed
   // has to be reissued, not polled for.
-  const [retryError, setRetryError] = useState<string | null>(null);
+  const [retryFailed, setRetryFailed] = useState(false);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [labelStatus, setLabelStatus] = useState<string | null>(null);
   const [labelFailed, setLabelFailed] = useState(false);
@@ -50,15 +50,15 @@ export default function AnalysisResultScreen({
     try {
       const next = await api.analysisResult(analysisID);
       failures.current = 0;
-      setError(null);
+      setPollFailed(false);
       setResult(next);
       if (next.status === 'pending' || next.status === 'running') {
         timer.current = setTimeout(() => void poll(), POLL_MS);
       }
-    } catch (err) {
+    } catch {
       failures.current += 1;
       if (failures.current >= MAX_POLL_FAILURES) {
-        setError(err instanceof Error ? err.message : 'could not load analysis');
+        setPollFailed(true);
         return;
       }
       timer.current = setTimeout(() => void poll(), POLL_MS * failures.current);
@@ -76,7 +76,7 @@ export default function AnalysisResultScreen({
   // once whatever broke it is back: queue a new run and follow that one.
   const retryAnalysis = async () => {
     setRetrying(true);
-    setRetryError(null);
+    setRetryFailed(false);
     try {
       const next = await api.reanalyzeConversation(conversationID);
       failures.current = 0;
@@ -85,8 +85,8 @@ export default function AnalysisResultScreen({
       // An unfinished run is returned as-is, leaving the polled id unchanged,
       // so nothing would restart the poll loop that the failure ended.
       if (next.id === analysisID) void poll();
-    } catch (err) {
-      setRetryError(err instanceof Error ? err.message : 'could not queue the analysis again');
+    } catch {
+      setRetryFailed(true);
     } finally {
       setRetrying(false);
     }
@@ -109,20 +109,20 @@ export default function AnalysisResultScreen({
     }
   };
 
-  if (error) {
+  if (pollFailed) {
     return (
       <Screen>
         <EmptyState
           icon="cloud-offline-outline"
           hue="rose"
           title="We lost the thread"
-          text={error}
+          text="We couldn’t load your analysis. Please try again."
           action={{
             label: 'Try again',
             icon: 'refresh-outline',
             onPress: () => {
               failures.current = 0;
-              setError(null);
+              setPollFailed(false);
               void poll();
             },
           }}
@@ -157,8 +157,11 @@ export default function AnalysisResultScreen({
             icon="alert-circle-outline"
             hue="rose"
           />
-          <Text style={type.body}>{result.error || 'The analyzer could not score this conversation.'}</Text>
-          {retryError ? <Text style={shared.error}>{retryError}</Text> : null}
+          <Text style={retryFailed ? shared.error : type.body}>
+            {retryFailed
+              ? 'We couldn’t restart the analysis. Please try again.'
+              : 'We couldn’t score this conversation. Please try again.'}
+          </Text>
           <Button label="Try again" icon="refresh-outline" loading={retrying} onPress={() => void retryAnalysis()} />
         </View>
       </Screen>
