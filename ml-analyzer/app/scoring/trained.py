@@ -27,6 +27,7 @@ from .heuristic import (
     _improvements,
     _strengths,
     _summary,
+    conversation_patterns,
     reciprocity_patterns,
     reflection_questions,
     review_self_messages,
@@ -51,7 +52,7 @@ class TrainedScorer(Scorer):
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.model_dir = Path(settings.model_dir)
-        self.version = f"trained-v2-{self.model_dir.name}+{AGENCY_VERSION}+{TRANSCRIPT_VERSION}"
+        self.version = f"trained-v3-{self.model_dir.name}+{AGENCY_VERSION}+{TRANSCRIPT_VERSION}"
         self._fallback = HeuristicScorer(settings.segment_size)
         self._model: Any | None = None
         self._tokenizer: Any | None = None
@@ -117,14 +118,14 @@ class TrainedScorer(Scorer):
             )
 
         self_scores = [s.engagement_score for s, (_, _, _, r) in zip(segments, windows) if r]
-        patterns = reciprocity_patterns(request.messages)
+        reciprocity = reciprocity_patterns(request.messages)
         overall = Overall(
             engagement_score=clamp(statistics.fmean(self_scores)) if self_scores else 0.5,
             summary=_summary(reviews, request.preferences),
             strengths=_strengths(reviews),
             improvements=_improvements(reviews),
-            reflection_questions=reflection_questions(reviews, patterns, request.preferences, request.profile),
-            patterns=patterns,
+            reflection_questions=reflection_questions(reviews, reciprocity, request.preferences, request.profile),
+            patterns=conversation_patterns(request.messages),
         )
 
         prose = [s.comment for s in segments] + [overall.summary]
