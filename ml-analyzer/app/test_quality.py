@@ -85,3 +85,10 @@ def test_aggregate_collects_metrics_missing_from_the_first_result() -> None:
 def test_multiline_misquote_is_invalid() -> None:
     """A quote spanning a newline is still read as a quote, so a fabricated one is rejected."""
     assert citations(['Message 1 ("what was\nthe thing you hated") was long.'], MESSAGES)["valid_citations"] == 0
+
+
+def test_repr_escaped_heuristic_excerpt_is_faithful() -> None:
+    """``repr`` of a body with both quote kinds escapes the single quote; the escape is not a misquote."""
+    body = """she said "it's fine" ok"""
+    messages = [Message(position=0, sender="self", body=body), Message(position=1, sender="match", body="hm")]
+    assert citations([f"Message 1 ({body!r}) landed."], messages)["valid_citations"] == 1
