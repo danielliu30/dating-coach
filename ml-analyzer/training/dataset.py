@@ -16,7 +16,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, FrozenSet, Iterator, List, Sequence, Tuple
+from typing import Any, Collection, Dict, FrozenSet, Iterator, List, Sequence, Tuple
 
 from app.scoring.base import transcript as _model_transcript
 
@@ -49,6 +49,15 @@ class TrainingExample:
     user_id: str | None = None
     preferences: str | None = None
     match_name: str | None = None
+    # Where the row came from: ``app`` (consented users), ``synthetic`` (committed fixtures) or
+    # ``reddit`` (test-only; ``train.py`` drops it unless ``--allow-source reddit``).
+    source: str = "app"
+    # Eval-only context: the persona the row was written for, the profile and focus areas sent to
+    # ``/analyze``, and ``[{"id", "any": [keywords]}]`` themes a complete analysis should mention.
+    persona_id: str | None = None
+    profile: Dict[str, Any] | None = None
+    focus_areas: List[str] = field(default_factory=list)
+    expected_themes: List[Dict[str, Any]] = field(default_factory=list)
 
     def group_key(self) -> str:
         """Split unit: all rows of one user (or conversation) stay together."""
@@ -69,6 +78,11 @@ class TrainingExample:
             user_id=payload.get("user_id"),
             preferences=payload.get("preferences"),
             match_name=payload.get("match_name"),
+            source=payload.get("source") or "app",
+            persona_id=payload.get("persona_id"),
+            profile=payload.get("profile"),
+            focus_areas=list(payload.get("focus_areas") or []),
+            expected_themes=list(payload.get("expected_themes") or []),
         )
 
 
@@ -192,8 +206,15 @@ def deduplicate(examples: Sequence[TrainingExample]) -> List[TrainingExample]:
     return [example for example in slots if example is not None]
 
 
+# Sources ``train.py`` never trains on unless named with ``--allow-source``.
+TEST_ONLY_SOURCES = frozenset({"reddit"})
+
+
 def load_jsonl(
-    path: str | Path, require_consent: bool = True, dedupe: bool = True
+    path: str | Path,
+    require_consent: bool = True,
+    dedupe: bool = True,
+    exclude_sources: Collection[str] = (),
 ) -> List[TrainingExample]:
     examples: List[TrainingExample] = []
     with Path(path).open(encoding="utf-8") as handle:
@@ -203,6 +224,8 @@ def load_jsonl(
                 continue
             example = TrainingExample.from_json(json.loads(line))
             if require_consent and not example.consented:
+                continue
+            if example.source in exclude_sources:
                 continue
             examples.append(example)
     return deduplicate(examples) if dedupe else examples
