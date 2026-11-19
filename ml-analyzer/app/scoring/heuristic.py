@@ -14,6 +14,7 @@ from __future__ import annotations
 import re
 import statistics
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Dict, List, Literal, Optional, Sequence
 
 from ..schemas import (
@@ -26,7 +27,7 @@ from ..schemas import (
     Segment,
     UserProfile,
 )
-from .base import Scorer, align_segments, chunk, clamp, label_for
+from .base import Scorer, _parse_sent_at, align_segments, chunk, clamp, label_for
 
 OPEN_QUESTION = re.compile(r"\b(what|why|how|where|when|which|who)\b", re.IGNORECASE)
 # A question mark closing a sentence anywhere in the text (merged bubbles keep theirs mid-body).
@@ -280,6 +281,140 @@ def energy_trend_patterns(messages: Sequence[Message]) -> List[str]:
     return patterns
 
 
+# Silence between two consecutive messages from which the next message counts as picking the conversation back up.
+REINITIATION_GAP = timedelta(hours=6)
+# Fewest restarts by one side before who restarts the conversation is named.
+MIN_RESTARTS = 2
+# Spacing of the backend's receive-time stamps for missing sent_at: they form the conversation's latest cluster.
+FILLED_STAMP_WINDOW = timedelta(seconds=1)
+# Most message numbers spelled out in one citation list before the rest are only counted.
+MAX_CITED = 5
+
+
+def _cite(messages: Sequence[Message]) -> str:
+    """List message numbers the way clients count them: "Message 4", "Messages 4 and 9", "Messages 1, 2, 3, 4, 5 and 2 more"."""
+    numbers = [str(m.position + 1) for m in messages]
+    if len(numbers) == 1:
+        return f"Message {numbers[0]}"
+    shown = numbers[:MAX_CITED]
+    if len(numbers) > MAX_CITED:
+        return f"Messages {', '.join(shown)} and {len(numbers) - MAX_CITED} more"
+    return f"Messages {', '.join(shown[:-1])} and {shown[-1]}"
+
+
+def _times_word(count: int) -> str:
+    return "once" if count == 1 else "twice" if count == 2 else f"{count} times"
+
+
+def _send_times(ordered: Sequence[Message]) -> List[Optional[datetime]]:
+    """Parsed ``sent_at`` per message, ``None`` where absent, unparseable or filled in by the backend.
+
+    The backend stamps a message submitted without ``sent_at`` with the time it
+    was received, so a partly dated thread ends in a cluster of near-identical
+    stamps later than its real ones; reading those as send times would turn an
+    ordinary reply into a long pause. That cluster is the run of two or more
+    latest stamps each within ``FILLED_STAMP_WINDOW`` of the next; quick
+    replies earlier in the conversation keep their stamps.
+    """
+    times = [_parse_sent_at(m.sent_at) for m in ordered]
+    dated = sorted(((t, i) for i, t in enumerate(times) if t is not None), reverse=True)
+    cluster = dated[:1]
+    for (later, _), (earlier, i) in zip(dated, dated[1:]):
+        if later - earlier > FILLED_STAMP_WINDOW:
+            break
+        cluster.append((earlier, i))
+    filled = {i for _, i in cluster} if len(cluster) > 1 else set()
+    return [None if i in filled else t for i, t in enumerate(times)]
+
+
+def reinitiation_patterns(messages: Sequence[Message]) -> List[str]:
+    """Name it when one side is clearly the one picking the conversation back up after long pauses.
+
+    A restart is a message sent at least ``REINITIATION_GAP`` after the message
+    before it (in position order), judged only where both messages carry a
+    parseable ``sent_at`` (``_parse_sent_at``); pairs missing a timestamp or
+    going backwards in time are skipped, as are receive-time stamps the backend
+    filled in (``_send_times``), so timestamp-less conversations stay silent. When one side made at least ``MIN_RESTARTS`` restarts and at
+    least ``RECIPROCITY_RATIO`` times as many as the other, one sentence names
+    who did it and cites the restarting messages, e.g. "After each of the 3
+    long pauses in this conversation (6 hours or more), you were the one who
+    picked it back up (Messages 12, 30 and 41)." Only who restarted is
+    described, never why the other side did not.
+    """
+    ordered = sorted(messages, key=lambda m: m.position)
+    times = _send_times(ordered)
+    restarts: Dict[str, List[Message]] = {"self": [], "match": []}
+    for prev_at, (cur, cur_at) in zip(times, zip(ordered[1:], times[1:])):
+        if prev_at is None or cur_at is None or cur.sender not in restarts:
+            continue
+        if cur_at - prev_at >= REINITIATION_GAP:
+            restarts[cur.sender].append(cur)
+
+    hours = round(REINITIATION_GAP.total_seconds() / 3600)
+    total = len(restarts["self"]) + len(restarts["match"])
+    for sender, other, subject, other_subject in (("self", "match", "you", "they"), ("match", "self", "they", "you")):
+        mine, theirs = restarts[sender], restarts[other]
+        if len(mine) < MIN_RESTARTS or len(mine) < RECIPROCITY_RATIO * len(theirs):
+            continue
+        if not theirs:
+            return [
+                f"After each of the {total} long pauses in this conversation ({hours} hours or more), "
+                f"{subject} were the one who picked it back up ({_cite(mine)})."
+            ]
+        return [
+            f"{subject.capitalize()} picked the conversation back up after {len(mine)} of its {total} long pauses "
+            f"({hours} hours or more; {_cite(mine)}); {other_subject} did {_times_word(len(theirs))} ({_cite(theirs)})."
+        ]
+    return []
+
+
+# Fewest runs of consecutive customer messages before the habit is named.
+MIN_STREAKS = 3
+
+
+def _runs(ordered: Sequence[Message], sender: str) -> List[List[Message]]:
+    """Runs of two or more consecutive ``sender`` messages in already position-ordered ``ordered``."""
+    runs: List[List[Message]] = []
+    current: List[Message] = []
+    for message in ordered:
+        if message.sender == sender:
+            current.append(message)
+            continue
+        if len(current) >= 2:
+            runs.append(current)
+        current = []
+    if len(current) >= 2:
+        runs.append(current)
+    return runs
+
+
+def streak_patterns(messages: Sequence[Message]) -> List[str]:
+    """Name it when the customer habitually sends several messages in a row (double/triple texting).
+
+    A streak is a run of two or more consecutive ``self`` messages in position
+    order, with no match message in between (a run that ends the conversation
+    counts too). When the customer has at least ``MIN_STREAKS`` streaks and at
+    least ``RECIPROCITY_RATIO`` times as many as the match, one sentence gives
+    the count, how the match compares, where the streaks start and the longest
+    run, e.g. "You sent two or more messages in a row without a reply in
+    between 4 times (starting at Messages 3, 9, 20 and 31); they did that
+    once. The longest run was 4 messages (Messages 20-23)." Only the habit is
+    described, never what the customer should do about it.
+    """
+    ordered = sorted(messages, key=lambda m: m.position)
+    own = _runs(ordered, "self")
+    theirs = _runs(ordered, "match")
+    if len(own) < MIN_STREAKS or len(own) < RECIPROCITY_RATIO * len(theirs):
+        return []
+    longest = max(own, key=len)
+    comparison = f"they did that {_times_word(len(theirs))}" if theirs else "they never did"
+    return [
+        f"You sent two or more messages in a row without a reply in between {len(own)} times "
+        f"(starting at {_cite([run[0] for run in own])}); {comparison}. "
+        f"The longest run was {len(longest)} messages ({_span(longest)})."
+    ]
+
+
 def reflection_questions(
     reviews: Sequence[SelfMessageReview],
     patterns: Sequence[str],
@@ -461,18 +596,23 @@ def _label(message: Message) -> str:
     return f"Message {message.position + 1}"
 
 
+# Shared by the heuristic and trained backends, which word feedback the same way.
+MAX_STRENGTHS = 5
+MAX_IMPROVEMENTS = 8
+
+
 def _excerpt(message: Message, limit: int = 40) -> str:
     body = " ".join(message.body.split())
     return repr(body if len(body) <= limit else body[: limit - 1] + "…")
 
 
 def _strengths(reviews: Sequence[SelfMessageReview]) -> List[str]:
-    """Acknowledge the customer's messages that drew a substantive reply (at most three)."""
+    """Acknowledge the customer's messages that drew a substantive reply (at most ``MAX_STRENGTHS``)."""
     good = [r for r in reviews if r.outcome == "good_reply"]
     good.sort(key=lambda r: r.score, reverse=True)
     return [
         f"{_label(r.message)} landed: it drew a detailed reply ({_excerpt(r.reply)})."  # type: ignore[arg-type]
-        for r in good[:3]
+        for r in good[:MAX_STRENGTHS]
     ]
 
 
@@ -482,7 +622,7 @@ def _improvements(reviews: Sequence[SelfMessageReview]) -> List[str]:
     Each hint states only the observable outcome (no reply, a short reply) and
     hands it back as a question, never a diagnosis: the match's reasons are
     unknowable, so nothing here claims to know them, and nothing suggests what
-    to say instead. At most five hints, in conversation order.
+    to say instead. At most ``MAX_IMPROVEMENTS`` hints, in conversation order.
     """
     hints: List[str] = []
     for r in reviews:
@@ -496,7 +636,7 @@ def _improvements(reviews: Sequence[SelfMessageReview]) -> List[str]:
                 f"{_label(r.message)} ({_excerpt(r.message)}) only drew a short reply ({_excerpt(r.reply)}). "  # type: ignore[arg-type]
                 "That's the pattern, not the reason — is it worth thinking about?"
             )
-    return hints[:5]
+    return hints[:MAX_IMPROVEMENTS]
 
 
 def _outcome_counts(reviews: Sequence[SelfMessageReview]) -> Dict[Outcome, int]:

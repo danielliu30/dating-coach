@@ -158,9 +158,12 @@ class LLMScorer(Scorer):
     async def analyze(self, request: AnalyzeRequest) -> AnalyzeResponse:
         boundaries = [(start, end) for start, end, _ in chunk(request.messages, self.settings.segment_size)]
         prompt = self._user_prompt(request, boundaries)
+        max_tokens = output_token_budget(
+            len(boundaries), request.focus_areas, self.settings.llm_max_output_tokens
+        )
 
         try:
-            raw = await self._complete(prompt)
+            raw = await self._complete(prompt, max_tokens)
             return self._parse(
                 raw, boundaries, citation_sources(request.messages), request.match_name, request.focus_areas
             )
@@ -184,7 +187,7 @@ class LLMScorer(Scorer):
             f"Customer messages to review, with the reply each one drew:\n{self_message_digest(request.messages)}"
         )
 
-    async def _complete(self, prompt: str) -> str:
+    async def _complete(self, prompt: str, max_tokens: int) -> str:
         provider = self.settings.llm_provider
         async with httpx.AsyncClient(timeout=self.settings.llm_timeout) as client:
             if provider == "anthropic":
@@ -196,7 +199,7 @@ class LLMScorer(Scorer):
                     },
                     json={
                         "model": self.settings.llm_model,
-                        "max_tokens": 1500,
+                        "max_tokens": max_tokens,
                         "system": SYSTEM_PROMPT,
                         "messages": [{"role": "user", "content": prompt}],
                     },
@@ -211,6 +214,7 @@ class LLMScorer(Scorer):
                 json={
                     "model": self.settings.llm_model,
                     "temperature": 0.2,
+                    "max_tokens": max_tokens,
                     "response_format": {"type": "json_object"},
                     "messages": [
                         {"role": "system", "content": SYSTEM_PROMPT},
