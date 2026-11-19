@@ -303,6 +303,12 @@ func TestPaymentHoldNeverOutlivesSessionStart(t *testing.T) {
 	svc, provider, pool, coach := paidService(t)
 	ctx := context.Background()
 	client := insertUser(t, pool, "user")
+	// Keep near-future sessions away from the coach's local midnight.
+	if time.Now().UTC().Add(minCheckoutWindow+time.Minute).Hour() >= 23 {
+		if _, err := pool.Exec(ctx, "UPDATE coaches SET timezone = 'Etc/GMT+12' WHERE user_id = $1", coach); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	// Too close to start for a checkout at all.
 	soon := time.Now().Add(minCheckoutWindow - time.Minute).UTC().Format(time.RFC3339)
