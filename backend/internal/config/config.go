@@ -29,8 +29,9 @@ type Config struct {
 	AuthRateLimit   int
 	AuthRateWindow  time.Duration
 
-	MLServiceURL     string
-	MLServiceTimeout time.Duration
+	MLServiceURL        string
+	MLServiceTimeout    time.Duration
+	ProfileScoreEnabled bool
 
 	AnalysisQueue        string
 	AccountDeletionQueue string
@@ -121,6 +122,7 @@ func Load() (*Config, error) {
 		AuthRateWindow:       envDuration("AUTH_RATE_WINDOW", time.Minute),
 		MLServiceURL:         env("ML_SERVICE_URL", "http://localhost:8000"),
 		MLServiceTimeout:     envDuration("ML_SERVICE_TIMEOUT", 60*time.Second),
+		ProfileScoreEnabled:  envBool("PROFILE_SCORE_ENABLED", false),
 		AnalysisQueue:        env("ANALYSIS_QUEUE", "conversation.analysis"),
 		AccountDeletionQueue: env("ACCOUNT_DELETION_QUEUE", "account.deletion"),
 

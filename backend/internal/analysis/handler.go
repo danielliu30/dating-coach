@@ -15,12 +15,13 @@ import (
 // Handler is the HTTP layer for /api/v1/analysis: it decodes requests, resolves
 // the caller and path IDs, and delegates to Service.
 type Handler struct {
-	svc *Service
+	svc                 *Service
+	profileScoreEnabled bool
 }
 
 // NewHandler builds the analysis handler; cmd/api mounts its Routes.
-func NewHandler(svc *Service) *Handler {
-	return &Handler{svc: svc}
+func NewHandler(svc *Service, profileScoreEnabled bool) *Handler {
+	return &Handler{svc: svc, profileScoreEnabled: profileScoreEnabled}
 }
 
 // Routes mounts the conversation-analysis endpoints (requires auth).
@@ -32,6 +33,7 @@ func (h *Handler) Routes() http.Handler {
 	r.Post("/conversations/{conversationID}/reanalyze", h.reanalyze)
 	r.Post("/conversations/{conversationID}/label", h.label)
 	r.Get("/results/{analysisID}", h.result)
+	r.Get("/profile-score", h.profileScore)
 	return r
 }
 
