@@ -227,6 +227,15 @@ describe('ApiClient 401 renewal', () => {
     expect(rejected).toHaveBeenCalledWith('revoked');
   });
 
+  it('uses revocation reported by the refresh exchange as the rejection reason', async () => {
+    const client = new ApiClient();
+    const rejected = jest.fn();
+    client.onSessionRejected(rejected);
+    client.useRenewal(async () => 'revoked');
+    await expect(client.renewSession()).resolves.toBe('rejected');
+    expect(rejected).toHaveBeenCalledWith('revoked');
+  });
+
   it('retries with the fresher token instead of renewing when another caller already renewed', async () => {
     let token = 'old';
     const client = new ApiClient();

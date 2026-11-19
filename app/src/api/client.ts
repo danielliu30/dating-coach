@@ -58,7 +58,7 @@ export type RenewalResult = 'renewed' | 'rejected' | 'unavailable';
  */
 export type SessionEndReason = 'expired' | 'revoked';
 
-type SessionRenewer = () => Promise<RenewalResult>;
+type SessionRenewer = () => Promise<RenewalResult | 'revoked'>;
 
 /** Typed client for the Go API. One instance per app, token injected lazily. */
 export class ApiClient {
@@ -131,7 +131,11 @@ export class ApiClient {
    */
   private async runRenewal(): Promise<{ result: RenewalResult; reason: SessionEndReason }> {
     try {
-      return { result: await this.renew(), reason: this.pendingReason };
+      const result = await this.renew();
+      return {
+        result: result === 'revoked' ? 'rejected' : result,
+        reason: result === 'revoked' ? 'revoked' : this.pendingReason,
+      };
     } finally {
       this.renewal = null;
       this.pendingReason = 'expired';
@@ -235,6 +239,14 @@ export class ApiClient {
 
   resendVerification(email: string) {
     return this.request<{ status: string }>('POST', '/auth/resend-verification', { email });
+  }
+
+  forgotPassword(email: string) {
+    return this.request<{ status: string; resend_after_seconds?: number }>('POST', '/auth/forgot-password', { email });
+  }
+
+  resetPassword(email: string, code: string, password: string) {
+    return this.request<{ status: string }>('POST', '/auth/reset-password', { email, code, password });
   }
 
   me() {

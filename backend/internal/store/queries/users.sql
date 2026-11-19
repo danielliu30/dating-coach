@@ -25,6 +25,10 @@ RETURNING *;
 -- name: UserActive :one
 SELECT EXISTS (SELECT 1 FROM users WHERE id = $1 AND deleted_at IS NULL);
 
+-- name: SetUserPassword :exec
+UPDATE users SET password_hash = $2, updated_at = now()
+WHERE id = $1 AND deleted_at IS NULL;
+
 -- name: UserRowExists :one
 SELECT EXISTS (SELECT 1 FROM users WHERE id = $1);
 
