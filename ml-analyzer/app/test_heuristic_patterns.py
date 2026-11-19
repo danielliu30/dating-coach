@@ -4,7 +4,7 @@ from typing import List, Optional, Sequence, Tuple
 
 from app.coaching import enforce_agency
 from app.schemas import Message
-from app.scoring.heuristic import energy_trend_patterns, reinitiation_patterns, streak_patterns, topic_depth_patterns
+from app.scoring.heuristic import energy_trend_patterns, reinitiation_patterns, repeated_question_patterns, streak_patterns, topic_depth_patterns
 
 
 def _conversation(turns: Sequence[Tuple[str, str]], sent_at: Optional[Sequence[Optional[str]]] = None) -> List[Message]:
@@ -213,3 +213,51 @@ def test_topic_depth_stays_silent_when_short_or_mixed() -> None:
 
     mixed = [("self", DEEP if i % 4 == 0 else CHECK_IN) if i % 2 == 0 else ("match", DETAILED_REPLY) for i in range(24)]
     assert topic_depth_patterns(_conversation(mixed)) == []
+
+
+def test_repeated_questions_cite_the_repeat_and_the_original() -> None:
+    turns: List[Tuple[str, str]] = [
+        ("self", "Nice to match! What do you do for work?"),
+        ("match", "I teach chemistry at a high school"),
+        ("self", "Do you have any siblings?"),
+        ("match", "Two older brothers"),
+    ]
+    turns += [("self", f"I loved the photo from stop {i}") if i % 2 == 0 else ("match", "thanks") for i in range(20)]
+    turns += [
+        ("self", "So what do you do for work, anyway?"),
+        ("match", "Still teaching chemistry"),
+        ("self", "Wait, do you have siblings?"),
+    ]
+    patterns = repeated_question_patterns(_conversation(turns))
+
+    assert patterns == [
+        "You asked close to the same question more than once: Message 25 ('So what do you do for work, anyway?') repeats Message 1; "
+        "Message 27 ('Wait, do you have siblings?') repeats Message 3."
+    ]
+    _assert_agency_safe(patterns)
+
+
+def test_repeated_questions_cap_the_list_and_count_each_message_once() -> None:
+    turns = [("self", "Where did you grow up? Where did you grow up exactly?")]
+    turns += [("self", "Where did you grow up?") for _ in range(5)]
+    patterns = repeated_question_patterns(_conversation(turns))
+
+    assert patterns == [
+        "You asked close to the same question more than once (5 repeats in all): "
+        "Message 2 ('Where did you grow up?') repeats Message 1; Message 3 ('Where did you grow up?') repeats Message 1; "
+        "Message 4 ('Where did you grow up?') repeats Message 1."
+    ]
+
+
+def test_repeated_questions_skip_check_ins_short_questions_and_the_match() -> None:
+    check_ins = [("self", "How was your day?"), ("match", "fine"), ("self", "How was your day?")]
+    assert repeated_question_patterns(_conversation(check_ins)) == []
+
+    short = [("self", "Siblings?"), ("self", "Siblings?"), ("self", "You there?"), ("self", "You there?")]
+    assert repeated_question_patterns(_conversation(short)) == []
+
+    their_repeat = [("match", "What do you do for work?"), ("self", "I design bridges"), ("match", "What do you do for work?")]
+    assert repeated_question_patterns(_conversation(their_repeat)) == []
+
+    different = [("self", "What is your favourite film?"), ("self", "What is your favourite book?"), ("self", "I like this.")]
+    assert repeated_question_patterns(_conversation(different)) == []

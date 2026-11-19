@@ -15,7 +15,7 @@ import re
 import statistics
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Dict, List, Literal, Optional, Sequence
+from typing import Dict, FrozenSet, List, Literal, Optional, Sequence, Tuple
 
 from ..schemas import AnalyzeRequest, AnalyzeResponse, GoalScore, Message, Overall, Segment
 from .base import Scorer, _parse_sent_at, align_segments, chunk, clamp, label_for
@@ -474,6 +474,84 @@ def topic_depth_patterns(messages: Sequence[Message]) -> List[str]:
                 f"against {small_phrase} for your small talk."
             )
     return patterns
+
+
+# Words ignored when comparing two questions, so "So what do you do for work?" matches "What do you do for work?".
+QUESTION_FILLER = frozenset(
+    "a an the and or but so to of in on at for with about from is are was were be been do does did you your yours "
+    "u ur i me my we it its that this what what's whats why how how's hows when where which who have has had any there "
+    "would will can could like just really ever much kind sort if then too also still up out get got anyway again "
+    "btw oh hey wait ok okay um hmm actually remind".split()
+)
+# Fewest words a question needs before it can count as a repeat.
+MIN_REPEAT_WORDS = 3
+# Overlap (Jaccard) of two questions' content words from which the later one repeats the earlier.
+REPEAT_OVERLAP = 0.75
+# Most repeats spelled out in the pattern.
+MAX_REPEATS_CITED = 3
+SENTENCE_END = re.compile(r"(?<=[?.!])\s+")
+WORD = re.compile(r"[a-z0-9']+")
+
+
+def _questions(message: Message) -> List[str]:
+    """The sentences of ``message`` that are questions (closed by a ``QUESTION_MARK`` run)."""
+    return [part for part in SENTENCE_END.split(message.body.strip()) if QUESTION_MARK.search(part)]
+
+
+def _content_words(question: str) -> Optional[FrozenSet[str]]:
+    """Content words of a question worth comparing; ``None`` for short questions and routine check-ins."""
+    words = WORD.findall(question.lower().replace("\u2019", "'"))
+    content = frozenset(w for w in words if w not in QUESTION_FILLER)
+    if len(words) < MIN_REPEAT_WORDS or not content or SMALL_TALK.search(question):
+        return None
+    return content
+
+
+def repeated_question_patterns(messages: Sequence[Message]) -> List[str]:
+    """Name it when the customer asked close to the same question again later in the conversation.
+
+    Each ``self`` message's question sentences (``_questions``) are reduced to
+    their content words (``_content_words``: ``QUESTION_FILLER`` dropped;
+    questions under ``MIN_REPEAT_WORDS`` words and ``SMALL_TALK`` check-ins,
+    which recur by nature, are skipped). A question repeats an earlier one
+    from a different customer message when their content words overlap by at
+    least ``REPEAT_OVERLAP`` (Jaccard). Each later message is reported once,
+    against the first earlier message it repeats, and up to
+    ``MAX_REPEATS_CITED`` repeats are spelled out with the total, e.g. "You
+    asked close to the same question more than once: Message 31 ('What do
+    you do for work?') repeats Message 4." Only the customer's questions are
+    compared, and nothing is said about whether the match answered.
+    """
+    own = sorted((m for m in messages if m.sender == "self"), key=lambda m: m.position)
+    asked: List[Tuple[Message, FrozenSet[str]]] = []
+    repeats: List[Tuple[Message, str, Message]] = []
+    for message in own:
+        repeated = False
+        for question in _questions(message):
+            content = _content_words(question)
+            if content is None:
+                continue
+            if not repeated:
+                earlier = next(
+                    (
+                        first
+                        for first, words in asked
+                        if first.position != message.position and len(content & words) / len(content | words) >= REPEAT_OVERLAP
+                    ),
+                    None,
+                )
+                if earlier is not None:
+                    repeats.append((message, question, earlier))
+                    repeated = True
+            asked.append((message, content))
+    if not repeats:
+        return []
+    shown = "; ".join(
+        f"{_label(later)} ({_excerpt(later.model_copy(update={'body': question}))}) repeats {_label(earlier)}"
+        for later, question, earlier in repeats[:MAX_REPEATS_CITED]
+    )
+    extra = f" ({len(repeats)} repeats in all)" if len(repeats) > MAX_REPEATS_CITED else ""
+    return [f"You asked close to the same question more than once{extra}: {shown}."]
 
 
 def reflection_questions(
