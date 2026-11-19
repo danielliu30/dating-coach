@@ -12,7 +12,7 @@ from pydantic import ValidationError
 
 from app.main import app
 from app.schemas import AnalyzeRequest, Message, UserProfile
-from app.scoring.llm import SYSTEM_PROMPT, LLMScorer, citation_sources, output_token_budget, profile_spec
+from app.scoring.llm import LIST_LIMITS, SYSTEM_PROMPT, LLMScorer, citation_sources, output_token_budget, profile_spec
 
 
 def _settings(provider: str = "openai", **overrides: object) -> Settings:
@@ -215,9 +215,10 @@ def test_parse_strips_fences_and_clamps_scores() -> None:
 
 
 def test_output_token_budget_grows_with_segments() -> None:
-    """Each segment adds a fixed allowance on top of the overall block."""
-    assert output_token_budget(1, (), cap=100_000) == 1950
-    assert output_token_budget(25, (), cap=100_000) == 1800 + 25 * 150
+    """Each segment adds a fixed allowance on top of an overall block sized for every LIST_LIMITS item."""
+    overall = 250 + 75 * sum(LIST_LIMITS.values())
+    assert output_token_budget(1, (), cap=100_000) == overall + 150
+    assert output_token_budget(25, (), cap=100_000) == overall + 25 * 150
     assert output_token_budget(26, (), cap=100_000) - output_token_budget(25, (), cap=100_000) == 150
 
 
