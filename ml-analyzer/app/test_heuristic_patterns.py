@@ -318,5 +318,22 @@ def test_repeated_questions_tell_apart_different_question_words() -> None:
         ("self", "When do you usually go hiking?"),
         ("self", "How's your week going so far?"),
         ("self", "How's your week going so far?"),
+        ("self", "How was your day at the office?"),
+        ("self", "How was your day at the office?"),
+        ("self", "Are you free today?"),
+        ("self", "Are you free tonight?"),
     ]
     assert repeated_question_patterns(_conversation(turns)) == []
+
+
+def test_repeated_questions_read_contracted_question_words_alike() -> None:
+    turns = [
+        ("self", "What's your favourite film?"),
+        ("self", "Whats your favourite film?"),
+        ("self", "Where's your hometown?"),
+        ("self", "Wheres your hometown?"),
+    ]
+    assert repeated_question_patterns(_conversation(turns)) == [
+        "You asked close to the same question more than once: Message 2 ('Whats your favourite film?') repeats Message 1; "
+        "Message 4 ('Wheres your hometown?') repeats Message 3."
+    ]

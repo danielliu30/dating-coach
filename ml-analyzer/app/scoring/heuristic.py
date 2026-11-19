@@ -515,10 +515,12 @@ QUESTION_FILLER = frozenset(
     "a an the and or but so to of in on at for with about from is are was were be been do does did you your yours "
     "u ur i me my we it its that this what what's whats why how how's hows when where which who have has had any there "
     "would will can could like just really ever much kind sort if then too also still up out get got anyway again "
-    "btw oh hey wait ok okay um hmm actually remind going far lately today tonight now".split()
+    "btw oh hey wait ok okay um hmm actually remind".split()
 )
 # Question words kept apart from the content words: "When do you go hiking?" does not repeat "Where do you go hiking?".
 INTERROGATIVES = frozenset("what why how when where which who whose whom".split())
+# Turn-passing lead-ins cut from a question before it is judged: "What about you, do you want kids?" asks about kids.
+LEAD_IN = re.compile(r"\b(what|how) about (you|u)\b,?", re.IGNORECASE)
 # Fewest words a question needs before it can count as a repeat.
 MIN_REPEAT_WORDS = 3
 # Overlap (Jaccard) of two questions' content words from which the later one repeats the earlier.
@@ -540,15 +542,28 @@ QuestionKey = Tuple[FrozenSet[str], FrozenSet[str]]
 def _content_words(question: str) -> Optional[QuestionKey]:
     """Question words and content words of a question worth comparing; ``None`` for short questions and check-ins.
 
-    ``SMALL_TALK`` check-ins are cut out first, so "What about you, do you
-    want kids?" is compared on "do you want kids" and "How was your day?"
-    leaves nothing to compare.
+    ``LEAD_IN`` phrases are cut out first, so "What about you, do you want
+    kids?" is compared on "do you want kids"; what is left is skipped when it
+    still holds a ``SMALL_TALK`` check-in ("How was your day at the office?").
+    Question words are read without their contraction ("what's", "whats").
     """
-    words = WORD.findall(SMALL_TALK.sub(" ", question).lower().replace("\u2019", "'"))
-    content = frozenset(w for w in words if w not in QUESTION_FILLER)
+    stripped = LEAD_IN.sub(" ", question)
+    if SMALL_TALK.search(stripped):
+        return None
+    words = WORD.findall(stripped.lower().replace("\u2019", "'"))
+    asks = {_interrogative(w) for w in words} - {None}
+    content = frozenset(w for w in words if w not in QUESTION_FILLER and _interrogative(w) is None)
     if len(words) < MIN_REPEAT_WORDS or not content:
         return None
-    return frozenset(w.split("'")[0] for w in words if w.split("'")[0] in INTERROGATIVES), content
+    return frozenset(asks), content
+
+
+def _interrogative(word: str) -> Optional[str]:
+    """The question word ``word`` is, with any contraction dropped ("what's", "whats" -> "what")."""
+    base = word.split("'")[0]
+    if base in INTERROGATIVES:
+        return base
+    return base[:-1] if base.endswith("s") and base[:-1] in INTERROGATIVES else None
 
 
 def _repeats(key: QuestionKey, earlier: QuestionKey) -> bool:
