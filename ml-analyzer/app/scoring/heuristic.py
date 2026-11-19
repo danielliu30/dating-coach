@@ -15,7 +15,7 @@ import re
 import statistics
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Dict, List, Literal, Optional, Sequence
+from typing import Dict, FrozenSet, List, Literal, Optional, Sequence, Tuple
 
 from ..schemas import (
     DATING_PHASE_LABELS,
@@ -517,6 +517,115 @@ def topic_depth_patterns(messages: Sequence[Message]) -> List[str]:
                 f"against {small_phrase} for your small talk."
             )
     return patterns
+
+
+# Words ignored when comparing two questions, so "So what do you do for work?" matches "What do you do for work?".
+QUESTION_FILLER = frozenset(
+    "a an the and or but so to of in on at for with about from is are was were be been do does did you your yours "
+    "u ur i me my we it its that this what what's whats why how how's hows when where which who have has had any there "
+    "would will can could like just really ever much kind sort if then too also still up out get got anyway again "
+    "btw oh hey wait ok okay um hmm actually remind".split()
+)
+# Question words kept apart from the content words: "When do you go hiking?" does not repeat "Where do you go hiking?".
+INTERROGATIVES = frozenset("what why how when where which who whose whom".split())
+# Turn-passing lead-ins cut from a question before it is judged: "What about you, do you want kids?" asks about kids.
+LEAD_IN = re.compile(r"\b(what|how) about (you|u)\b,?", re.IGNORECASE)
+# Fewest words a question needs before it can count as a repeat.
+MIN_REPEAT_WORDS = 3
+# Overlap (Jaccard) of two questions' content words from which the later one repeats the earlier.
+REPEAT_OVERLAP = 0.75
+# Most repeats spelled out in the pattern.
+MAX_REPEATS_CITED = 3
+SENTENCE_END = re.compile(r"(?:(?<=[?.!])|(?<=[?.!][)\]\"'\u201d\u2019]))\s+")
+WORD = re.compile(r"[a-z0-9']+")
+
+
+def _questions(message: Message) -> List[str]:
+    """The sentences of ``message`` that are questions (closed by a ``QUESTION_MARK`` run)."""
+    return [part for part in SENTENCE_END.split(message.body.strip()) if QUESTION_MARK.search(part)]
+
+
+QuestionKey = Tuple[FrozenSet[str], FrozenSet[str]]
+
+
+def _content_words(question: str) -> Optional[QuestionKey]:
+    """Question words and content words of a question worth comparing; ``None`` for short questions and check-ins.
+
+    ``LEAD_IN`` phrases are cut out first, so "What about you, do you want
+    kids?" is compared on "do you want kids"; what is left is skipped when it
+    still holds a ``SMALL_TALK`` check-in ("How was your day at the office?").
+    Question words are read without their contraction ("what's", "whats").
+    """
+    stripped = LEAD_IN.sub(" ", question)
+    if SMALL_TALK.search(stripped):
+        return None
+    words = WORD.findall(stripped.lower().replace("\u2019", "'"))
+    asks = {_interrogative(w) for w in words} - {None}
+    content = frozenset(w for w in words if w not in QUESTION_FILLER and _interrogative(w) is None)
+    if len(words) < MIN_REPEAT_WORDS or not content:
+        return None
+    return frozenset(asks), content
+
+
+def _interrogative(word: str) -> Optional[str]:
+    """The question word ``word`` is, with any contraction dropped ("what's", "whats" -> "what")."""
+    base = word.split("'")[0]
+    if base in INTERROGATIVES:
+        return base
+    return base[:-1] if base.endswith("s") and base[:-1] in INTERROGATIVES else None
+
+
+def _repeats(key: QuestionKey, earlier: QuestionKey) -> bool:
+    (asks, content), (earlier_asks, earlier_content) = key, earlier
+    return asks == earlier_asks and len(content & earlier_content) / len(content | earlier_content) >= REPEAT_OVERLAP
+
+
+def repeated_question_patterns(messages: Sequence[Message]) -> List[str]:
+    """Name it when the customer asked close to the same question again later in the conversation.
+
+    Each ``self`` message's question sentences (``_questions``) are reduced to
+    their question and content words (``_content_words``: ``SMALL_TALK``
+    check-ins, which recur by nature, cut out and ``QUESTION_FILLER`` dropped;
+    questions left under ``MIN_REPEAT_WORDS`` words are skipped). A question
+    repeats an earlier one from a different customer message when both ask
+    with the same ``INTERROGATIVES`` and their content words overlap by at
+    least ``REPEAT_OVERLAP`` (Jaccard). Each later message is reported once,
+    against the first earlier message it repeats, and up to
+    ``MAX_REPEATS_CITED`` repeats are spelled out with the total, e.g. "You
+    asked close to the same question more than once: Message 31 ('What do
+    you do for work?') repeats Message 4." Only the customer's questions are
+    compared, and nothing is said about whether the match answered.
+    """
+    own = sorted((m for m in messages if m.sender == "self"), key=lambda m: m.position)
+    asked: List[Tuple[Message, QuestionKey]] = []
+    repeats: List[Tuple[Message, str, Message]] = []
+    for message in own:
+        repeated = False
+        for question in _questions(message):
+            key = _content_words(question)
+            if key is None:
+                continue
+            if not repeated:
+                earlier = next(
+                    (
+                        first
+                        for first, earlier_key in asked
+                        if first.position != message.position and _repeats(key, earlier_key)
+                    ),
+                    None,
+                )
+                if earlier is not None:
+                    repeats.append((message, question, earlier))
+                    repeated = True
+            asked.append((message, key))
+    if not repeats:
+        return []
+    shown = "; ".join(
+        f"{_label(later)} ({_excerpt(later.model_copy(update={'body': question}))}) repeats {_label(earlier)}"
+        for later, question, earlier in repeats[:MAX_REPEATS_CITED]
+    )
+    extra = f" ({len(repeats)} repeats in all)" if len(repeats) > MAX_REPEATS_CITED else ""
+    return [f"You asked close to the same question more than once{extra}: {shown}."]
 
 
 def reflection_questions(
