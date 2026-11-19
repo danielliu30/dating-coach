@@ -39,7 +39,7 @@ a pillar's name or principles are reworded.
 The LLM `SYSTEM_PROMPT` is composed from the rendered pillars
 (`render_pillars()`), not written by hand, and `BRAIN_VERSION` is appended to
 `model_version` together with `AGENCY_VERSION` (e.g.
-`llm-openai-gpt-4o+brain-v2+agency-v3`) so every stored result is traceable to
+`llm-openai-gpt-4o+brain-v3+agency-v3`) so every stored result is traceable to
 both the philosophy revision and the enforcement policy that produced it. Bump
 `BRAIN_VERSION` (`app/coaching/brain.py`) when a pillar's principles or the way
 prompts are composed from them change, and
@@ -83,6 +83,15 @@ concrete. It is built around agency:
   i.e. investing more energy than the person on the other side — is stated as
   an observation in `overall.patterns` and handed back: "here's a pattern we've
   noticed; is this worth thinking about?"
+- *Notice your own feelings and reasoning.* Since `brain-v3` the brain also
+  coaches what goes on inside the customer: anxiety while waiting on a reply,
+  over-investing relative to what comes back, mixed feelings about the match,
+  and what they actually want. These surface only through the existing
+  `overall.patterns` and `overall.reflection_questions`, anchored in the
+  customer's own messages and phrased as something to notice. Mixed feelings
+  are treated as information, never resolved for the customer, and feelings
+  are only ever the customer's own: attributing any to the match is still
+  rejected as mind-reading.
 - *Never draft.* Your words should still be your words. No field ever contains
   a suggested or rewritten message, and the anti-drafting guard covers the new
   fields too.
@@ -147,6 +156,7 @@ Request:
 | `messages[]` | array | `position` (0-based), `sender` (`self`\|`match`), `body`, optional `sent_at`. Only `self` messages are scored. |
 | `preferences` | string | Optional, ≤2000 chars. What the customer is looking for; feedback is tailored to it. |
 | `focus_areas[]` | array | Optional, defaults to `[]`. Coaching-brain pillar keys (`agency`, `feedback`, `support`) the customer wants to improve on; normalised to lowercase, deduplicated and put in pillar order. Unknown keys are a 422. |
+| `profile` | object | Optional. The customer's own dating profile: `dating_styles[]`, `phases_strong[]`, `phases_working_on[]` (the backend's vocabulary keys, normalised to lowercase and deduplicated), `bio` (≤2000 chars) and `prompts[]` (`prompt`, `answer`). Context for the customer's own goals only, never for whom to date; absent or empty leaves the analysis unchanged. |
 
 Response:
 
@@ -222,6 +232,7 @@ The response is synchronous and the service stores nothing.
 | `LLM_MODEL` | `gpt-4o-mini` / `claude-3-5-haiku-latest` | Per provider. |
 | `LLM_BASE_URL` | provider default | Point at a self-hosted gateway. |
 | `LLM_TIMEOUT_SECONDS` | `45` | |
+| `LLM_MAX_OUTPUT_TOKENS` | `8192` | Cap on the conversation scorer's output token budget, which grows with the number of segments. Keep it at or below the model's output limit. Must be at least 1. |
 | `ML_MODEL_DIR` | `artifacts/segment-scorer` | Checkpoint used when `ML_BACKEND=trained`. |
 | `ML_SEGMENT_SIZE` | `4` | Messages per segment. |
 
@@ -416,3 +427,78 @@ Nothing else changes: same `/analyze` request and response, so the Go worker and
 the app are unaware. `model_version` in each stored `analysis_results` row tells
 you which model produced which result, so you can compare the trained model
 against the LLM on live traffic before making it the default.
+
+## Archive training data
+
+From `ml-analyzer/`, package only the exports you intend to preserve. You can
+also include a checkpoint directory after reviewing it for evaluation files
+that may contain transcripts. Run this after the export or training run has
+finished writing:
+
+```bash
+python -m scripts.archive_dataset create data/train.jsonl artifacts/segment-scorer
+archive=/path/to/training-20260922T031500000000Z.tar.gz  # replace with the path printed by create
+python -m scripts.archive_dataset verify "$archive"
+python -m scripts.archive_dataset extract "$archive" ./restored-training
+```
+
+Use the archive path printed by `create` for the next two commands. Omit
+the checkpoint argument for a dataset-only archive. The default destination
+is the repo's gitignored `backups/training/`; use `--output` to select a
+different file. Keep the owner-only archive and its `.sha256` sidecar together.
+The archive contains a manifest with per-file SHA-256 checksums, file sizes,
+creation time, and the checkout commit when available. Extraction verifies
+both levels of checksums and requires a new directory.
+
+Before transferring real data, use only consented, pseudonymised exports,
+review them for identifying details, and confirm private access, encryption
+(the local archive is unencrypted), retention, and how opt-outs and deletions
+will be honored. Deleting a database row does not remove it from a previously
+generated archive.
+
+### Upload to S3 Glacier
+
+With an approved bucket and credentials configured in the AWS CLI, upload from
+the training machine; no live app server is needed. The CLI uses the normal
+AWS credential chain, including `AWS_PROFILE`, and honors `AWS_ENDPOINT_URL`:
+
+```bash
+bucket=your-private-bucket
+prefix=training
+python -m scripts.archive_dataset upload "$archive" "s3://$bucket/$prefix/"
+# Or append --upload "s3://$bucket/$prefix/" to the create command.
+```
+
+Upload verifies first, then copies the archive, its `.sha256`, and a separate
+`.manifest.json` to the prefix. All three default to `DEEP_ARCHIVE`; use
+`--storage-class GLACIER` for Glacier Flexible Retrieval or
+`--storage-class GLACIER_IR` for Glacier Instant Retrieval. If upload fails,
+the local files remain; rerun `upload` with the same archive and destination.
+
+### Request a restore and download
+
+For Deep Archive and Flexible Retrieval, first request a temporary readable
+copy of each object. Deep Archive generally takes up to 12 hours with
+`Standard` or 48 hours with `Bulk`. Flexible Retrieval typically takes
+3–5 hours with `Standard`, 5–12 hours with `Bulk`, or 1–5 minutes with
+`Expedited` for eligible objects. Expedited is unavailable for Deep Archive;
+Instant Retrieval needs no restore request.
+
+```bash
+name=$(basename "$archive")
+for object in "$name" "$name.sha256" "$name.manifest.json"; do
+  aws s3api restore-object --bucket "$bucket" --key "$prefix/$object" \
+    --restore-request '{"Days":7,"GlacierJobParameters":{"Tier":"Standard"}}'
+  aws s3api head-object --bucket "$bucket" --key "$prefix/$object" --query Restore
+done
+
+# Run the download after head-object reports ongoing-request="false" for all
+# objects, or immediately for Instant Retrieval.
+umask 077
+mkdir -m 700 downloaded
+for object in "$name" "$name.sha256" "$name.manifest.json"; do
+  aws s3 cp "s3://$bucket/$prefix/$object" "downloaded/$object"
+  chmod 600 "downloaded/$object"
+done
+python -m scripts.archive_dataset extract "downloaded/$name" ./restored-training
+```
