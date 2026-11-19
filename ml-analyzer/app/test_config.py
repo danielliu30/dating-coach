@@ -11,6 +11,7 @@ ENVIRONMENT_VARIABLES = (
     "LLM_TIMEOUT_SECONDS",
     "ML_MODEL_DIR",
     "ML_SEGMENT_SIZE",
+    "LLM_MAX_OUTPUT_TOKENS",
 )
 
 
@@ -34,6 +35,7 @@ def test_get_settings_defaults(clean_settings) -> None:
     assert settings.llm_timeout == 45.0
     assert settings.model_dir == "artifacts/segment-scorer"
     assert settings.segment_size == 4
+    assert settings.llm_max_output_tokens == 8192
     assert settings.llm_configured is False
 
 
@@ -91,6 +93,20 @@ def test_backend_is_lowercased(clean_settings, monkeypatch: pytest.MonkeyPatch) 
 def test_invalid_segment_size_raises(clean_settings, monkeypatch: pytest.MonkeyPatch) -> None:
     """A non-numeric ML_SEGMENT_SIZE fails during settings construction."""
     monkeypatch.setenv("ML_SEGMENT_SIZE", "not-a-number")
+    with pytest.raises(ValueError):
+        get_settings()
+
+
+def test_llm_max_output_tokens_is_parsed(clean_settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    """LLM_MAX_OUTPUT_TOKENS is trimmed and parsed as an integer."""
+    monkeypatch.setenv("LLM_MAX_OUTPUT_TOKENS", " 4000 ")
+    assert get_settings().llm_max_output_tokens == 4000
+
+
+@pytest.mark.parametrize("value", ["0", "-5", "lots"])
+def test_invalid_llm_max_output_tokens_raises(clean_settings, monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+    """A non-numeric or non-positive LLM_MAX_OUTPUT_TOKENS fails during settings construction."""
+    monkeypatch.setenv("LLM_MAX_OUTPUT_TOKENS", value)
     with pytest.raises(ValueError):
         get_settings()
 
