@@ -416,6 +416,8 @@ per conversation the themes gained or lost and the improvements, patterns and
 reflection questions that were added or removed. To compare against `main`, run
 the baseline from a `git worktree` of `main` with the same `RUNS` directory.
 LLM runs use temperature 0.2, so treat small deltas as noise.
+Only local backends accept `--include-unconsented`; the LLM backend does not
+send those rows to the configured provider.
 
 ### 5. Switch backends
 

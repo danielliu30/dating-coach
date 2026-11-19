@@ -255,7 +255,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     run.add_argument("--data", action="append", type=Path, default=None, help="JSONL eval set; repeatable")
     run.add_argument("--label", required=True, help="Run name shown in reports, e.g. base or brain-v3")
     run.add_argument("--out", type=Path, required=True)
-    run.add_argument("--include-unconsented", action="store_true", help="Needed for Reddit-derived eval rows")
+    run.add_argument("--include-unconsented", action="store_true", help="Include unconsented rows for local backends only")
     run.add_argument("--concurrency", type=int, default=4)
     diff = sub.add_parser("diff", help="Compare two saved runs")
     diff.add_argument("base", type=Path)
@@ -280,6 +280,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         settings = replace(settings, backend=args.backend)
     if args.checkpoint:
         settings = replace(settings, model_dir=args.checkpoint)
+    if args.include_unconsented and settings.backend not in {"heuristic", "trained"}:
+        raise SystemExit("eval_compare: --include-unconsented is only allowed with heuristic or trained")
     if settings.backend == "llm" and not settings.llm_configured:
         # build_scorer would silently serve the heuristic, and the run would report 0 fallbacks.
         raise SystemExit("eval_compare: --backend llm needs LLM_API_KEY; use --backend heuristic for a heuristic run")
