@@ -30,7 +30,7 @@ func testRouter(t *testing.T, issuer *auth.TokenIssuer) http.Handler {
 			auth:     auth.NewHandler(auth.NewService(nil, nil, issuer, nil, 4, "", nil, nil, nil, 15*time.Minute, 30*time.Minute, time.Hour), auth.NewRateLimiter(nil, 100, time.Minute)),
 			coaching: coaching.NewHandler(coaching.NewService(nil, nil, payments.Disabled{}, 15*time.Minute, "", "", nil), nil),
 			chat:     chat.NewHandler(chat.NewService(nil, hub), hub, nil, []string{"*"}),
-			analysis: analysis.NewHandler(analysis.NewService(nil, nil, nil)),
+			analysis: analysis.NewHandler(analysis.NewService(nil, nil, nil), false),
 		},
 	)
 }
@@ -62,6 +62,7 @@ func TestPrivateRoutesRejectVerifyScope(t *testing.T) {
 		{http.MethodPost, "/api/v1/chat/threads"},
 		{http.MethodGet, "/api/v1/chat/coach/threads"},
 		{http.MethodGet, "/api/v1/analysis/conversations"},
+		{http.MethodGet, "/api/v1/analysis/profile-score"},
 		{http.MethodPost, "/api/v1/analysis/conversations"},
 		// An unparsable id keeps the request in the handler's own validation,
 		// so the unbacked service is never called.
