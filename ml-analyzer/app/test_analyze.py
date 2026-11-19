@@ -629,6 +629,10 @@ def test_brain_v3_principles_cover_the_clients_own_feelings() -> None:
         assert phrase in SYSTEM_PROMPT
     assert "never attribute feelings, motives or interest to the match" in support
     assert any("what they actually want" in p for p in AGENCY.principles)
+    # The output contract points patterns and reflection questions at the client's own feelings too.
+    assert "what the customer's own messages show of how they felt" in SYSTEM_PROMPT
+    assert "what do I actually want here?" in SYSTEM_PROMPT
+    assert "do I feel two ways about this" in SYSTEM_PROMPT
 
     # The feelings named are the client's own, so the gate lets them through...
     enforce_agency(
