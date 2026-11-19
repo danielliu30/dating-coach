@@ -160,6 +160,15 @@ describe('AuthProvider restore', () => {
     expect(await stored()).toBeNull();
   });
 
+  it('a revoked refresh on restore reports revocation, not expiry', async () => {
+    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(session({ expires_at: anHourAgo() })));
+    mocked.refreshSession.mockRejectedValue(new ApiError(401, 'session revoked'));
+    const { result } = await renderAuth();
+    expect(result.current.token).toBeNull();
+    expect(result.current.signedOutReason).toBe('revoked');
+    expect(await stored()).toBeNull();
+  });
+
   it('an unreachable backend on restore keeps the stored session for next launch', async () => {
     await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(session({ expires_at: anHourAgo() })));
     mocked.refreshSession.mockRejectedValue(new TypeError('network'));
@@ -548,6 +557,13 @@ describe('AuthProvider renewal', () => {
     await renderAuth();
     await expect(registeredRenewal()()).resolves.toBe('rejected');
     expect(mocked.refreshSession).not.toHaveBeenCalled();
+  });
+
+  it('reports revoked when a live renewal is refused after sign-out elsewhere', async () => {
+    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(session()));
+    await renderAuth();
+    mocked.refreshSession.mockRejectedValue(new ApiError(401, 'session revoked'));
+    await expect(registeredRenewal()()).resolves.toBe('revoked');
   });
 
   it('a renewal that lands after sign-out does not write the old session back', async () => {

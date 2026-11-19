@@ -16,6 +16,7 @@ import CoachListScreen from '../screens/CoachListScreen';
 import CoachProfileScreen from '../screens/CoachProfileScreen';
 import MySessionsScreen from '../screens/MySessionsScreen';
 import SignInScreen from '../screens/SignInScreen';
+import ForgotPasswordScreen from '../screens/ForgotPasswordScreen';
 import SignUpScreen from '../screens/SignUpScreen';
 import SubmitConversationScreen from '../screens/SubmitConversationScreen';
 import ThreadsScreen from '../screens/ThreadsScreen';
@@ -216,6 +217,7 @@ function AuthNavigator({ initialRoute }: { initialRoute: keyof AuthStackParams }
   return (
     <AuthStack.Navigator screenOptions={{ headerShown: false }} initialRouteName={initialRoute}>
       <AuthStack.Screen name="SignIn" component={SignInScreen} />
+      <AuthStack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
       <AuthStack.Screen name="SignUp" component={SignUpScreen} />
       <AuthStack.Screen name="Verify" component={VerifyEmailScreen} />
     </AuthStack.Navigator>
