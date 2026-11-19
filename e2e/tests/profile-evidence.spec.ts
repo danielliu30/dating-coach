@@ -41,7 +41,7 @@ test('analysis click-through persists cited evidence on the owner-only result', 
       feedback: 'unknown',
       selfCorrection: { level: 'unknown', self_positions: [] },
     },
-  ];
+  ] as const;
   const resultPaths: string[] = [];
   for (const example of cases) {
     await test.step(example.title, async () => {
