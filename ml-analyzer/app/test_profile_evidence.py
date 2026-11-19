@@ -179,6 +179,20 @@ def test_accepting_an_alternative_does_not_erase_the_original_restriction(logist
     assert evidence.feedback_needed.self_positions == [4, 12 + 2 * len(logistics)]
 
 
+def test_ambiguous_acceptance_is_not_evidence_that_the_previous_restriction_still_holds():
+    evidence = extract_profile_evidence(_conversation(
+        "me: I'd like to try that cafe together.",
+        "them: I can't make Friday.",
+        "me: How about Friday?",
+        "me: Would Saturday work?",
+        "me: How about tomorrow instead?",
+        "them: That works.",
+        "me: Would Friday work?",
+    ))
+    assert evidence.coverage == "eligible"
+    assert evidence.feedback_needed.level == "unknown"
+
+
 def test_no_reply_or_short_style_is_not_a_coaching_need():
     evidence = extract_profile_evidence(_conversation(
         "me: Would you like to meet up?",
