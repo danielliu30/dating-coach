@@ -51,7 +51,7 @@ def extract_profile_evidence(messages: Sequence[Message]) -> ProfileEvidence:
     constraints: dict[str, _Constraint] = {}
     history: list[_Constraint] = []
     last_match = -1
-    proposed_day: str | None = None
+    last_proposal: tuple[int, str] | None = None
     saw_miss = False
     clarity: list[int] = []
     engagement: list[int] = []
@@ -61,38 +61,44 @@ def extract_profile_evidence(messages: Sequence[Message]) -> ProfileEvidence:
         constraints = {
             day: constraint for day, constraint in constraints.items() if i - constraint.stated <= _CONTEXT_MESSAGES
         }
+        if last_proposal and i - last_proposal[0] > _CONTEXT_MESSAGES:
+            last_proposal = None
         body = " ".join(message.body.casefold().replace("’", "'").split())
+        mentioned_days = _DAY_WORD.findall(body)
         if message.sender == "match":
             last_match = i
             decline = _DECLINE.fullmatch(body)
             if decline:
+                last_proposal = None
                 day = decline["direct"] or decline["day_first"]
                 if day not in constraints:
                     constraints[day] = _Constraint(i)
                     history.append(constraints[day])
                 constraints[day].stated = i
             elif _INDIRECT_AVAILABILITY.fullmatch(body):
-                if proposed_day:
-                    constraints.pop(proposed_day, None)
+                if last_proposal:
+                    constraints.pop(last_proposal[1], None)
                 else:
                     constraints.clear()
-            else:
+                last_proposal = None
+            elif mentioned_days:
                 # The other person may be reopening or qualifying availability.
-                for day in _DAY_WORD.findall(body):
+                last_proposal = None
+                for day in mentioned_days:
                     constraints.pop(day, None)
-            proposed_day = None
             continue
 
-        proposed_day = None
         if not constraints:
             continue
         repair_prefix = _REPAIR.match(body)
         acknowledgment = repair_prefix or _ACKNOWLEDGE.match(body)
         proposal = _PROPOSE.fullmatch(body[acknowledgment.end():] if acknowledgment else body)
         if not proposal:
+            if mentioned_days:
+                last_proposal = None
             continue
         day = proposal[1] or proposal[2]
-        proposed_day = day
+        last_proposal = (i, day)
         if day in constraints:
             constraint = constraints[day]
             saw_miss = True
