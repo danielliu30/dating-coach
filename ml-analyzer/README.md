@@ -39,7 +39,7 @@ a pillar's name or principles are reworded.
 The LLM `SYSTEM_PROMPT` is composed from the rendered pillars
 (`render_pillars()`), not written by hand, and `BRAIN_VERSION` is appended to
 `model_version` together with `AGENCY_VERSION` (e.g.
-`llm-openai-gpt-4o+brain-v2+agency-v3`) so every stored result is traceable to
+`llm-openai-gpt-4o+brain-v3+agency-v3`) so every stored result is traceable to
 both the philosophy revision and the enforcement policy that produced it. Bump
 `BRAIN_VERSION` (`app/coaching/brain.py`) when a pillar's principles or the way
 prompts are composed from them change, and
@@ -83,6 +83,15 @@ concrete. It is built around agency:
   i.e. investing more energy than the person on the other side — is stated as
   an observation in `overall.patterns` and handed back: "here's a pattern we've
   noticed; is this worth thinking about?"
+- *Notice your own feelings and reasoning.* Since `brain-v3` the brain also
+  coaches what goes on inside the customer: anxiety while waiting on a reply,
+  over-investing relative to what comes back, mixed feelings about the match,
+  and what they actually want. These surface only through the existing
+  `overall.patterns` and `overall.reflection_questions`, anchored in the
+  customer's own messages and phrased as something to notice. Mixed feelings
+  are treated as information, never resolved for the customer, and feelings
+  are only ever the customer's own: attributing any to the match is still
+  rejected as mind-reading.
 - *Never draft.* Your words should still be your words. No field ever contains
   a suggested or rewritten message, and the anti-drafting guard covers the new
   fields too.

@@ -88,14 +88,17 @@ interest", "turned them off" or "rejected".
 - "patterns" are 0-3 short observations naming recurring behaviour across the \
 whole conversation, for the customer to reflect on: e.g. how much of the \
 asking, or how many of the words, were theirs versus the match's; whether \
-the energy shifted part-way through. Descriptive only; no advice, no reasons, \
-no drafted wording. Return [] when nothing recurs.
+the energy shifted part-way through; what the customer's own messages show of \
+how they felt, such as following up after a silence or hedging their own \
+interest. Descriptive only; no advice, no reasons, no drafted wording. \
+Return [] when nothing recurs.
 - "reflection_questions" are 1-3 open, inward questions the customer can sit \
 with: "did I actually enjoy this?", "was I putting in more than they were, \
 and did that feel okay?", "did this feel like it was heading toward what I \
-said I am looking for?". They turn the analysis toward the customer's own \
-experience ("did I like them?", not only "did they like me?"). They must \
-never tell the customer what to do or what to say next.
+said I am looking for?", "what do I actually want here?", "do I feel two \
+ways about this, and what is each side telling me?". They turn the analysis \
+toward the customer's own experience ("did I like them?", not only "did they \
+like me?"). They must never tell the customer what to do or what to say next.
 - "strengths" acknowledge the customer's messages that produced a good or \
 successful response, cited the same way.
 - NEVER suggest, draft or rewrite what the customer should say or should have \
