@@ -14,7 +14,7 @@ from __future__ import annotations
 import re
 import statistics
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Dict, List, Literal, Optional, Sequence
 
 from ..schemas import AnalyzeRequest, AnalyzeResponse, GoalScore, Message, Overall, Segment
@@ -276,6 +276,8 @@ def energy_trend_patterns(messages: Sequence[Message]) -> List[str]:
 REINITIATION_GAP = timedelta(hours=6)
 # Fewest restarts by one side before who restarts the conversation is named.
 MIN_RESTARTS = 2
+# Timestamps this close to another message's read as backend receive-time stamps for missing sent_at, not send times.
+FILLED_STAMP_WINDOW = timedelta(seconds=1)
 # Most message numbers spelled out in one citation list before the rest are only counted.
 MAX_CITED = 5
 
@@ -295,14 +297,31 @@ def _times_word(count: int) -> str:
     return "once" if count == 1 else "twice" if count == 2 else f"{count} times"
 
 
+def _send_times(ordered: Sequence[Message]) -> List[Optional[datetime]]:
+    """Parsed ``sent_at`` per message, ``None`` where absent, unparseable or within ``FILLED_STAMP_WINDOW`` of another.
+
+    The backend stamps a message submitted without ``sent_at`` with the time it
+    was received, so a partly dated thread has a cluster of near-identical
+    stamps later than its real ones; reading those as send times would turn an
+    ordinary reply into a long pause.
+    """
+    times = [_parse_sent_at(m.sent_at) for m in ordered]
+    dated = sorted((t, i) for i, t in enumerate(times) if t is not None)
+    filled = set()
+    for (prev, i), (cur, j) in zip(dated, dated[1:]):
+        if cur - prev <= FILLED_STAMP_WINDOW:
+            filled.update((i, j))
+    return [None if i in filled else t for i, t in enumerate(times)]
+
+
 def reinitiation_patterns(messages: Sequence[Message]) -> List[str]:
     """Name it when one side is clearly the one picking the conversation back up after long pauses.
 
     A restart is a message sent at least ``REINITIATION_GAP`` after the message
     before it (in position order), judged only where both messages carry a
     parseable ``sent_at`` (``_parse_sent_at``); pairs missing a timestamp or
-    going backwards in time are skipped, so timestamp-less conversations stay
-    silent. When one side made at least ``MIN_RESTARTS`` restarts and at
+    going backwards in time are skipped, as are receive-time stamps the backend
+    filled in (``_send_times``), so timestamp-less conversations stay silent. When one side made at least ``MIN_RESTARTS`` restarts and at
     least ``RECIPROCITY_RATIO`` times as many as the other, one sentence names
     who did it and cites the restarting messages, e.g. "After each of the 3
     long pauses in this conversation (6 hours or more), you were the one who
@@ -310,7 +329,7 @@ def reinitiation_patterns(messages: Sequence[Message]) -> List[str]:
     described, never why the other side did not.
     """
     ordered = sorted(messages, key=lambda m: m.position)
-    times = [_parse_sent_at(m.sent_at) for m in ordered]
+    times = _send_times(ordered)
     restarts: Dict[str, List[Message]] = {"self": [], "match": []}
     for prev_at, (cur, cur_at) in zip(times, zip(ordered[1:], times[1:])):
         if prev_at is None or cur_at is None or cur.sender not in restarts:
