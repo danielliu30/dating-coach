@@ -276,7 +276,7 @@ def energy_trend_patterns(messages: Sequence[Message]) -> List[str]:
 REINITIATION_GAP = timedelta(hours=6)
 # Fewest restarts by one side before who restarts the conversation is named.
 MIN_RESTARTS = 2
-# Timestamps this close to another message's read as backend receive-time stamps for missing sent_at, not send times.
+# Spacing of the backend's receive-time stamps for missing sent_at: they form the conversation's latest cluster.
 FILLED_STAMP_WINDOW = timedelta(seconds=1)
 # Most message numbers spelled out in one citation list before the rest are only counted.
 MAX_CITED = 5
@@ -298,19 +298,23 @@ def _times_word(count: int) -> str:
 
 
 def _send_times(ordered: Sequence[Message]) -> List[Optional[datetime]]:
-    """Parsed ``sent_at`` per message, ``None`` where absent, unparseable or within ``FILLED_STAMP_WINDOW`` of another.
+    """Parsed ``sent_at`` per message, ``None`` where absent, unparseable or filled in by the backend.
 
     The backend stamps a message submitted without ``sent_at`` with the time it
-    was received, so a partly dated thread has a cluster of near-identical
+    was received, so a partly dated thread ends in a cluster of near-identical
     stamps later than its real ones; reading those as send times would turn an
-    ordinary reply into a long pause.
+    ordinary reply into a long pause. That cluster is the run of two or more
+    latest stamps each within ``FILLED_STAMP_WINDOW`` of the next; quick
+    replies earlier in the conversation keep their stamps.
     """
     times = [_parse_sent_at(m.sent_at) for m in ordered]
-    dated = sorted((t, i) for i, t in enumerate(times) if t is not None)
-    filled = set()
-    for (prev, i), (cur, j) in zip(dated, dated[1:]):
-        if cur - prev <= FILLED_STAMP_WINDOW:
-            filled.update((i, j))
+    dated = sorted(((t, i) for i, t in enumerate(times) if t is not None), reverse=True)
+    cluster = dated[:1]
+    for (later, _), (earlier, i) in zip(dated, dated[1:]):
+        if later - earlier > FILLED_STAMP_WINDOW:
+            break
+        cluster.append((earlier, i))
+    filled = {i for _, i in cluster} if len(cluster) > 1 else set()
     return [None if i in filled else t for i, t in enumerate(times)]
 
 
