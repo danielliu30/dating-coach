@@ -139,11 +139,12 @@ SYSTEM_PROMPT = _PROMPT_INTRO + render_pillars() + _PROMPT_CONTRACT
 
 # Worst-case output tokens (~4 characters per token) for the JSON the parser
 # keeps: a segment entry with its 500-character comment, a goal score with its
-# 300-character comment, and the overall block (1000-character summary plus four
-# lists of five 300-character items).
+# 300-character comment, and the overall block (1000-character summary plus
+# every LIST_LIMITS item at 300 characters).
 _SEGMENT_TOKENS = 150
 _GOAL_SCORE_TOKENS = 100
-_OVERALL_TOKENS = 1800
+_LIST_ITEM_TOKENS = 75
+_OVERALL_TOKENS = 250 + _LIST_ITEM_TOKENS * sum(LIST_LIMITS.values())
 
 
 class LLMScorer(Scorer):
