@@ -180,14 +180,15 @@ describe('AnalysisResultScreen', () => {
     await flush();
     // failures 1..4 schedule retries at 2s, 4s, 6s, 8s
     for (let i = 1; i <= 4; i += 1) {
-      expect(screen.queryByText('gateway timeout')).toBeNull();
+      expect(screen.queryByText('We lost the thread')).toBeNull();
       await act(async () => {
         jest.advanceTimersByTime(2000 * i);
       });
     }
     expect(mocked.analysisResult).toHaveBeenCalledTimes(5);
-    expect(screen.getByText('gateway timeout')).toBeTruthy();
     expect(screen.getByText('We lost the thread')).toBeTruthy();
+    expect(screen.getByText('We couldn’t load your analysis. Please try again.')).toBeTruthy();
+    expect(screen.queryByText('gateway timeout')).toBeNull();
 
     mocked.analysisResult.mockResolvedValue(resultFixture());
     fireEvent.press(screen.getByText('Try again'));
@@ -203,7 +204,8 @@ describe('AnalysisResultScreen', () => {
     render(<AnalysisResultScreen {...props} />);
     await flush();
     expect(screen.getByText('Analysis failed')).toBeTruthy();
-    expect(screen.getByText('model crashed')).toBeTruthy();
+    expect(screen.getByText('We couldn’t score this conversation. Please try again.')).toBeTruthy();
+    expect(screen.queryByText('model crashed')).toBeNull();
 
     fireEvent.press(screen.getByText('Try again'));
     await flush();
@@ -213,15 +215,25 @@ describe('AnalysisResultScreen', () => {
     expect(screen.getByText('Warm and curious.')).toBeTruthy();
   });
 
-  it('re-queue failure shows the error and keeps the failed card', async () => {
+  it('shows safe copy if re-queueing fails and lets the user retry again', async () => {
     mocked.analysisResult.mockResolvedValue(resultFixture({ status: 'failed', error: 'model crashed' }));
-    mocked.reanalyzeConversation.mockRejectedValue(new Error('queue full'));
+    mocked.reanalyzeConversation
+      .mockRejectedValueOnce(new Error('queue full'))
+      .mockResolvedValueOnce(resultFixture({ id: 'a2', status: 'pending', segments: null, overall: null }));
     render(<AnalysisResultScreen {...props} />);
     await flush();
     fireEvent.press(screen.getByText('Try again'));
     await flush();
-    expect(screen.getByText('queue full')).toBeTruthy();
+    expect(screen.getByText('We couldn’t restart the analysis. Please try again.')).toBeTruthy();
+    expect(screen.queryByText('queue full')).toBeNull();
     expect(screen.getByText('Analysis failed')).toBeTruthy();
+
+    mocked.analysisResult.mockResolvedValue(resultFixture({ id: 'a2' }));
+    fireEvent.press(screen.getByText('Try again'));
+    await flush();
+    expect(mocked.reanalyzeConversation).toHaveBeenCalledTimes(2);
+    expect(mocked.analysisResult).toHaveBeenLastCalledWith('a2');
+    expect(screen.getByText('Warm and curious.')).toBeTruthy();
   });
 
   it('labelling the outcome posts the consented label and shows the thanks/failure copy', async () => {
