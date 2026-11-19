@@ -14,7 +14,7 @@ from __future__ import annotations
 import re
 import statistics
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Dict, FrozenSet, List, Literal, Optional, Sequence, Tuple
 
 from ..schemas import AnalyzeRequest, AnalyzeResponse, GoalScore, Message, Overall, Segment
@@ -276,6 +276,8 @@ def energy_trend_patterns(messages: Sequence[Message]) -> List[str]:
 REINITIATION_GAP = timedelta(hours=6)
 # Fewest restarts by one side before who restarts the conversation is named.
 MIN_RESTARTS = 2
+# Timestamps this close to another message's read as backend receive-time stamps for missing sent_at, not send times.
+FILLED_STAMP_WINDOW = timedelta(seconds=1)
 # Most message numbers spelled out in one citation list before the rest are only counted.
 MAX_CITED = 5
 
@@ -295,14 +297,31 @@ def _times_word(count: int) -> str:
     return "once" if count == 1 else "twice" if count == 2 else f"{count} times"
 
 
+def _send_times(ordered: Sequence[Message]) -> List[Optional[datetime]]:
+    """Parsed ``sent_at`` per message, ``None`` where absent, unparseable or within ``FILLED_STAMP_WINDOW`` of another.
+
+    The backend stamps a message submitted without ``sent_at`` with the time it
+    was received, so a partly dated thread has a cluster of near-identical
+    stamps later than its real ones; reading those as send times would turn an
+    ordinary reply into a long pause.
+    """
+    times = [_parse_sent_at(m.sent_at) for m in ordered]
+    dated = sorted((t, i) for i, t in enumerate(times) if t is not None)
+    filled = set()
+    for (prev, i), (cur, j) in zip(dated, dated[1:]):
+        if cur - prev <= FILLED_STAMP_WINDOW:
+            filled.update((i, j))
+    return [None if i in filled else t for i, t in enumerate(times)]
+
+
 def reinitiation_patterns(messages: Sequence[Message]) -> List[str]:
     """Name it when one side is clearly the one picking the conversation back up after long pauses.
 
     A restart is a message sent at least ``REINITIATION_GAP`` after the message
     before it (in position order), judged only where both messages carry a
     parseable ``sent_at`` (``_parse_sent_at``); pairs missing a timestamp or
-    going backwards in time are skipped, so timestamp-less conversations stay
-    silent. When one side made at least ``MIN_RESTARTS`` restarts and at
+    going backwards in time are skipped, as are receive-time stamps the backend
+    filled in (``_send_times``), so timestamp-less conversations stay silent. When one side made at least ``MIN_RESTARTS`` restarts and at
     least ``RECIPROCITY_RATIO`` times as many as the other, one sentence names
     who did it and cites the restarting messages, e.g. "After each of the 3
     long pauses in this conversation (6 hours or more), you were the one who
@@ -310,7 +329,7 @@ def reinitiation_patterns(messages: Sequence[Message]) -> List[str]:
     described, never why the other side did not.
     """
     ordered = sorted(messages, key=lambda m: m.position)
-    times = [_parse_sent_at(m.sent_at) for m in ordered]
+    times = _send_times(ordered)
     restarts: Dict[str, List[Message]] = {"self": [], "match": []}
     for prev_at, (cur, cur_at) in zip(times, zip(ordered[1:], times[1:])):
         if prev_at is None or cur_at is None or cur.sender not in restarts:
@@ -392,10 +411,16 @@ SMALL_TALK = re.compile(
 )
 # The customer saying what they think, feel or care about, or asking about the match's.
 DEPTH_MARKER = re.compile(
-    r"\b(i (feel|felt|think|believe|value|care about|always wanted|have always|'ve always|used to|realized|realised|"
-    r"worry|wish|hope|dream)|i'm (scared|afraid|proud|nervous|excited)|honestly|to me|for me|matters to me|"
+    r"\b(i (feel|felt|think|believe|value|care about|always wanted|used to|realized|realised|worry|wish|hope|dream)|"
+    r"i(['\u2019]ve| have) always|i(['\u2019]m| am) (scared|afraid|proud|nervous|excited)|honestly|to me|for me|matters to me|"
     r"means a lot|grew up|my (family|mom|mum|dad|parents|brother|sister|childhood|dream|goal|friends)|"
     r"what made you|why do you|what do you love|what matters|what drew you|how did you (get into|end up|decide))\b",
+    re.IGNORECASE,
+)
+# The customer naming their own feeling outright; counts as going deeper at any length ("I feel lonely lately").
+OWN_FEELING = re.compile(
+    r"\b(i (feel|felt|worry|care about|value|realized|realised)|i(['\u2019]ve| have) always|"
+    r"i(['\u2019]m| am) (scared|afraid|proud|nervous|excited|lonely|sad|hurt|anxious))\b",
     re.IGNORECASE,
 )
 # Word count from which a customer message counts as going deeper even without a ``DEPTH_MARKER``.
@@ -415,13 +440,18 @@ Depth = Literal["deep", "small_talk", "other"]
 def _depth(message: Message) -> Depth:
     """Classify one customer message as going deeper, small talk, or neither.
 
-    A message is ``deep`` when it has at least ``DEEP_WORDS`` words or, from
-    ``SMALL_TALK_WORDS + 1`` words, a ``DEPTH_MARKER``. Otherwise it is
+    A message is ``deep`` when it has at least ``DEEP_WORDS`` words, an
+    ``OWN_FEELING`` at any length or, from ``SMALL_TALK_WORDS + 1`` words, a
+    ``DEPTH_MARKER``. Otherwise it is
     ``small_talk`` when it is low-effort, at most ``SMALL_TALK_WORDS`` words
     or a ``SMALL_TALK`` check-in, and ``other`` when none of these apply.
     """
     words = _word_count(message)
-    if words >= DEEP_WORDS or (words > SMALL_TALK_WORDS and DEPTH_MARKER.search(message.body)):
+    if (
+        words >= DEEP_WORDS
+        or OWN_FEELING.search(message.body)
+        or (words > SMALL_TALK_WORDS and DEPTH_MARKER.search(message.body))
+    ):
         return "deep"
     if _is_low_effort(message) or words <= SMALL_TALK_WORDS or SMALL_TALK.search(message.body):
         return "small_talk"
