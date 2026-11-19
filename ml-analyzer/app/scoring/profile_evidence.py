@@ -62,6 +62,7 @@ def extract_profile_evidence(messages: Sequence[Message]) -> ProfileEvidence:
     clarity: list[int] = []
     engagement: list[int] = []
     repair: list[int] = []
+    feedback: list[int] = []
 
     for i, message in enumerate(ordered):
         constraints = {
@@ -117,6 +118,7 @@ def extract_profile_evidence(messages: Sequence[Message]) -> ProfileEvidence:
             if constraint.suspended:
                 continue
             saw_miss = True
+            feedback = []
             if not constraint.open_miss or constraint.open_miss[1] != last_match:
                 constraint.open_miss = (message.position, last_match)
                 constraint.first_miss = constraint.first_miss or constraint.open_miss
@@ -126,6 +128,7 @@ def extract_profile_evidence(messages: Sequence[Message]) -> ProfileEvidence:
         if not acknowledgment:
             continue
         engagement = engagement or [message.position]
+        feedback = feedback or [message.position]
         open_misses = [c for c in constraints.values() if c.open_miss and not c.suspended]
         if len(open_misses) == 1:
             constraint = open_misses[0]
@@ -153,7 +156,7 @@ def extract_profile_evidence(messages: Sequence[Message]) -> ProfileEvidence:
         coverage="eligible",
         clarity_of_approach=_strong(clarity),
         engagement=_strong(engagement),
-        feedback_needed=_strong(engagement if not has_open_miss else []),
+        feedback_needed=_strong(feedback if not has_open_miss else []),
     )
     if repair and not has_open_miss:
         evidence.self_correction = _strong(repair)

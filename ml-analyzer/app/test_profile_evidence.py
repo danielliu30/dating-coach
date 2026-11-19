@@ -224,6 +224,23 @@ def test_explicit_availability_clears_ambiguity_for_a_separate_repair():
     assert evidence.feedback_needed.level == "strong"
     assert evidence.self_correction.level == "strong"
     assert evidence.self_correction.self_positions == [14, 16]
+    assert evidence.feedback_needed.self_positions == [16]
+
+
+@pytest.mark.parametrize("clarification", ["Actually, Friday works now.", "I can't make Friday."])
+def test_clarification_does_not_turn_a_pre_miss_acknowledgment_into_feedback_credit(clarification):
+    evidence = extract_profile_evidence(_conversation(
+        "me: I'd like to try that cafe together.",
+        "them: I can't make Friday.",
+        "me: Got it, how about Saturday?",
+        "them: Let me check.",
+        "me: How about Friday?",
+        "me: How about the next day instead?",
+        "them: That works.",
+        f"them: {clarification}",
+    ))
+    assert evidence.engagement.level == "strong"
+    assert evidence.feedback_needed.level == "unknown"
 
 
 def test_no_reply_or_short_style_is_not_a_coaching_need():
