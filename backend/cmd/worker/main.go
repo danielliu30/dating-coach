@@ -72,7 +72,11 @@ func run() error {
 	defer rdb.Close()
 
 	denylist := auth.NewDenylist(rdb, max(cfg.JWTTTL, cfg.VerifyTokenTTL, cfg.RefreshTokenTTL))
+	auth.ReplayRevocationsOnStartup(ctx, cfg.QueueBackend, denylist, pg.Queries)
 	deleter := account.NewWorker(pg.Queries, denylist)
+	if cfg.QueueBackend == "pubsub" {
+		return runHTTP(ctx, cfg, pg.Queries, worker, deleter, denylist, bookings, notifier, provider.Enabled())
+	}
 
 	slog.Info("worker started",
 		"analysis_queue", cfg.AnalysisQueue,
