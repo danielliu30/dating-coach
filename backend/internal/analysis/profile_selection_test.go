@@ -64,6 +64,7 @@ func TestSelectProfileEvidence(t *testing.T) {
 	newest := add(owner, time.Hour, " How  about\tSaturday? ", "That works.")
 	want := run(newest, 20*time.Minute, "succeeded", strong)
 	run(newest, 19*time.Minute, "succeeded", wrongSpeaker)
+	run(newest, 18*time.Minute, "succeeded", json.RawMessage(`{"profile_evidence":{"rubric_version":"profile-v1","coverage":"eligible","feedback_needed":{"level":"strong","self_positions":[0]},"engagement":{"level":"unknown","self_positions":[0]}}}`))
 	run(newest, 18*time.Minute, "succeeded", json.RawMessage(`{"profile_evidence":{"rubric_version":"profile-v2","coverage":"eligible","feedback_needed":{"level":"strong","self_positions":[0]}}}`))
 	run(newest, 17*time.Minute, "succeeded", json.RawMessage(`{"summary":"legacy"}`))
 	run(newest, 16*time.Minute, "pending", strong)

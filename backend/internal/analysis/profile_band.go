@@ -55,6 +55,24 @@ func qualifyingProfileEvidence(payload json.RawMessage) (storedProfileEvidence, 
 	if json.Unmarshal(payload, &row) != nil || row.RubricVersion != profileRubric || row.Coverage != "eligible" {
 		return row, false
 	}
+	observations := [...]profileObservation{row.FeedbackNeeded, row.Engagement, row.ClarityOfApproach, row.SelfCorrection}
+	for i, observation := range observations {
+		if observation.assessed() {
+			continue
+		}
+		if len(observation.SelfPositions) > 0 || observation.Issue != "" {
+			return row, false
+		}
+		switch observation.Level {
+		case "", "unknown":
+		case "not_applicable":
+			if i != len(observations)-1 {
+				return row, false
+			}
+		default:
+			return row, false
+		}
+	}
 	return row, row.FeedbackNeeded.assessed() || row.Engagement.assessed() || row.ClarityOfApproach.assessed()
 }
 
