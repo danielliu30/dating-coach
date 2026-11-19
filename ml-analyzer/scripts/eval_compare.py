@@ -73,6 +73,8 @@ def to_request(example: TrainingExample) -> AnalyzeRequest:
         preferences=example.preferences,
         match_name=example.match_name,
         focus_areas=example.focus_areas,
+        # Profile context is optional on the analyzer; send it once the request schema accepts it.
+        **({"profile": example.profile} if example.profile and "profile" in AnalyzeRequest.model_fields else {}),
         messages=[
             Message(position=m.position, sender=m.sender, body=m.body, sent_at=m.sent_at) for m in example.messages
         ],
