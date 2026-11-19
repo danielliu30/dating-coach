@@ -106,10 +106,30 @@ var consumeCodeScript = redis.NewScript(`
 if redis.call('GET', KEYS[1]) ~= ARGV[1] then
   return 0
 end
+local ttl = redis.call('PTTL', KEYS[1])
+if ttl <= 0 then
+  return 0
+end
 redis.call('DEL', KEYS[1], KEYS[2])
-return 1
+return ttl
 `)
 
-func (c *VerificationCache) Consume(ctx context.Context, userID, code string) (bool, error) {
-	return consumeCodeScript.Run(ctx, c.rdb, []string{c.codeKey(userID), c.attemptsKey(userID)}, code).Bool()
+func (c *VerificationCache) Consume(ctx context.Context, userID, code string) (time.Duration, error) {
+	ms, err := consumeCodeScript.Run(ctx, c.rdb, []string{c.codeKey(userID), c.attemptsKey(userID)}, code).Int64()
+	return time.Duration(ms) * time.Millisecond, err
+}
+
+var restoreCodeScript = redis.NewScript(`
+if redis.call('SET', KEYS[1], ARGV[1], 'NX', 'PX', ARGV[2]) then
+  redis.call('SET', KEYS[2], 0, 'PX', ARGV[2])
+  return 1
+end
+return 0
+`)
+
+func (c *VerificationCache) Restore(ctx context.Context, userID, code string, ttl time.Duration) error {
+	if ttl.Milliseconds() <= 0 {
+		return nil
+	}
+	return restoreCodeScript.Run(ctx, c.rdb, []string{c.codeKey(userID), c.attemptsKey(userID)}, code, ttl.Milliseconds()).Err()
 }

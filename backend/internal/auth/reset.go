@@ -57,7 +57,18 @@ func (s *Service) ResetPassword(ctx context.Context, email, code, password strin
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
+	var consumedUntil time.Time
+	committed := false
+	defer func() {
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_ = tx.Rollback(cleanup)
+		if !committed && !consumedUntil.IsZero() {
+			if err := s.resetCodes.Restore(cleanup, user.ID.String(), strings.TrimSpace(code), time.Until(consumedUntil)); err != nil {
+				slog.Error("restore reset code after failed transaction", "error", err, "user_id", user.ID)
+			}
+		}
+	}()
 	q := s.queries.WithTx(tx)
 	if _, err := q.LockUserForRefresh(ctx, user.ID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -66,11 +77,12 @@ func (s *Service) ResetPassword(ctx context.Context, email, code, password strin
 		return err
 	}
 	userID := user.ID.String()
-	consumed, err := s.resetCodes.Consume(ctx, userID, strings.TrimSpace(code))
+	consumedAt := time.Now()
+	remaining, err := s.resetCodes.Consume(ctx, userID, strings.TrimSpace(code))
 	if err != nil {
 		return err
 	}
-	if !consumed {
+	if remaining <= 0 {
 		count, err := s.resetCodes.IncrementAttempts(ctx, userID)
 		if err != nil {
 			return err
@@ -82,6 +94,7 @@ func (s *Service) ResetPassword(ctx context.Context, email, code, password strin
 		}
 		return ErrInvalidResetCode
 	}
+	consumedUntil = consumedAt.Add(remaining)
 	if err := q.SetUserPassword(ctx, db.SetUserPasswordParams{ID: user.ID, PasswordHash: string(hash)}); err != nil {
 		return err
 	}
@@ -103,5 +116,6 @@ func (s *Service) ResetPassword(ctx context.Context, email, code, password strin
 	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
+	committed = true
 	return nil
 }

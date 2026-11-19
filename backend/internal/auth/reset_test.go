@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/danielliu30/dating-coach/backend/internal/store/db"
 )
@@ -84,6 +85,70 @@ func TestPasswordReset(t *testing.T) {
 	}
 	if _, err := svc.Refresh(ctx, session.RefreshToken); err == nil {
 		t.Fatal("old refresh accepted")
+	}
+}
+
+func TestPasswordResetRestoresCodeAfterFailure(t *testing.T) {
+	svc, _, pool := newTestService(t)
+	ctx := context.Background()
+	email := "reset-failure-" + uuid.NewString() + "@example.com"
+	signup, err := svc.SignUp(ctx, SignUpInput{Email: email, Password: "old-password", DisplayName: "Reset"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM users WHERE email=$1", email) })
+	if err := svc.ForgotPassword(ctx, email); err != nil {
+		t.Fatal(err)
+	}
+	code, _, _ := svc.resetCodes.Get(ctx, signup.User.ID)
+	denylist := svc.denylist
+	rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", MaxRetries: -1, DialTimeout: time.Second})
+	defer rdb.Close()
+	svc.denylist = NewDenylist(rdb, time.Minute)
+	if err := svc.ResetPassword(ctx, email, code, "new-password"); err == nil {
+		t.Fatal("reset succeeded with unavailable denylist")
+	}
+	restored, _, err := svc.resetCodes.Get(ctx, signup.User.ID)
+	if err != nil || restored != code {
+		t.Fatalf("restored=%q err=%v", restored, err)
+	}
+	svc.denylist = denylist
+	if err := svc.ResetPassword(ctx, email, code, "new-password"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestResetCacheRestorePreservesNewerCode(t *testing.T) {
+	cache, mr := newTestCache(t)
+	ctx := context.Background()
+	if err := cache.Store(ctx, "user", "111111"); err != nil {
+		t.Fatal(err)
+	}
+	mr.FastForward(20 * time.Second)
+	remaining, err := cache.Consume(ctx, "user", "111111")
+	if err != nil || remaining != 40*time.Second {
+		t.Fatalf("remaining=%v err=%v", remaining, err)
+	}
+	if err := cache.Restore(ctx, "user", "111111", remaining); err != nil {
+		t.Fatal(err)
+	}
+	if got := mr.TTL(cache.codeKey("user")); got != remaining {
+		t.Fatal(got)
+	}
+	if err := cache.Store(ctx, "user", "222222"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cache.Restore(ctx, "user", "111111", remaining); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, _ := cache.Get(ctx, "user"); code != "222222" {
+		t.Fatal("restore replaced newer code")
+	}
+	if err := cache.Restore(ctx, "expired", "111111", 0); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, _ := cache.Get(ctx, "expired"); code != "" {
+		t.Fatal("restored expired code")
 	}
 }
 
