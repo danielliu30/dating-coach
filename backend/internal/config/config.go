@@ -17,9 +17,14 @@ type Config struct {
 	Env      string
 	HTTPAddr string
 
-	DatabaseURL string
-	RedisURL    string
-	RabbitMQURL string
+	DatabaseURL               string
+	RedisURL                  string
+	RabbitMQURL               string
+	QueueBackend              string
+	GCPProjectID              string
+	PubSubMaxDeliveryAttempts int
+	MLServiceAuth             string
+	EmailOutboxTopic          string
 
 	JWTSecret           string
 	JWTTTL              time.Duration
@@ -110,25 +115,30 @@ func Load() (*Config, error) {
 	}
 
 	cfg := &Config{
-		Env:                  env("APP_ENV", "development"),
-		HTTPAddr:             env("HTTP_ADDR", ":8080"),
-		DatabaseURL:          env("DATABASE_URL", ""),
-		RedisURL:             env("REDIS_URL", "redis://localhost:6379/0"),
-		RabbitMQURL:          env("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/"),
-		JWTSecret:            env("JWT_SECRET", ""),
-		JWTTTL:               envDuration("JWT_TTL", 15*time.Minute),
-		VerifyTokenTTL:       envDuration("VERIFY_TOKEN_TTL", 30*time.Minute),
-		RefreshTokenTTL:      envDuration("REFRESH_TOKEN_TTL", 30*24*time.Hour),
-		ResetCodeTTL:         envDuration("RESET_CODE_TTL", 15*time.Minute),
-		ResetResendCooldown:  envDuration("RESET_RESEND_COOLDOWN", time.Minute),
-		BcryptCost:           envInt("BCRYPT_COST", 12),
-		AuthRateLimit:        envInt("AUTH_RATE_LIMIT", 20),
-		AuthRateWindow:       envDuration("AUTH_RATE_WINDOW", time.Minute),
-		MLServiceURL:         env("ML_SERVICE_URL", "http://localhost:8000"),
-		MLServiceTimeout:     envDuration("ML_SERVICE_TIMEOUT", 60*time.Second),
-		ProfileScoreEnabled:  envBool("PROFILE_SCORE_ENABLED", false),
-		AnalysisQueue:        env("ANALYSIS_QUEUE", "conversation.analysis"),
-		AccountDeletionQueue: env("ACCOUNT_DELETION_QUEUE", "account.deletion"),
+		Env:                       env("APP_ENV", "development"),
+		HTTPAddr:                  env("HTTP_ADDR", ":"+env("PORT", "8080")),
+		QueueBackend:              env("QUEUE_BACKEND", "rabbitmq"),
+		GCPProjectID:              env("GCP_PROJECT_ID", ""),
+		PubSubMaxDeliveryAttempts: envInt("PUBSUB_MAX_DELIVERY_ATTEMPTS", 5),
+		MLServiceAuth:             env("ML_SERVICE_AUTH", "none"),
+		EmailOutboxTopic:          env("EMAIL_OUTBOX_TOPIC", "email.outbox"),
+		DatabaseURL:               env("DATABASE_URL", ""),
+		RedisURL:                  env("REDIS_URL", "redis://localhost:6379/0"),
+		RabbitMQURL:               env("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/"),
+		JWTSecret:                 env("JWT_SECRET", ""),
+		JWTTTL:                    envDuration("JWT_TTL", 15*time.Minute),
+		VerifyTokenTTL:            envDuration("VERIFY_TOKEN_TTL", 30*time.Minute),
+		RefreshTokenTTL:           envDuration("REFRESH_TOKEN_TTL", 30*24*time.Hour),
+		ResetCodeTTL:              envDuration("RESET_CODE_TTL", 15*time.Minute),
+		ResetResendCooldown:       envDuration("RESET_RESEND_COOLDOWN", time.Minute),
+		BcryptCost:                envInt("BCRYPT_COST", 12),
+		AuthRateLimit:             envInt("AUTH_RATE_LIMIT", 20),
+		AuthRateWindow:            envDuration("AUTH_RATE_WINDOW", time.Minute),
+		MLServiceURL:              env("ML_SERVICE_URL", "http://localhost:8000"),
+		MLServiceTimeout:          envDuration("ML_SERVICE_TIMEOUT", 60*time.Second),
+		ProfileScoreEnabled:       envBool("PROFILE_SCORE_ENABLED", false),
+		AnalysisQueue:             env("ANALYSIS_QUEUE", "conversation.analysis"),
+		AccountDeletionQueue:      env("ACCOUNT_DELETION_QUEUE", "account.deletion"),
 
 		DeadLetterAlertPeriod: envDuration("DEAD_LETTER_ALERT_PERIOD", time.Minute),
 
@@ -150,6 +160,18 @@ func Load() (*Config, error) {
 
 	if cfg.DatabaseURL == "" {
 		return nil, fmt.Errorf("DATABASE_URL is required")
+	}
+	if cfg.QueueBackend != "rabbitmq" && cfg.QueueBackend != "pubsub" {
+		bad = append(bad, "QUEUE_BACKEND must be rabbitmq or pubsub")
+	}
+	if cfg.QueueBackend == "pubsub" && cfg.GCPProjectID == "" {
+		bad = append(bad, "GCP_PROJECT_ID is required for pubsub")
+	}
+	if cfg.PubSubMaxDeliveryAttempts <= 0 {
+		bad = append(bad, "PUBSUB_MAX_DELIVERY_ATTEMPTS must be positive")
+	}
+	if cfg.MLServiceAuth != "none" && cfg.MLServiceAuth != "google" {
+		bad = append(bad, "ML_SERVICE_AUTH must be none or google")
 	}
 	if cfg.JWTSecret == "" {
 		return nil, fmt.Errorf("JWT_SECRET is required")
