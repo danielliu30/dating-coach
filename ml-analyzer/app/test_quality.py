@@ -74,3 +74,9 @@ def test_aggregate_skips_nan_and_averages_booleans() -> None:
     ]
     assert aggregate(results) == {"conversations": 2.0, "self_coverage": 0.75, "agency_ok": 0.5, "theme_recall": 0.5}
     assert aggregate([]) == {"conversations": 0.0}
+
+
+def test_aggregate_collects_metrics_missing_from_the_first_result() -> None:
+    """A metric that is ``None`` (e.g. after a JSON round trip of ``nan``) in the first row is still averaged."""
+    results = [{"theme_recall": None}, {"theme_recall": 0.5}]
+    assert aggregate(results) == {"conversations": 2.0, "theme_recall": 0.5}

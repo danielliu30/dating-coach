@@ -143,10 +143,12 @@ def score_response(
 
 
 def aggregate(results: Sequence[Mapping[str, object]]) -> Dict[str, float]:
-    """Mean of every numeric or boolean metric across ``results``, skipping ``nan``; ``nan`` when none remain."""
-    keys = [k for k, v in (results[0].items() if results else ()) if isinstance(v, (int, float))]
+    """Mean of every numeric or boolean metric across ``results``, skipping ``nan`` and ``None``; ``nan`` when none remain."""
+    keys: List[str] = []
+    for result in results:
+        keys += [k for k, v in result.items() if isinstance(v, (int, float)) and k not in keys]
     out: Dict[str, float] = {"conversations": float(len(results))}
     for key in keys:
-        values = [float(r[key]) for r in results if isinstance(r.get(key), (int, float)) and not math.isnan(float(r[key]))]  # type: ignore[arg-type]
+        values = [float(v) for v in (r.get(key) for r in results) if isinstance(v, (int, float)) and not math.isnan(v)]
         out[key] = sum(values) / len(values) if values else math.nan
     return out
