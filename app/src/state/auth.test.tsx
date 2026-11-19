@@ -15,6 +15,7 @@ jest.mock('../api/client', () => {
       usePrincipal: jest.fn(),
       useRenewal: jest.fn(),
       onSessionRejected: jest.fn(),
+      renewalSettled: jest.fn(),
       signIn: jest.fn(),
       signUp: jest.fn(),
       refreshSession: jest.fn(),
@@ -83,6 +84,7 @@ const registeredRejection = () => {
 beforeEach(async () => {
   await AsyncStorage.clear();
   mocked.signOut.mockResolvedValue({ status: 'signed_out' });
+  mocked.renewalSettled.mockResolvedValue();
 });
 
 describe('AuthProvider sign in / sign up', () => {
@@ -340,6 +342,24 @@ describe('AuthProvider sign out / delete', () => {
     }
   });
 
+  it('signOut waits for a renewal in flight and revokes with the session it installed', async () => {
+    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(session()));
+    mocked.refreshSession.mockResolvedValue(session({ token: 'renewed', refresh_token: 'refresh2' }));
+    const { result } = await renderAuth();
+    mocked.renewalSettled.mockImplementation(async () => {
+      await registeredRenewal()();
+    });
+
+    await act(async () => {
+      await result.current.signOut();
+    });
+
+    expect(mocked.signOut).toHaveBeenCalledTimes(1);
+    expect(mocked.signOut).toHaveBeenCalledWith('renewed');
+    expect(result.current.token).toBeNull();
+    expect(await stored()).toBeNull();
+  });
+
   it('a second signOut tap does not revoke again', async () => {
     await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(session()));
     const { result } = await renderAuth();
@@ -365,7 +385,9 @@ describe('AuthProvider sign out / delete', () => {
     let signingIn!: Promise<Profile>;
     await act(async () => {
       void result.current.signOut();
-      await Promise.resolve();
+    });
+    await waitFor(() => expect(mocked.signOut).toHaveBeenCalledTimes(1));
+    await act(async () => {
       signingIn = result.current.signIn('a@b.c', 'pw');
       await Promise.resolve();
     });

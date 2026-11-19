@@ -343,6 +343,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
       // token stops working. A failed revocation still leaves this device
       // signed out.
       signOut: async () => {
+        // A renewal in flight is spending the refresh token on hand; revoking
+        // with that token instead could lose the race and revoke nothing.
+        if (tokenRef.current) await withinSignOutTimeout(api.renewalSettled());
         const token = tokenRef.current;
         if (token) {
           revocationRef.current = revoke(token, refreshRef.current).catch(() => undefined);
