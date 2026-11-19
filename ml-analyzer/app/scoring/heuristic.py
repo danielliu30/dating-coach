@@ -16,7 +16,16 @@ import statistics
 from dataclasses import dataclass
 from typing import Dict, List, Literal, Optional, Sequence
 
-from ..schemas import AnalyzeRequest, AnalyzeResponse, GoalScore, Message, Overall, Segment
+from ..schemas import (
+    DATING_PHASE_LABELS,
+    AnalyzeRequest,
+    AnalyzeResponse,
+    GoalScore,
+    Message,
+    Overall,
+    Segment,
+    UserProfile,
+)
 from .base import Scorer, align_segments, chunk, clamp, label_for
 
 OPEN_QUESTION = re.compile(r"\b(what|why|how|where|when|which|who)\b", re.IGNORECASE)
@@ -211,8 +220,71 @@ def reciprocity_patterns(messages: Sequence[Message]) -> List[str]:
     return patterns
 
 
+# Fewest messages in a conversation before its early and late stretches are compared.
+MIN_MESSAGES_FOR_TREND = 30
+# Fewest messages one side needs in each compared stretch for its average length to mean anything.
+MIN_TREND_SIDE_MESSAGES = 3
+# Early-to-late (or late-to-early) ratio of average words per message from which a trend is named.
+TREND_RATIO = 1.75
+
+
+def _span(messages: Sequence[Message]) -> str:
+    """Name a contiguous stretch of position-ordered messages the way clients count them ("Messages 1-10")."""
+    return f"Messages {messages[0].position + 1}-{messages[-1].position + 1}"
+
+
+def _mean_words(messages: Sequence[Message]) -> float:
+    return statistics.fmean(_word_count(m) for m in messages)
+
+
+def energy_trend_patterns(messages: Sequence[Message]) -> List[str]:
+    """Name it when either side's message length changed clearly between the start and the end of a long conversation.
+
+    The position-ordered conversation is cut into thirds; the first and last
+    third are compared and the middle is ignored. For each side with at least
+    ``MIN_TREND_SIDE_MESSAGES`` messages in both stretches, the average words
+    per message is compared, and a change of at least ``TREND_RATIO`` in
+    either direction (where the longer average reaches ``GOOD_REPLY_WORDS``,
+    so 2 words against 4 stays silent) yields one sentence citing both
+    stretches, e.g. "Their messages got shorter over the conversation: about
+    14 words each early on (Messages 1-15) against about 4 in the last stretch
+    (Messages 31-45)." The customer's side comes first. Only lengths are
+    described; nothing is said about why. Conversations under
+    ``MIN_MESSAGES_FOR_TREND`` messages return an empty list.
+    """
+    ordered = sorted(messages, key=lambda m: m.position)
+    if len(ordered) < MIN_MESSAGES_FOR_TREND:
+        return []
+    third = len(ordered) // 3
+    early, late = ordered[:third], ordered[-third:]
+
+    patterns: List[str] = []
+    for sender, subject in (("self", "Your"), ("match", "Their")):
+        early_side = [m for m in early if m.sender == sender]
+        late_side = [m for m in late if m.sender == sender]
+        if min(len(early_side), len(late_side)) < MIN_TREND_SIDE_MESSAGES:
+            continue
+        before, after = _mean_words(early_side), _mean_words(late_side)
+        if max(before, after) < GOOD_REPLY_WORDS:
+            continue
+        if before >= TREND_RATIO * after:
+            direction = "shorter"
+        elif after >= TREND_RATIO * before:
+            direction = "longer"
+        else:
+            continue
+        patterns.append(
+            f"{subject} messages got {direction} over the conversation: about {max(1, round(before))} words each "
+            f"early on ({_span(early)}) against about {max(1, round(after))} in the last stretch ({_span(late)})."
+        )
+    return patterns
+
+
 def reflection_questions(
-    reviews: Sequence[SelfMessageReview], patterns: Sequence[str], preferences: Optional[str]
+    reviews: Sequence[SelfMessageReview],
+    patterns: Sequence[str],
+    preferences: Optional[str],
+    profile: Optional[UserProfile] = None,
 ) -> List[str]:
     """Open questions that turn the analysis inward: "did I like them?", not only "did they like me?".
 
@@ -221,7 +293,8 @@ def reflection_questions(
     the conversation, not just how it landed. Adds an effort/reciprocity
     question when ``patterns`` (from ``reciprocity_patterns``) is non-empty
     and a preferences question when the customer stated what they are
-    looking for. Every question is non-directive: it never tells the
+    looking for, then ``profile_reflection_questions`` for the phases on the
+    customer's own profile. Every question is non-directive: it never tells the
     customer what to do, drafts nothing and never speculates about the
     match's reasons. Returns an empty list when ``reviews`` is empty, since
     there is nothing of the customer's to reflect on.
@@ -235,6 +308,48 @@ def reflection_questions(
     if preference:
         questions.append(
             f"You said you are looking for: {preference[:200]}. Did this conversation feel like it was heading there?"
+        )
+    questions.extend(profile_reflection_questions(profile))
+    return questions
+
+
+PROFILE_PHASES_NAMED = 2
+
+
+def _known_phases(keys: Sequence[str]) -> List[str]:
+    """Return the keys that have a fixed label, so caller-supplied text is never echoed."""
+    return [key for key in keys if key in DATING_PHASE_LABELS]
+
+
+def _phase_list(keys: Sequence[str]) -> str:
+    """Join the first ``PROFILE_PHASES_NAMED`` phase labels as "a" or "a and b"."""
+    return " and ".join(DATING_PHASE_LABELS[key] for key in keys[:PROFILE_PHASES_NAMED])
+
+
+def profile_reflection_questions(profile: Optional[UserProfile]) -> List[str]:
+    """Ask how the conversation sat with the dating phases the customer named on their own profile.
+
+    One question for ``phases_working_on`` and one for ``phases_strong``, each
+    naming at most ``PROFILE_PHASES_NAMED`` phases by label. They are about the
+    customer's own goals and how they felt, never about the match or whom to
+    date, and only the fixed phase labels are echoed (unknown phase keys, the
+    free-text bio and prompts never are). Returns an empty list without a
+    profile or without known phases.
+    """
+    if profile is None:
+        return []
+    questions: List[str] = []
+    working_on = _known_phases(profile.phases_working_on)
+    strong = _known_phases(profile.phases_strong)
+    if working_on:
+        questions.append(
+            f"You told us you are working on {_phase_list(working_on)}. "
+            "Looking at your own messages here, how do you feel that part went, and how did it feel to you?"
+        )
+    if strong:
+        questions.append(
+            f"You count {_phase_list(strong)} among your strengths. "
+            "Did this conversation feel like you at your best there, or did something get in the way for you?"
         )
     return questions
 
@@ -297,7 +412,7 @@ def goal_scores(
 
 
 class HeuristicScorer(Scorer):
-    version = "heuristic-v4"
+    version = "heuristic-v5"
 
     def __init__(self, segment_size: int = 4) -> None:
         self.segment_size = segment_size
@@ -334,7 +449,7 @@ class HeuristicScorer(Scorer):
                 summary=_summary(reviews, request.preferences),
                 strengths=_strengths(reviews),
                 improvements=_improvements(reviews),
-                reflection_questions=reflection_questions(reviews, patterns, request.preferences),
+                reflection_questions=reflection_questions(reviews, patterns, request.preferences, request.profile),
                 patterns=patterns,
                 goal_scores=goal_scores(reviews, request.messages, request.focus_areas),
             ),
