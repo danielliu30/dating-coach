@@ -177,7 +177,9 @@ did in this conversation (5 to 2)." — and are empty when nothing recurs. Both
 default to `[]`, so clients that predate them are unaffected.
 The LLM backend asks for and keeps at most 6 `strengths`, 8 `improvements`,
 5 `reflection_questions` and 5 `patterns` (`LIST_LIMITS` in
-`app/scoring/llm.py`), each item cut to 300 characters.
+`app/scoring/llm.py`), each item cut to 300 characters. The heuristic and
+trained backends keep at most 5 `strengths` and 8 `improvements`
+(`MAX_STRENGTHS` / `MAX_IMPROVEMENTS` in `app/scoring/heuristic.py`).
 `overall.goal_scores[]` holds `{goal, score (0–1), comment}` entries, at most
 one per requested focus area (`goal` is the pillar key); it is `[]` when no
 focus areas were requested.
@@ -400,6 +402,29 @@ The script pairs scores by segment boundary and writes them to
 Exit codes: `0` passed, `1` failed a threshold, `2` not evaluated (for example,
 a trained fallback or mismatched segment boundaries). LLM fallbacks are counted
 against coverage and excluded from agreement metrics.
+
+### Compare old vs new analyzer output
+
+`scripts/eval_compare.py` grades the feedback text, not just scores, on
+`data/eval_holdout.jsonl` and the longer, persona-based
+`data/eval_extended.jsonl`. Completeness covers expected themes mentioned, the
+customer's messages cited, segment comments and hint count. Correctness covers
+valid `Message N` citations, the agency check, fallback rate and segment error
+against human labels (`training/quality.py`).
+
+```bash
+make eval-run LABEL=base BACKEND=llm      # on the baseline checkout
+make eval-run LABEL=cand BACKEND=llm      # after the change
+make eval-diff BASE=base CAND=cand        # artifacts/eval-runs/base-vs-cand.md
+```
+
+The report shows metric deltas overall and by length, persona and source, then
+per conversation the themes gained or lost and the improvements, patterns and
+reflection questions that were added or removed. To compare against `main`, run
+the baseline from a `git worktree` of `main` with the same `RUNS` directory.
+LLM runs use temperature 0.2, so treat small deltas as noise.
+Only local backends accept `--include-unconsented`; the LLM backend does not
+send those rows to the configured provider.
 
 ### 5. Switch backends
 

@@ -809,18 +809,23 @@ def _label(message: Message) -> str:
     return f"Message {message.position + 1}"
 
 
+# Shared by the heuristic and trained backends, which word feedback the same way.
+MAX_STRENGTHS = 5
+MAX_IMPROVEMENTS = 8
+
+
 def _excerpt(message: Message, limit: int = 40) -> str:
     body = " ".join(message.body.split())
     return repr(body if len(body) <= limit else body[: limit - 1] + "…")
 
 
 def _strengths(reviews: Sequence[SelfMessageReview]) -> List[str]:
-    """Acknowledge the customer's messages that drew a substantive reply (at most three)."""
+    """Acknowledge the customer's messages that drew a substantive reply (at most ``MAX_STRENGTHS``)."""
     good = [r for r in reviews if r.outcome == "good_reply"]
     good.sort(key=lambda r: r.score, reverse=True)
     return [
         f"{_label(r.message)} landed: it drew a detailed reply ({_excerpt(r.reply)})."  # type: ignore[arg-type]
-        for r in good[:3]
+        for r in good[:MAX_STRENGTHS]
     ]
 
 
@@ -830,7 +835,7 @@ def _improvements(reviews: Sequence[SelfMessageReview]) -> List[str]:
     Each hint states only the observable outcome (no reply, a short reply) and
     hands it back as a question, never a diagnosis: the match's reasons are
     unknowable, so nothing here claims to know them, and nothing suggests what
-    to say instead. At most five hints, in conversation order.
+    to say instead. At most ``MAX_IMPROVEMENTS`` hints, in conversation order.
     """
     hints: List[str] = []
     for r in reviews:
@@ -844,7 +849,7 @@ def _improvements(reviews: Sequence[SelfMessageReview]) -> List[str]:
                 f"{_label(r.message)} ({_excerpt(r.message)}) only drew a short reply ({_excerpt(r.reply)}). "  # type: ignore[arg-type]
                 "That's the pattern, not the reason — is it worth thinking about?"
             )
-    return hints[:5]
+    return hints[:MAX_IMPROVEMENTS]
 
 
 def _outcome_counts(reviews: Sequence[SelfMessageReview]) -> Dict[Outcome, int]:
