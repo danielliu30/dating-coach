@@ -29,6 +29,7 @@ x-backend-env: &backend-env
   SMTP_USERNAME: ${SMTP_USERNAME:-}
   SMTP_PASSWORD: ${SMTP_PASSWORD:-}
   SMTP_TIMEOUT: ${SMTP_TIMEOUT:-30s}
+  SMTP_TLS: ${SMTP_TLS:-}
   MAIL_FROM: ${MAIL_FROM:-no-reply@datingcoach.local}
   GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
   PAYMENTS_ENABLED: ${PAYMENTS_ENABLED:-false}
@@ -170,7 +171,7 @@ services:
   # Local inbox (`--profile mail`): catches every email the api/worker send so
   # verification codes and booking mails can be read at http://localhost:8025.
   # Point the backend at it with SMTP_HOST=mailpit SMTP_PORT=1025 (no auth);
-  # with SMTP_HOST left empty the backend logs emails instead of sending them.
+  # In development only, an empty SMTP_HOST logs emails instead of sending them.
   mailpit:
     image: axllent/mailpit:v1.29
     profiles: ['mail']

@@ -13,6 +13,8 @@ func TestLoadDefaultsToProduction(t *testing.T) {
 	t.Setenv("POSTGRES_PASSWORD", "db-test-password")
 	t.Setenv("RABBITMQ_URL", "amqp://app:mq-test-password@localhost:5672/")
 	t.Setenv("SMTP_PASSWORD", "")
+	t.Setenv("SMTP_HOST", "smtp.example.test")
+	t.Setenv("SMTP_TLS", "")
 
 	for _, value := range []string{"unset", "", "   "} {
 		t.Run("APP_ENV="+value, func(t *testing.T) {
@@ -75,6 +77,8 @@ func TestLoadProductionSecrets(t *testing.T) {
 	t.Setenv("POSTGRES_PASSWORD", "db-test-password")
 	t.Setenv("RABBITMQ_URL", "amqp://app:mq-test-password@rabbitmq:5672/")
 	t.Setenv("SMTP_PASSWORD", "smtp-test-password")
+	t.Setenv("SMTP_HOST", "smtp.example.test")
+	t.Setenv("SMTP_TLS", "")
 	if _, err := Load(); err != nil {
 		t.Fatalf("Load() = %v, want valid production config", err)
 	}

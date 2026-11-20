@@ -130,11 +130,25 @@ npx expo start                # then press i / a for iOS / Android
 
 Point the app at the backend with `EXPO_PUBLIC_API_URL`. It defaults to `http://localhost:8080` (`http://10.0.2.2:8080` on the Android emulator). If you use the nginx gateway profile, set it to `http://localhost`.
 
-Sign-up returns a short-lived `verify`-scoped token that only reaches `/api/v1/auth`; every other endpoint answers 403 until the email is confirmed, at which point verification hands back a full `session`-scoped token. Sign-in refuses accounts whose address is unconfirmed (403), and the app sends those users to the verify screen. The verification email carries a 6-digit code that expires after 3 minutes and is discarded after 3 wrong attempts. With no SMTP credentials configured the email is written to the API log instead of being sent, so grab the code locally with:
+Sign-up returns a short-lived `verify`-scoped token that only reaches `/api/v1/auth`; every other endpoint answers 403 until the email is confirmed, at which point verification hands back a full `session`-scoped token. Sign-in refuses accounts whose address is unconfirmed (403), and the app sends those users to the verify screen. The verification email carries a 6-digit code that expires after 3 minutes and is discarded after 3 wrong attempts. Only in `APP_ENV=development`, with `SMTP_HOST` empty, email contents (including verification/reset codes) are written to the API log instead of being sent. Grab the code locally with:
 
 ```bash
 docker compose logs api | grep -i verification
 ```
+
+Outside development, API and worker startup requires `SMTP_HOST`; missing mail
+delivery is a configuration error, not a log-based fallback. Notification contents
+and raw SMTP error replies are not logged in these environments, since replies
+could echo codes or tokens. Delivery failures still return a generic error.
+
+`SMTP_TLS` is a boolean: unset/blank defaults to **true outside development** and
+**false in development**. Non-development environments reject `SMTP_TLS=false`.
+Port **465** always uses implicit TLS; other ports require STARTTLS when TLS is
+required, refusing servers that do not advertise it before AUTH or message data.
+TLS certificates/hostnames are verified and TLS 1.2 or newer is required.
+In development, `SMTP_HOST=mailpit SMTP_PORT=1025` works without TLS with the
+default/false setting; STARTTLS is still used when advertised. SMTP credentials
+remain optional for relays that do not require authentication.
 
 `VERIFY_RESEND_COOLDOWN` sets the minimum interval between verification emails
 per account (default `1m`, must be positive). Signup's initial email starts the
