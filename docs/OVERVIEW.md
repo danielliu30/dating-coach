@@ -152,6 +152,11 @@ cp .env.example .env         # set JWT_SECRET; add LLM_API_KEY for real LLM scor
 docker compose up -d --build
 ```
 
+The copied file explicitly sets `APP_ENV=development` for local example secrets.
+With `APP_ENV` omitted or blank, Compose and Go binaries default to production
+and reject those secrets at startup. Deployments must use non-default secrets,
+not the development opt-in.
+
 - Backend health: `http://localhost:8080/healthz`
 - ML analyzer health: `http://localhost:8000/healthz` (reports the active backend and model version) and interactive API documentation at `http://localhost:8000/docs`
 

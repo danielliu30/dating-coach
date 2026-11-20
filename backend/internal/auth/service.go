@@ -480,13 +480,12 @@ func (s *Service) SignUp(ctx context.Context, in SignUpInput) (Session, error) {
 	// The row and the code have to exist together: a registered address with no
 	// code cannot be verified and blocks every retry with ErrEmailTaken, so a
 	// failed store takes the row back out and lets the caller sign up again.
-	if err := s.codes.Store(ctx, user.ID.String(), code); err != nil {
+	if err := s.issueVerificationCode(ctx, user, code); err != nil {
 		if _, delErr := s.queries.DeleteUser(ctx, user.ID); delErr != nil {
 			slog.Error("roll back sign-up after failed code store", "error", delErr, "user_id", user.ID)
 		}
 		return Session{}, fmt.Errorf("store verification code: %w", err)
 	}
-	s.sendVerificationEmail(ctx, user.Email, code)
 
 	jwtToken, expiresAt, err := s.issuer.Issue(user.ID, user.Email, user.Role, ScopeVerify, s.verifyTokenTTL)
 	if err != nil {
@@ -695,7 +694,7 @@ func (s *Service) SignIn(ctx context.Context, email, password string) (Session, 
 // and returns the updated profile. A wrong code counts as a failed attempt and
 // the code is discarded after maxVerificationAttempts of them; an unknown
 // address, a missing or expired code and a wrong code all return
-// ErrInvalidCode. An already verified address succeeds without a code.
+// ErrInvalidCode. An already verified address requires its own valid bearer.
 //
 // The code is only removed once the account row has been updated, so a database
 // failure leaves it in place for the caller to retry with the same code.
@@ -705,9 +704,8 @@ func (s *Service) SignIn(ctx context.Context, email, password string) (Session, 
 // given at sign-up, the returned Session also carries a session-scoped access
 // token and a refresh token, so the caller leaves verification with credentials
 // that reach the private API instead of one every private route rejects. A
-// bearer belonging to another account, an expired one, or none at all yields
-// the profile only: verifying never hands a session to whoever merely holds the
-// emailed code.
+// bearer belonging to another account, an expired one, or none at all can
+// confirm an unverified address with its code, but yields no profile or session.
 func (s *Service) VerifyEmail(ctx context.Context, email, code, bearer string) (Session, error) {
 	user, err := s.queries.GetUserByEmail(ctx, strings.ToLower(strings.TrimSpace(email)))
 	if err != nil {
@@ -716,7 +714,8 @@ func (s *Service) VerifyEmail(ctx context.Context, email, code, bearer string) (
 		}
 		return Session{}, fmt.Errorf("lookup user: %w", err)
 	}
-	if !user.EmailVerified {
+	alreadyVerified := user.EmailVerified
+	if !alreadyVerified {
 		userID := user.ID.String()
 		stored, _, err := s.codes.Get(ctx, userID)
 		if err != nil {
@@ -736,13 +735,15 @@ func (s *Service) VerifyEmail(ctx context.Context, email, code, bearer string) (
 			slog.Error("discard consumed verification code", "error", err, "user_id", user.ID)
 		}
 	}
-	profile := profileOf(user)
 	owns, err := s.ownsBearer(ctx, user.ID, bearer)
 	if err != nil {
 		return Session{}, err
 	}
 	if !owns {
-		return Session{User: profile}, nil
+		if alreadyVerified {
+			return Session{}, ErrInvalidCode
+		}
+		return Session{}, nil
 	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -824,9 +825,8 @@ func (s *Service) ownsBearer(ctx context.Context, userID uuid.UUID, bearer strin
 	return true, nil
 }
 
-// ResendVerification issues a fresh code, replacing any outstanding one, and
-// re-sends the email. It succeeds for unknown or already verified addresses so
-// callers cannot enumerate users.
+// ResendVerification issues a fresh code outside the per-account cooldown.
+// It succeeds for unknown, verified and cooling-down addresses alike.
 func (s *Service) ResendVerification(ctx context.Context, email string) error {
 	user, err := s.queries.GetUserByEmail(ctx, strings.ToLower(strings.TrimSpace(email)))
 	if err != nil {
@@ -841,6 +841,17 @@ func (s *Service) ResendVerification(ctx context.Context, email string) error {
 	code, err := randomCode()
 	if err != nil {
 		return err
+	}
+	return s.issueVerificationCode(ctx, user, code)
+}
+
+func (s *Service) issueVerificationCode(ctx context.Context, user db.User, code string) error {
+	allowed, err := s.codes.AllowSend(ctx, user.ID.String())
+	if err != nil {
+		return fmt.Errorf("claim verification cooldown: %w", err)
+	}
+	if !allowed {
+		return nil
 	}
 	if err := s.codes.Store(ctx, user.ID.String(), code); err != nil {
 		return fmt.Errorf("store verification code: %w", err)

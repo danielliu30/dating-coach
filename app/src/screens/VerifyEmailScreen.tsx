@@ -49,9 +49,14 @@ export default function VerifyEmailScreen({
     if (resending) return;
     setResending(true);
     setError(null);
+    setStatus(null);
     try {
-      await resendVerification(email.trim());
-      setStatus('Verification code sent.');
+      const response = await resendVerification(email.trim());
+      const configured = response.resend_after_seconds;
+      const cooldown = typeof configured === 'number' && Number.isFinite(configured) && configured > 0
+        ? Math.ceil(configured)
+        : 60;
+      setStatus(`If your email is unverified, check your inbox for a code. Please wait ${cooldown} seconds before requesting another code.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'could not resend');
     } finally {

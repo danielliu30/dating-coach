@@ -14,7 +14,7 @@ func newTestCache(t *testing.T) (*VerificationCache, *miniredis.Miniredis) {
 	mr := miniredis.RunT(t)
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	t.Cleanup(func() { _ = rdb.Close() })
-	return NewVerificationCache(rdb, time.Minute), mr
+	return NewVerificationCache(rdb, time.Minute, time.Minute), mr
 }
 
 func TestVerificationCache_StoreAndGet(t *testing.T) {

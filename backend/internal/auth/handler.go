@@ -230,6 +230,10 @@ func (h *Handler) verify(w http.ResponseWriter, r *http.Request) {
 		slog.Error("verify email", "error", err)
 		httpx.Error(w, http.StatusInternalServerError, "could not verify email")
 	default:
+		if session.Token == "" {
+			httpx.JSON(w, http.StatusOK, map[string]string{"status": "verified"})
+			return
+		}
 		httpx.JSON(w, http.StatusOK, session)
 	}
 }
@@ -250,7 +254,10 @@ func (h *Handler) resendVerification(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusInternalServerError, "could not resend verification email")
 		return
 	}
-	httpx.JSON(w, http.StatusAccepted, map[string]string{"status": "sent"})
+	httpx.JSON(w, http.StatusAccepted, map[string]any{
+		"status":               "sent",
+		"resend_after_seconds": int64(math.Ceil(h.svc.codes.cooldown.Seconds())),
+	})
 }
 
 // deleteMe handles DELETE /me. It answers 202 rather than 204: the deletion is

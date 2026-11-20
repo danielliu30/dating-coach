@@ -50,7 +50,15 @@ docker compose up -d --build # postgres, redis, rabbitmq, migrations, api, worke
 - ML service: http://localhost:8000/healthz (and `/docs`)
 - RabbitMQ UI: http://localhost:15672 (guest / guest)
 
+All published non-gateway ports bind to `127.0.0.1` by default, including Postgres, Redis, RabbitMQ, API, ML, raw web, Mailpit and pgAdmin. Override their `*_PORT` bindings in `.env` (for example `API_PORT=127.0.0.1:8082`); a bare port or `0.0.0.0:port` explicitly exposes that service. Container-to-container connections still use service names and their original ports. The nginx gateway keeps its existing public `NGINX_PORT=80` default.
+
 Migrations run in a one-shot `migrate` service before `api` and `worker` start.
+
+Copying `.env.example` explicitly opts into `APP_ENV=development` for local use.
+Without `APP_ENV` (or when blank), Compose and standalone Go binaries default to
+`production`: API and worker startup reject the shipped JWT key and default
+database/broker credentials. For deployments, set `APP_ENV=production` and replace
+the example secrets; do not use the development opt-in.
 
 Prebuilt images are published to Docker Hub as `danielliu30/dating-coach-backend` (both `api` and `worker` entrypoints) and `danielliu30/dating-coach-ml-analyzer`. To run from them instead of building:
 
@@ -65,7 +73,7 @@ Images are published automatically by CI on every merge to `main` (see [Deployme
 `nginx/` holds one route table in two flavours — `/api/*` and `/healthz` go to the API (WebSocket upgrades included), `/ml/*` goes to the ML service, and everything else goes to the `web` image (the exported Expo web bundle built by `app/Dockerfile`, with an SPA fallback):
 
 - Containerised: `docker compose --profile gateway up -d` adds the `web` and `nginx` services; open `http://localhost:${NGINX_PORT:-80}/`. If you change `NGINX_PORT`, set `PUBLIC_APP_URL` (and `CORS_ORIGINS`) to that origin as well.
-- Host-installed nginx: install `nginx/host-site.conf` as a site (instructions in the file); it terminates TLS and proxies to the ports compose publishes on `localhost` (`web` on `${WEB_PORT:-3000}`; the file hardcodes 3000, edit it if you change `WEB_PORT`). See [HTTPS](#https-host-nginx--certbot) below.
+- Host-installed nginx: install `nginx/host-site.conf` as a site (instructions in the file); it terminates TLS and proxies to the ports compose publishes on `127.0.0.1` (API 8080, ML 8000, web 3000). If you change `API_PORT`, `ML_ANALYZER_PORT` or `WEB_PORT`, update the corresponding upstream in that file. See [HTTPS](#https-host-nginx--certbot) below.
 
 The web bundle is built with an empty `EXPO_PUBLIC_API_URL` (`WEB_API_URL` in `.env`), which means same-origin: REST and the chat WebSocket use the page's origin, so no CORS is involved. Keep `PUBLIC_APP_URL` on the nginx origin so the `/verify?token=...` deep links resolve through the proxy. The full workflow is written up in `.agents/skills/running-dating-coach-in-docker/SKILL.md`.
 
@@ -85,6 +93,14 @@ Sign-up returns a short-lived `verify`-scoped token that only reaches `/api/v1/a
 ```bash
 docker compose logs api | grep -i verification
 ```
+
+`VERIFY_RESEND_COOLDOWN` sets the minimum interval between verification emails
+per account (default `1m`, must be positive). Signup's initial email starts the
+Redis-backed cooldown. Resends during it neither replace the code nor send mail;
+like password reset, the endpoint returns `202` with
+`{"status":"sent","resend_after_seconds":60}` using the configured interval,
+including for unknown or already verified addresses. The e2e environment uses
+`1s` so its verification retry helper need not wait a full minute.
 
 ### HTTPS (host nginx + certbot)
 
@@ -108,7 +124,7 @@ sudo chmod +x /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
 
 Then in the production `.env`:
 
-- `NGINX_PORT=127.0.0.1:8088` and `WEB_PORT=127.0.0.1:3000` — the host nginx owns 80/443, so the containerised gateway moves off 80 and both are bound to localhost only, so the host nginx is the sole public entrypoint for the web bundle (the compose file still publishes `api` :8080, `ml-analyzer` :8000, Postgres/Redis/RabbitMQ on all interfaces — keep those closed in the VM firewall and allow only 22/80/443). Then `docker compose --profile gateway up -d` as before.
+- `NGINX_PORT=127.0.0.1:8088` — the host nginx owns 80/443, so the containerised gateway moves off 80 and binds to localhost only. `WEB_PORT=127.0.0.1:3000`, API, ML and infrastructure bindings already default to loopback; replace any existing bare-port overrides in your `.env` with loopback bindings too. Keep the VM firewall restricted to 22/80/443 as defense in depth. Then `docker compose --profile gateway up -d` as before.
 - `PUBLIC_APP_URL=https://<domain>` and `CORS_ORIGINS=https://<domain>` so verification/payment links and the CORS allow-list use the public origin.
 - GitHub variable `DEPLOY_HEALTHCHECK_URL=https://<domain>/healthz` so the deploy job probes through TLS.
 
@@ -208,6 +224,10 @@ It asks for confirmation (pass `--yes` to skip), stops `api` and `worker`, repla
 ## Running components without Compose
 
 **Backend** (needs PostgreSQL, Redis and RabbitMQ reachable):
+
+First copy `.env.example` to `.env` in the repository root for local development.
+The Go binaries load that file as well; without it, supply `APP_ENV=development`
+explicitly for local example secrets, or provide valid non-development secrets.
 
 ```bash
 cd backend

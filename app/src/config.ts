@@ -26,6 +26,8 @@ export const API_BASE_URL = resolveBase();
 
 export const API_PREFIX = '/api/v1';
 
+export const PROFILE_SCORE_UI_ENABLED = process.env.EXPO_PUBLIC_PROFILE_SCORE_ENABLED === 'true';
+
 /**
  * Google OAuth web client ID for "Continue with Google" (the same value the
  * API checks ID tokens against as GOOGLE_CLIENT_ID). Empty disables the
