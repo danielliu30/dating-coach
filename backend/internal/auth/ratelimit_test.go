@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"testing"
 	"time"
 
@@ -34,12 +35,13 @@ func TestClientIP(t *testing.T) {
 			r.RemoteAddr = "203.0.113.4:1234"
 			r.Header["X-Forwarded-For"] = tt.forwarded
 			r.Header.Set("X-Real-IP", "192.0.2.99")
-			h := ClientIPMiddleware(tt.hops)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			prefixes := []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0")}
+			if tt.hops == 0 {
+				prefixes = nil
+			}
+			h := TrustedProxyMiddleware(prefixes, tt.hops)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if got := ClientIP(r); got != tt.want {
 					t.Fatalf("ClientIP = %q, want %q", got, tt.want)
-				}
-				if r.RemoteAddr != tt.want {
-					t.Fatalf("RemoteAddr = %q, want %q", r.RemoteAddr, tt.want)
 				}
 			}))
 			h.ServeHTTP(httptest.NewRecorder(), r)
@@ -49,8 +51,9 @@ func TestClientIP(t *testing.T) {
 
 func TestClientIPWithoutMiddleware(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.RemoteAddr = "203.0.113.4:1234"
 	r.Header.Set("X-Forwarded-For", "192.0.2.1, 198.51.100.7")
-	if got := ClientIP(r); got != "198.51.100.7" {
+	if got := ClientIP(r); got != "203.0.113.4" {
 		t.Fatal(got)
 	}
 	r.Header.Del("X-Forwarded-For")
@@ -72,7 +75,8 @@ func TestRateLimiterRejectsRotatingForwardedPrefix(t *testing.T) {
 	rdb := redis.NewClient(&redis.Options{Addr: cache.Addr()})
 	t.Cleanup(func() { _ = rdb.Close() })
 	limiter := NewRateLimiter(rdb, 2, time.Hour)
-	h := ClientIPMiddleware(1)(limiter.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	prefixes := []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0")}
+	h := TrustedProxyMiddleware(prefixes, 1)(limiter.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})))
 	for i, want := range []int{http.StatusNoContent, http.StatusNoContent, http.StatusTooManyRequests} {

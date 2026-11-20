@@ -48,7 +48,7 @@ func TestTrustedProxyHops(t *testing.T) {
 		value   string
 		want    int
 		invalid bool
-	}{{"", 1, false}, {"0", 0, false}, {"1", 1, false}, {"2", 2, false}, {"-1", 0, true}, {"invalid", 0, true}} {
+	}{{"", 0, false}, {"0", 0, false}, {"1", 1, false}, {"2", 2, false}, {"-1", 0, true}, {"invalid", 0, true}} {
 		t.Run(tt.value, func(t *testing.T) {
 			setRequired(t)
 			t.Setenv("TRUSTED_PROXY_HOPS", tt.value)

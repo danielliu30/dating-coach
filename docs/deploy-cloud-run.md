@@ -33,11 +33,17 @@ Images are still built and pushed to Docker Hub (`danielliu30/*`) by
 
 Local `docker compose` is unchanged (RabbitMQ, long-running worker, `QUEUE_BACKEND=rabbitmq` by default).
 
-Auth throttling uses `TRUSTED_PROXY_HOPS=1` for Cloud Run and the local nginx
-gateway: select the rightmost `X-Forwarded-For` address, never a caller-supplied
-prefix. Increase the count only for additional trusted proxies that append an
-address; use `0` when serving the API directly without a trusted proxy. Missing,
-short or malformed chains fall back to the socket peer, not `X-Real-IP`.
+Auth throttling uses `TRUSTED_PROXY_HOPS=1` and
+`TRUSTED_PROXY_CIDRS=0.0.0.0/0,::/0` on Cloud Run: its managed ingress appends
+the rightmost `X-Forwarded-For` address, so caller-supplied prefixes are ignored.
+Trust-all CIDRs are only appropriate behind that managed ingress with the
+positive hop count. Increase the count only for additional trusted proxies that
+append an address. Missing, short or malformed chains in this mode fall back to
+the socket peer, not `X-Real-IP`.
+
+Outside Cloud Run, the default `TRUSTED_PROXY_HOPS=0` retains CIDR-based proxy
+resolution for local nginx/Compose: walk right-to-left to the first untrusted
+address. Use `TRUSTED_PROXY_CIDRS=none` for a directly exposed API.
 
 Email, deletion and payment passes use session-level PostgreSQL advisory locks
 and commit each row separately. `DATABASE_URL` must use a direct PostgreSQL

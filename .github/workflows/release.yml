@@ -178,6 +178,7 @@ jobs:
           APP_ENV: production
           QUEUE_BACKEND: pubsub
           TRUSTED_PROXY_HOPS: "1"
+          TRUSTED_PROXY_CIDRS: "0.0.0.0/0,::/0"
           GCP_PROJECT_ID: "$PROJECT"
           ANALYSIS_QUEUE: "$ANALYSIS_TOPIC"
           ACCOUNT_DELETION_QUEUE: "$DELETION_TOPIC"
