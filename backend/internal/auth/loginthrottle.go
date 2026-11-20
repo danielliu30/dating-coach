@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -31,20 +32,32 @@ func loginFailureKey(email string) string {
 }
 
 var reserveLoginAttempt = redis.NewScript(`
-local count = redis.call('INCR', KEYS[1])
-if count == 1 then
+local count = redis.call('SCARD', KEYS[1])
+if count >= tonumber(ARGV[2]) then
+  return 0
+end
+redis.call('SADD', KEYS[1], ARGV[3])
+if count == 0 then
   redis.call('PEXPIRE', KEYS[1], ARGV[1])
 end
-return count
+return 1
 `)
 
-func (l *LoginThrottle) reserve(ctx context.Context, email string) error {
-	count, err := reserveLoginAttempt.Run(context.WithoutCancel(ctx), l.rdb, []string{loginFailureKey(email)}, l.window.Milliseconds()).Int64()
+func (l *LoginThrottle) reserve(ctx context.Context, email string) (string, error) {
+	id := uuid.NewString()
+	allowed, err := reserveLoginAttempt.Run(context.WithoutCancel(ctx), l.rdb, []string{loginFailureKey(email)}, l.window.Milliseconds(), l.limit, id).Int64()
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrLoginThrottleUnavailable, err)
+		return "", fmt.Errorf("%w: %v", ErrLoginThrottleUnavailable, err)
 	}
-	if count > int64(l.limit) {
-		return ErrLoginThrottled
+	if allowed == 0 {
+		return "", ErrLoginThrottled
+	}
+	return id, nil
+}
+
+func (l *LoginThrottle) release(ctx context.Context, email, id string) error {
+	if err := l.rdb.SRem(context.WithoutCancel(ctx), loginFailureKey(email), id).Err(); err != nil {
+		return fmt.Errorf("%w: %v", ErrLoginThrottleUnavailable, err)
 	}
 	return nil
 }

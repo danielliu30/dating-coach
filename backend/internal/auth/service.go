@@ -650,14 +650,23 @@ func (s *Service) SetLoginThrottle(throttle *LoginThrottle) {
 // one: the lookup skips rows marked deleted, so no session is ever minted for
 // an account whose data is on its way out, however long the removal takes.
 func (s *Service) SignIn(ctx context.Context, email, password string) (Session, error) {
+	var reservation string
 	if s.loginThrottle != nil {
-		if err := s.loginThrottle.reserve(ctx, email); err != nil {
+		var err error
+		reservation, err = s.loginThrottle.reserve(ctx, email)
+		if err != nil {
 			return Session{}, err
 		}
 	}
 	session, err := s.signIn(ctx, email, password)
-	if s.loginThrottle != nil && err == nil {
-		if throttleErr := s.loginThrottle.clear(ctx, email); throttleErr != nil {
+	if s.loginThrottle != nil {
+		var throttleErr error
+		if err == nil {
+			throttleErr = s.loginThrottle.clear(ctx, email)
+		} else if !errors.Is(err, ErrInvalidCredentials) {
+			throttleErr = s.loginThrottle.release(ctx, email, reservation)
+		}
+		if throttleErr != nil {
 			return Session{}, throttleErr
 		}
 	}

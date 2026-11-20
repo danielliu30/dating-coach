@@ -71,7 +71,8 @@ add a Redis-backed password-login limit per trimmed, lowercased email, including
 unknown accounts. Attempts are reserved atomically before checking credentials,
 so parallel guesses cannot exceed the limit. Further attempts return
 `429 {"error":"too many requests"}` until the window expires. A successful
-sign-in clears the counter; other outcomes retain the reservation. The window
+sign-in clears the counter; invalid credentials retain their reservation, while
+infrastructure errors release only their own reservation. The window
 starts at the first attempt, is not extended by retries, and is independent of the
 existing per-IP `AUTH_RATE_LIMIT`. Redis failure makes password sign-in fail
 closed with `503`. Limit and window must be positive.

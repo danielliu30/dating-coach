@@ -10,7 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/danielliu30/dating-coach/backend/internal/store/db"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestLoginThrottleBlocksBeforeCredentialLookup(t *testing.T) {
@@ -18,7 +20,7 @@ func TestLoginThrottleBlocksBeforeCredentialLookup(t *testing.T) {
 	throttle := NewLoginThrottle(cache.rdb, 3, 15*time.Minute)
 	ctx := context.Background()
 	for range 3 {
-		if err := throttle.reserve(ctx, " User@Example.com "); err != nil {
+		if _, err := throttle.reserve(ctx, " User@Example.com "); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -26,11 +28,11 @@ func TestLoginThrottleBlocksBeforeCredentialLookup(t *testing.T) {
 	if _, err := svc.SignIn(ctx, "user@example.com", "correct-password"); !errors.Is(err, ErrLoginThrottled) {
 		t.Fatalf("SignIn=%v; must not reach missing database or password checker", err)
 	}
-	if err := throttle.reserve(ctx, "another@example.com"); err != nil {
+	if _, err := throttle.reserve(ctx, "another@example.com"); err != nil {
 		t.Fatal("another account was blocked:", err)
 	}
 	mr.FastForward(15 * time.Minute)
-	if err := throttle.reserve(ctx, "user@example.com"); err != nil {
+	if _, err := throttle.reserve(ctx, "user@example.com"); err != nil {
 		t.Fatal("cooldown did not expire:", err)
 	}
 }
@@ -87,21 +89,21 @@ func TestLoginAttemptReservationIsAtomic(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := throttle.reserve(context.Background(), "user@example.com"); err != nil && !errors.Is(err, ErrLoginThrottled) {
+			if _, err := throttle.reserve(context.Background(), "user@example.com"); err != nil && !errors.Is(err, ErrLoginThrottled) {
 				t.Error(err)
 			}
 		}()
 	}
 	wg.Wait()
-	if got, err := cache.rdb.Get(context.Background(), loginFailureKey("user@example.com")).Int(); err != nil || got != 25 {
+	if got, err := cache.rdb.SCard(context.Background(), loginFailureKey("user@example.com")).Result(); err != nil || got != 10 {
 		t.Fatalf("count=%d err=%v", got, err)
 	}
 	mr.FastForward(30 * time.Second)
-	if err := throttle.reserve(context.Background(), "user@example.com"); !errors.Is(err, ErrLoginThrottled) {
+	if _, err := throttle.reserve(context.Background(), "user@example.com"); !errors.Is(err, ErrLoginThrottled) {
 		t.Fatalf("over-limit attempt: %v", err)
 	}
 	mr.FastForward(30 * time.Second)
-	if err := throttle.reserve(context.Background(), "user@example.com"); err != nil {
+	if _, err := throttle.reserve(context.Background(), "user@example.com"); err != nil {
 		t.Fatal("failures extended the window:", err)
 	}
 }
@@ -114,10 +116,13 @@ func TestLoginThrottleRedisFailureIsClosed(t *testing.T) {
 	if _, err := svc.SignIn(context.Background(), "user@example.com", "password"); !errors.Is(err, ErrLoginThrottleUnavailable) {
 		t.Fatalf("SignIn should fail before credential lookup: %v", err)
 	}
-	if err := throttle.reserve(context.Background(), "user@example.com"); !errors.Is(err, ErrLoginThrottleUnavailable) {
+	if _, err := throttle.reserve(context.Background(), "user@example.com"); !errors.Is(err, ErrLoginThrottleUnavailable) {
 		t.Fatal(err)
 	}
 	if err := throttle.clear(context.Background(), "user@example.com"); !errors.Is(err, ErrLoginThrottleUnavailable) {
+		t.Fatal(err)
+	}
+	if err := throttle.release(context.Background(), "user@example.com", "reservation"); !errors.Is(err, ErrLoginThrottleUnavailable) {
 		t.Fatal(err)
 	}
 }
@@ -154,7 +159,7 @@ func TestConcurrentWrongPasswordsRespectLoginLimit(t *testing.T) {
 	}
 }
 
-func TestCancelledSignInStillReservesAttempt(t *testing.T) {
+func TestCancelledSignInReleasesAttempt(t *testing.T) {
 	svc, _, pool := newTestService(t)
 	user := verifiedUser(t, svc, pool)
 	svc.SetLoginThrottle(NewLoginThrottle(svc.codes.rdb, 1, time.Minute))
@@ -163,11 +168,11 @@ func TestCancelledSignInStillReservesAttempt(t *testing.T) {
 	if _, err := svc.SignIn(ctx, user.email, "wrong"); err == nil || errors.Is(err, ErrLoginThrottleUnavailable) {
 		t.Fatalf("cancelled sign-in: %v", err)
 	}
-	if got, err := svc.codes.rdb.Get(context.Background(), loginFailureKey(user.email)).Int(); err != nil || got != 1 {
+	if got, err := svc.codes.rdb.SCard(context.Background(), loginFailureKey(user.email)).Result(); err != nil || got != 0 {
 		t.Fatalf("cancelled attempt count=%d err=%v", got, err)
 	}
-	if _, err := svc.SignIn(context.Background(), user.email, user.password); !errors.Is(err, ErrLoginThrottled) {
-		t.Fatalf("cancelled attempt did not consume budget: %v", err)
+	if _, err := svc.SignIn(context.Background(), user.email, user.password); err != nil {
+		t.Fatalf("cancelled lookup consumed budget: %v", err)
 	}
 }
 
@@ -175,14 +180,86 @@ func TestCancelledContextStillClearsLoginAttempts(t *testing.T) {
 	cache, _ := newTestCache(t)
 	throttle := NewLoginThrottle(cache.rdb, 1, time.Minute)
 	ctx, cancel := context.WithCancel(context.Background())
-	if err := throttle.reserve(ctx, "user@example.com"); err != nil {
+	if _, err := throttle.reserve(ctx, "user@example.com"); err != nil {
 		t.Fatal(err)
 	}
 	cancel()
 	if err := throttle.clear(ctx, "user@example.com"); err != nil {
 		t.Fatalf("clear after cancellation: %v", err)
 	}
-	if err := throttle.reserve(context.Background(), "user@example.com"); err != nil {
+	if _, err := throttle.reserve(context.Background(), "user@example.com"); err != nil {
 		t.Fatalf("success counter was not cleared: %v", err)
+	}
+}
+
+func TestInfrastructureErrorsDoNotConsumeLoginQuota(t *testing.T) {
+	svc, _, pool := newTestService(t)
+	user := verifiedUser(t, svc, pool)
+	svc.SetLoginThrottle(NewLoginThrottle(svc.codes.rdb, 1, time.Minute))
+	ctx := context.Background()
+	brokenPool, err := pgxpool.NewWithConfig(ctx, pool.Config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	brokenPool.Close()
+	healthyQueries := svc.queries
+	svc.queries = db.New(brokenPool)
+	for range 3 {
+		if _, err := svc.SignIn(ctx, user.email, user.password); err == nil || errors.Is(err, ErrLoginThrottled) || errors.Is(err, ErrInvalidCredentials) || errors.Is(err, ErrLoginThrottleUnavailable) {
+			t.Fatalf("expected database error, got %v", err)
+		}
+	}
+	svc.queries = healthyQueries
+	if _, err := svc.SignIn(ctx, user.email, user.password); err != nil {
+		t.Fatalf("infrastructure retries locked out recovered account: %v", err)
+	}
+}
+
+func TestReleaseOnlyRemovesItsOwnLoginReservation(t *testing.T) {
+	cache, mr := newTestCache(t)
+	throttle := NewLoginThrottle(cache.rdb, 2, time.Minute)
+	ctx := context.Background()
+	email := "user@example.com"
+	if _, err := throttle.reserve(ctx, email); err != nil {
+		t.Fatal(err)
+	}
+	reservation, err := throttle.reserve(ctx, email)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	for range 2 {
+		if err := throttle.release(cancelled, email, reservation); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := cache.rdb.SCard(ctx, loginFailureKey(email)).Val(); got != 1 {
+		t.Fatalf("release removed another attempt: count=%d", got)
+	}
+	mr.FastForward(time.Minute)
+	for range 2 {
+		if _, err := throttle.reserve(ctx, email); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := throttle.release(cancelled, email, reservation); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := throttle.reserve(ctx, email); !errors.Is(err, ErrLoginThrottled) {
+		t.Fatalf("stale release removed current-window failures: %v", err)
+	}
+}
+
+func TestCancelledContextStillReservesLoginAttempt(t *testing.T) {
+	cache, _ := newTestCache(t)
+	throttle := NewLoginThrottle(cache.rdb, 1, time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := throttle.reserve(ctx, "user@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := throttle.reserve(context.Background(), "user@example.com"); !errors.Is(err, ErrLoginThrottled) {
+		t.Fatalf("cancelled context bypassed reservation: %v", err)
 	}
 }
