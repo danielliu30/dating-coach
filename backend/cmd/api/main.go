@@ -101,6 +101,7 @@ func run() error {
 	issuer := auth.NewTokenIssuer(cfg.JWTSecret)
 	limiter := auth.NewRateLimiter(rdb, cfg.AuthRateLimit, cfg.AuthRateWindow)
 	denylist := auth.NewDenylist(rdb, max(cfg.JWTTTL, cfg.VerifyTokenTTL, cfg.RefreshTokenTTL))
+	auth.ReplayRevocationsOnStartup(ctx, cfg.QueueBackend, denylist, pg.Queries)
 	verificationCodes := auth.NewVerificationCache(rdb, auth.VerificationCodeTTL, cfg.VerifyResendCooldown)
 
 	authSvc := auth.NewService(pg.Pool, pg.Queries, issuer, notifier, cfg.BcryptCost, cfg.PublicAppURL, verificationCodes, auth.NewResetCache(rdb, cfg.ResetCodeTTL, cfg.ResetResendCooldown), denylist, deletions, cfg.JWTTTL, cfg.VerifyTokenTTL, cfg.RefreshTokenTTL)
