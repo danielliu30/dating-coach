@@ -243,6 +243,7 @@ jobs:
             args=(--push-endpoint "$WORKER_URL$2" --push-auth-service-account "$INVOKER_SA"
                   --push-auth-token-audience "$WORKER_URL"
                   --ack-deadline 600 --min-retry-delay 10s --max-retry-delay 600s
+                  --expiration-period=never
                   --dead-letter-topic "$1.dlq" --max-delivery-attempts "$MAX_DELIVERY_ATTEMPTS")
             if gcloud pubsub subscriptions describe "$name" --project "$PROJECT" >/dev/null 2>&1; then
               gcloud pubsub subscriptions update "$name" --project "$PROJECT" "${args[@]}"
