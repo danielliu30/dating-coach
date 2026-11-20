@@ -39,7 +39,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-datingcoach}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-datingcoach}
       POSTGRES_DB: ${POSTGRES_DB:-datingcoach}
-    ports: ['5432:5432']
+    ports: ['${POSTGRES_PORT:-127.0.0.1:5432}:5432']
     volumes: ['postgres-data:/var/lib/postgresql/data']
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-datingcoach}']
@@ -49,7 +49,7 @@ services:
 
   redis:
     image: redis:7-alpine
-    ports: ['6379:6379']
+    ports: ['${REDIS_PORT:-127.0.0.1:6379}:6379']
     healthcheck:
       test: ['CMD', 'redis-cli', 'ping']
       interval: 5s
@@ -61,7 +61,7 @@ services:
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}
-    ports: ['5672:5672', '15672:15672']
+    ports: ['${RABBITMQ_PORT:-127.0.0.1:5672}:5672', '${RABBITMQ_MANAGEMENT_PORT:-127.0.0.1:15672}:15672']
     healthcheck:
       test: ['CMD', 'rabbitmq-diagnostics', '-q', 'ping']
       interval: 10s
@@ -89,7 +89,7 @@ services:
       HTTP_ADDR: ':8080'
     # Public traffic goes through nginx; this host mapping is only for local
     # tooling (Expo dev server, curl) that talks to the API directly.
-    ports: ['8080:8080']
+    ports: ['${API_PORT:-127.0.0.1:8080}:8080']
     restart: unless-stopped
     depends_on:
       migrate:
@@ -128,11 +128,11 @@ services:
       LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-45}
       ML_SEGMENT_SIZE: ${ML_SEGMENT_SIZE:-6}
       ML_MODEL_DIR: ${ML_MODEL_DIR:-/models/segment-scorer}
-    ports: ['8000:8000']
+    ports: ['${ML_ANALYZER_PORT:-127.0.0.1:8000}:8000']
 
   # Static Expo web bundle (`--profile gateway`). Empty EXPO_PUBLIC_API_URL =
   # same origin as the page, so REST and the chat WebSocket both go through
-  # nginx. Published on ${WEB_PORT:-3000} only for a host-installed nginx.
+  # nginx. Published on ${WEB_PORT:-127.0.0.1:3000} only for a host-installed nginx.
   web:
     image: ${DOCKERHUB_NAMESPACE:-danielliu30}/dating-coach-web:${IMAGE_TAG:-latest}
     build:
@@ -142,7 +142,7 @@ services:
         EXPO_PUBLIC_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
         EXPO_PUBLIC_PROFILE_SCORE_ENABLED: ${PROFILE_SCORE_ENABLED:-false}
     profiles: ['gateway']
-    ports: ['${WEB_PORT:-3000}:80']
+    ports: ['${WEB_PORT:-127.0.0.1:3000}:80']
     restart: unless-stopped
 
   # Optional public entrypoint (`--profile gateway`): / to web, /api and
@@ -169,7 +169,7 @@ services:
   mailpit:
     image: axllent/mailpit:v1.29
     profiles: ['mail']
-    ports: ['${MAILPIT_UI_PORT:-8025}:8025', '${MAILPIT_SMTP_PORT:-1025}:1025']
+    ports: ['${MAILPIT_UI_PORT:-127.0.0.1:8025}:8025', '${MAILPIT_SMTP_PORT:-127.0.0.1:1025}:1025']
     environment:
       MP_SMTP_AUTH_ACCEPT_ANY: 1
       MP_SMTP_AUTH_ALLOW_INSECURE: 1
@@ -183,7 +183,7 @@ services:
       PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@admin.com}
       PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-admin}
       PGADMIN_CONFIG_SERVER_MODE: 'False'
-    ports: ['5050:80']
+    ports: ['${PGADMIN_PORT:-127.0.0.1:5050}:80']
     volumes: ['pgadmin-data:/var/lib/pgadmin']
     depends_on:
       postgres:
