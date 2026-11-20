@@ -85,7 +85,6 @@ export default function SignUpScreen({
         />
         <Field
           label="Password"
-          maxLength={72}
           value={password}
           onChangeText={setPassword}
           secureTextEntry

@@ -90,7 +90,8 @@ name **100**, coach headline **200**, bio **5,000**, and each specialty **100**
 (at most **20** specialties). Timezone identifiers are capped at **100** and must
 still be valid IANA zones. Dating preferences retain their **2,000**-rune limit;
 roles, dating styles, phases and coaching goals remain restricted vocabularies.
-Passwords retain bcrypt's **72-byte** cap. App inputs mirror these limits
+Passwords retain bcrypt's **72-byte** server cap; password inputs do not truncate
+typed or pasted passwords. App profile inputs mirror the text limits
 (native `maxLength` may be more conservative for non-BMP Unicode characters).
 Unchanged legacy profile text may exceed the limits so unrelated profile or
 availability edits still work; changed text must satisfy the caps.

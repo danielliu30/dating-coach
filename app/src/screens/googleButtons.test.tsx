@@ -38,7 +38,22 @@ describe('Continue with Google', () => {
   it('bounds signup inputs to the server limits', () => {
     mount(SignUpScreen, jest.fn(), nav());
     const inputs = screen.UNSAFE_getAllByType(TextInput);
-    expect(inputs.map((input) => input.props.maxLength)).toEqual([100, 254, 72]);
+    expect(inputs.map((input) => input.props.maxLength)).toEqual([100, 254, undefined]);
+  });
+
+  it('submits an overlong password unchanged so server validation can reject it', async () => {
+    const navigation = nav();
+    mount(SignUpScreen, jest.fn(), navigation);
+    const signUp = mockUseAuth().signUp as jest.Mock;
+    signUp.mockRejectedValue(new Error('password must be at most 72 bytes'));
+    const password = 'p'.repeat(80);
+    fireEvent.changeText(screen.getByPlaceholderText('Alex'), 'Alex');
+    fireEvent.changeText(screen.getByPlaceholderText('you@example.com'), 'alex@example.com');
+    fireEvent.changeText(screen.getByPlaceholderText('at least 8 characters'), password);
+    fireEvent.press(screen.getByRole('button', { name: 'Create account' }));
+    await screen.findByText('password must be at most 72 bytes');
+    expect(signUp).toHaveBeenCalledWith(expect.objectContaining({ password }));
+    expect(navigation.navigate).not.toHaveBeenCalled();
   });
 
   afterEach(() => {
