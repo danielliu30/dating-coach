@@ -92,6 +92,8 @@ still be valid IANA zones. Dating preferences retain their **2,000**-rune limit;
 roles, dating styles, phases and coaching goals remain restricted vocabularies.
 Passwords retain bcrypt's **72-byte** cap. App inputs mirror these limits
 (native `maxLength` may be more conservative for non-BMP Unicode characters).
+Unchanged legacy profile text may exceed the limits so unrelated profile or
+availability edits still work; changed text must satisfy the caps.
 
 Copying `.env.example` explicitly opts into `APP_ENV=development` for local use.
 Without `APP_ENV` (or when blank), Compose and standalone Go binaries default to

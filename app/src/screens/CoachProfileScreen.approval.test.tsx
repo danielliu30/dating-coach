@@ -87,6 +87,27 @@ beforeEach(() => {
 });
 
 describe('CoachProfileScreen approval banner', () => {
+  it('preserves unchanged legacy text when saving profile and availability edits', async () => {
+    const legacy = {
+      ...coach('pending'),
+      headline: ` ${'a'.repeat(201)} `,
+      bio: ` ${'b'.repeat(5001)} `,
+      specialties: Array.from({ length: 21 }, () => 's'.repeat(101)),
+    };
+    mocked.getCoach.mockResolvedValue(legacy);
+    mocked.upsertCoachProfile.mockClear();
+    mocked.setAvailability.mockClear();
+    mocked.upsertCoachProfile.mockResolvedValue(legacy);
+    render(<CoachProfileScreen />);
+    await screen.findByDisplayValue(legacy.headline);
+    fireEvent.changeText(screen.getByDisplayValue('120'), '150');
+    fireEvent.press(screen.getByRole('button', { name: 'Save profile' }));
+    await waitFor(() => expect(mocked.setAvailability).toHaveBeenCalled());
+    expect(mocked.upsertCoachProfile).toHaveBeenCalledWith(expect.objectContaining({
+      headline: legacy.headline, bio: legacy.bio, specialties: legacy.specialties, hourly_rate_cents: 15000,
+    }));
+  });
+
   it('bounds profile inputs to the server limits', async () => {
     mocked.getCoach.mockResolvedValue(coach('pending'));
     render(<CoachProfileScreen />);

@@ -2,7 +2,9 @@ package coaching
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,6 +12,48 @@ import (
 
 	"github.com/danielliu30/dating-coach/backend/internal/auth"
 )
+
+func TestUnchangedLegacyCoachTextAllowsOtherEdits(t *testing.T) {
+	svc, pool := testService(t)
+	coachID := insertUser(t, pool, "coach")
+	ctx := context.Background()
+	if _, err := svc.UpsertProfile(ctx, coachID, UpsertProfileInput{}); err != nil {
+		t.Fatal(err)
+	}
+	in := UpsertProfileInput{
+		Headline:        strings.Repeat("界", MaxHeadlineLen+1),
+		Bio:             strings.Repeat("界", MaxBioLen+1),
+		Specialties:     make([]string, MaxSpecialties+1),
+		HourlyRateCents: 15000,
+	}
+	for i := range in.Specialties {
+		in.Specialties[i] = strings.Repeat("界", MaxSpecialtyLen+1)
+	}
+	if _, err := pool.Exec(ctx, "UPDATE coaches SET headline=$2, bio=$3, specialties=$4 WHERE user_id=$1", coachID, in.Headline, in.Bio, in.Specialties); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := svc.UpsertProfile(ctx, coachID, in); err != nil || got.HourlyRateCents != in.HourlyRateCents {
+		t.Fatalf("unchanged legacy text blocked update: coach=%+v err=%v", got, err)
+	}
+	if _, err := svc.SetAvailability(ctx, coachID, []AvailabilityWindow{{Weekday: 1, StartMinute: 600, EndMinute: 660}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"headline", "bio", "specialties"} {
+		changed := in
+		switch field {
+		case "headline":
+			changed.Headline += "x"
+		case "bio":
+			changed.Bio += "x"
+		case "specialties":
+			changed.Specialties = append([]string(nil), in.Specialties...)
+			changed.Specialties[0] += "x"
+		}
+		if _, err := svc.UpsertProfile(ctx, coachID, changed); !errors.Is(err, ErrInvalidInput) {
+			t.Fatalf("changed legacy %s bypassed limit: %v", field, err)
+		}
+	}
+}
 
 func TestCoachProfileFieldBoundaries(t *testing.T) {
 	svc, pool := testService(t)

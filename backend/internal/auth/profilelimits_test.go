@@ -80,3 +80,35 @@ func TestGoogleProfileCannotBypassNameLimit(t *testing.T) {
 		t.Fatalf("expected length validation before database access: %v", err)
 	}
 }
+
+func TestUnchangedLegacyDatingPreferencesAllowOtherEdits(t *testing.T) {
+	svc, _, pool := newTestService(t)
+	user := verifiedUser(t, svc, pool)
+	ctx := context.Background()
+	row, err := svc.queries.GetUserByEmail(ctx, user.email)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preferences := strings.Repeat("界", MaxDatingPreferencesLen+1)
+	if _, err := pool.Exec(ctx, "UPDATE users SET dating_preferences=$2 WHERE id=$1", row.ID, preferences); err != nil {
+		t.Fatal(err)
+	}
+	for _, changed := range []bool{false, true} {
+		in := DatingProfileInput{DatingPreferences: preferences, DatingStyles: []string{"in_person"}}
+		if changed {
+			in.DatingPreferences += "x"
+		}
+		data, _ := json.Marshal(in)
+		req := httptest.NewRequest(http.MethodPatch, "/me", bytes.NewReader(data))
+		req = req.WithContext(WithPrincipal(req.Context(), Principal{UserID: row.ID}))
+		rec := httptest.NewRecorder()
+		NewHandler(svc, nil).updateMe(rec, req)
+		want := http.StatusOK
+		if changed {
+			want = http.StatusBadRequest
+		}
+		if rec.Code != want {
+			t.Fatalf("changed=%v status=%d want=%d body=%s", changed, rec.Code, want, rec.Body)
+		}
+	}
+}

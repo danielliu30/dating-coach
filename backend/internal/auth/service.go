@@ -390,7 +390,13 @@ func (s *Service) UpdateDatingProfile(ctx context.Context, principal Principal, 
 	}
 	preferences := strings.TrimSpace(in.DatingPreferences)
 	if utf8.RuneCountInString(preferences) > MaxDatingPreferencesLen {
-		return Profile{}, fmt.Errorf("%w: dating_preferences exceeds %d characters", ErrInvalidInput, MaxDatingPreferencesLen)
+		previous, err := s.queries.GetUserByID(ctx, principal.UserID)
+		if err != nil {
+			return Profile{}, fmt.Errorf("get existing dating profile: %w", err)
+		}
+		if preferences != strings.TrimSpace(previous.DatingPreferences) {
+			return Profile{}, fmt.Errorf("%w: dating_preferences exceeds %d characters", ErrInvalidInput, MaxDatingPreferencesLen)
+		}
 	}
 	user, err := s.queries.UpdateUserDatingProfile(ctx, db.UpdateUserDatingProfileParams{
 		ID:                principal.UserID,

@@ -487,23 +487,36 @@ func normalisePhases(phases []string) ([]string, error) {
 // validated here because every slot calculation is done in it, and phases
 // against auth.DatingPhases so the directory filter has a fixed vocabulary.
 func (s *Service) UpsertProfile(ctx context.Context, coachID uuid.UUID, in UpsertProfileInput) (Coach, error) {
+	var previous db.GetCoachRow
+	oversized := utf8.RuneCountInString(in.Headline) > MaxHeadlineLen || utf8.RuneCountInString(in.Bio) > MaxBioLen ||
+		utf8.RuneCountInString(in.Timezone) > MaxTimezoneLen || len(in.Specialties) > MaxSpecialties
+	for _, specialty := range in.Specialties {
+		oversized = oversized || utf8.RuneCountInString(specialty) > MaxSpecialtyLen
+	}
+	if oversized {
+		var err error
+		previous, err = s.queries.GetCoach(ctx, coachID)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return Coach{}, fmt.Errorf("get existing coach profile: %w", err)
+		}
+	}
 	for _, field := range []struct {
-		name, value string
-		limit       int
+		name, value, previous string
+		limit                 int
 	}{
-		{"headline", in.Headline, MaxHeadlineLen},
-		{"bio", in.Bio, MaxBioLen},
-		{"timezone", in.Timezone, MaxTimezoneLen},
+		{"headline", in.Headline, previous.Headline, MaxHeadlineLen},
+		{"bio", in.Bio, previous.Bio, MaxBioLen},
+		{"timezone", in.Timezone, previous.Timezone, MaxTimezoneLen},
 	} {
-		if utf8.RuneCountInString(field.value) > field.limit {
+		if field.value != field.previous && utf8.RuneCountInString(field.value) > field.limit {
 			return Coach{}, fmt.Errorf("%w: %s must be at most %d characters", ErrInvalidInput, field.name, field.limit)
 		}
 	}
-	if len(in.Specialties) > MaxSpecialties {
+	if len(in.Specialties) > MaxSpecialties && !slices.Equal(in.Specialties, previous.Specialties) {
 		return Coach{}, fmt.Errorf("%w: specialties must contain at most %d entries", ErrInvalidInput, MaxSpecialties)
 	}
 	for _, specialty := range in.Specialties {
-		if utf8.RuneCountInString(specialty) > MaxSpecialtyLen {
+		if utf8.RuneCountInString(specialty) > MaxSpecialtyLen && !slices.Equal(in.Specialties, previous.Specialties) {
 			return Coach{}, fmt.Errorf("%w: each specialty must be at most %d characters", ErrInvalidInput, MaxSpecialtyLen)
 		}
 	}
