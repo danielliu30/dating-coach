@@ -48,3 +48,40 @@ func TestExclusivePassReleasesAfterErrorAndCancellation(t *testing.T) {
 		t.Fatal("cancelled pass succeeded")
 	}
 }
+
+func TestExclusivePassKeepsCompletedWritesAfterDisconnect(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	q := New(pool)
+	row, err := q.EnqueueEmail(ctx, EnqueueEmailParams{ToEmail: t.Name() + "@example.test", Subject: "s", Body: "b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _, _ = pool.Exec(ctx, "DELETE FROM email_outbox WHERE id = $1", row.ID) }()
+	err = q.WithExclusivePass(ctx, t.Name(), func(locked *Queries) error {
+		if _, err := locked.MarkEmailSent(ctx, row.ID); err != nil {
+			return err
+		}
+		var terminated bool
+		return locked.db.QueryRow(ctx, "SELECT pg_terminate_backend(pg_backend_pid())").Scan(&terminated)
+	})
+	if err == nil {
+		t.Fatal("expected a disconnected database session")
+	}
+	var sent bool
+	if err := pool.QueryRow(ctx, "SELECT sent_at IS NOT NULL FROM email_outbox WHERE id = $1", row.ID).Scan(&sent); err != nil || !sent {
+		t.Fatalf("completed row sent=%v err=%v", sent, err)
+	}
+	called := false
+	if err := q.WithExclusivePass(ctx, t.Name(), func(*Queries) error { called = true; return nil }); err != nil || !called {
+		t.Fatalf("lock after disconnect: called=%v err=%v", called, err)
+	}
+}
