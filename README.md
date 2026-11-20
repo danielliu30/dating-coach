@@ -77,6 +77,25 @@ starts at the first attempt, is not extended by retries, and is independent of t
 existing per-IP `AUTH_RATE_LIMIT`. Redis failure makes password sign-in fail
 closed with `503`. Limit and window must be positive.
 
+API request bodies are capped at **1 MiB**, including chunked bodies and trailing
+data; larger bodies return `413 {"error":"request body too large"}`. Transcript
+submission (`POST /api/v1/analysis/conversations`) allows **16 MiB** to accommodate
+500 messages of 4,000 bytes each, including JSON escaping. Photo analysis is
+served separately by ML (`/ml/analyze/images`), not the Go API; both nginx
+templates allow **10 MiB** on that route and 16 MiB on transcript submission,
+with a 1 MiB default and JSON 413 errors. These are fixed limits.
+
+Signup/profile text limits are counted in Unicode runes: email **254**, display
+name **100**, coach headline **200**, bio **5,000**, and each specialty **100**
+(at most **20** specialties). Timezone identifiers are capped at **100** and must
+still be valid IANA zones. Dating preferences retain their **2,000**-rune limit;
+roles, dating styles, phases and coaching goals remain restricted vocabularies.
+Passwords retain bcrypt's **72-byte** server cap; password inputs do not truncate
+typed or pasted passwords. App profile inputs mirror the text limits
+(native `maxLength` may be more conservative for non-BMP Unicode characters).
+Unchanged legacy profile text may exceed the limits so unrelated profile or
+availability edits still work; changed text must satisfy the caps.
+
 Copying `.env.example` explicitly opts into `APP_ENV=development` for local use.
 Without `APP_ENV` (or when blank), Compose and standalone Go binaries default to
 `production`: API and worker startup reject the shipped JWT key and default

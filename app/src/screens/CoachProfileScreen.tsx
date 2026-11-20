@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { ApiError, api } from '../api/client';
-import { DATING_PHASES, type AvailabilityWindow, type CoachApprovalStatus, type DatingPhase } from '../api/types';
+import { DATING_PHASES, type AvailabilityWindow, type Coach, type CoachApprovalStatus, type DatingPhase } from '../api/types';
 import { Avatar, GradientCard, SectionHeader, SkeletonCard, StatusPill } from '../components/kit';
 import { Badge, Button, Chip, Field, Screen } from '../components/ui';
 import { PHASE_LABELS, toggle } from '../lib/phases';
@@ -68,6 +68,7 @@ export default function CoachProfileScreen(): React.ReactElement {
   const [headline, setHeadline] = useState('');
   const [bio, setBio] = useState('');
   const [specialties, setSpecialties] = useState('');
+  const savedText = useRef<Pick<Coach, 'headline' | 'bio' | 'specialties' | 'timezone'> | null>(null);
   const [phases, setPhases] = useState<DatingPhase[]>([]);
   const [rate, setRate] = useState('120');
   const [timezone, setTimezone] = useState('UTC');
@@ -112,6 +113,7 @@ export default function CoachProfileScreen(): React.ReactElement {
       if (cancelled) return;
       const problems: string[] = [];
       if (profile.status === 'fulfilled') {
+        savedText.current = profile.value;
         setHeadline(profile.value.headline);
         setBio(profile.value.bio);
         setSpecialties(profile.value.specialties.join(', '));
@@ -171,6 +173,12 @@ export default function CoachProfileScreen(): React.ReactElement {
       setError('Your saved profile could not be loaded, so saving now would overwrite it. Reload first.');
       return;
     }
+    const specialtyItems = specialties.split(',').map((item) => item.trim()).filter(Boolean);
+    const specialtiesUnchanged = savedText.current !== null && specialties === savedText.current.specialties.join(', ');
+    if (!specialtiesUnchanged && (specialtyItems.length > 20 || specialtyItems.some((item) => Array.from(item).length > 100))) {
+      setError('Use at most 20 specialties, each at most 100 characters.');
+      return;
+    }
     const payload: AvailabilityWindow[] = [];
     for (const window of windows) {
       const startMinute = parseClock(window.start);
@@ -186,18 +194,16 @@ export default function CoachProfileScreen(): React.ReactElement {
     setStatus(null);
     try {
       const saved = await api.upsertCoachProfile({
-        headline: headline.trim(),
-        bio: bio.trim(),
-        specialties: specialties
-          .split(',')
-          .map((item) => item.trim())
-          .filter(Boolean),
+        headline: headline === savedText.current?.headline ? headline : headline.trim(),
+        bio: bio === savedText.current?.bio ? bio : bio.trim(),
+        specialties: specialtiesUnchanged ? savedText.current!.specialties : specialtyItems,
         phases,
         hourly_rate_cents: Math.round(Number(rate) * 100) || 0,
-        timezone: timezone.trim() || 'UTC',
+        timezone: timezone === savedText.current?.timezone ? timezone : timezone.trim() || 'UTC',
         years_experience: Number(years) || 0,
         accepting_clients: accepting,
       });
+      savedText.current = saved;
       applyApproval(++approvalRead.current.issued, saved.approval_status);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'could not save profile');
@@ -292,10 +298,11 @@ export default function CoachProfileScreen(): React.ReactElement {
           icon="person-circle-outline"
           hue="sage"
         />
-        <Field label="Headline" value={headline} onChangeText={setHeadline} placeholder="Opening messages that land" />
-        <Field label="Bio" value={bio} onChangeText={setBio} multiline />
+        <Field label="Headline" value={headline} onChangeText={setHeadline} placeholder="Opening messages that land" maxLength={200} />
+        <Field label="Bio" value={bio} onChangeText={setBio} multiline maxLength={5000} />
         <Field
           label="Specialties (comma separated)"
+          maxLength={2038}
           value={specialties}
           onChangeText={setSpecialties}
           placeholder="openers, profile review, texting"
@@ -320,7 +327,7 @@ export default function CoachProfileScreen(): React.ReactElement {
             <Field label="Years experience" value={years} onChangeText={setYears} keyboardType="numeric" />
           </View>
         </View>
-        <Field label="Timezone (IANA)" value={timezone} onChangeText={setTimezone} placeholder="America/New_York" />
+        <Field label="Timezone (IANA)" value={timezone} onChangeText={setTimezone} placeholder="America/New_York" maxLength={100} />
         <Pressable
           accessibilityRole="switch"
           accessibilityState={{ checked: accepting }}

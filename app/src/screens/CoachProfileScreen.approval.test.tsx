@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import React from 'react';
+import { TextInput } from 'react-native';
 
 import { ApiError, api } from '../api/client';
 import type { Coach } from '../api/types';
@@ -86,6 +87,49 @@ beforeEach(() => {
 });
 
 describe('CoachProfileScreen approval banner', () => {
+  it('preserves unchanged legacy text when saving profile and availability edits', async () => {
+    const legacy = {
+      ...coach('pending'),
+      headline: ` ${'a'.repeat(201)} `,
+      bio: ` ${'b'.repeat(5001)} `,
+      specialties: Array.from({ length: 21 }, () => 's'.repeat(101)),
+    };
+    mocked.getCoach.mockResolvedValue(legacy);
+    mocked.upsertCoachProfile.mockClear();
+    mocked.setAvailability.mockClear();
+    mocked.upsertCoachProfile.mockResolvedValue(legacy);
+    render(<CoachProfileScreen />);
+    await screen.findByDisplayValue(legacy.headline);
+    fireEvent.changeText(screen.getByDisplayValue('120'), '150');
+    fireEvent.press(screen.getByRole('button', { name: 'Save profile' }));
+    await waitFor(() => expect(mocked.setAvailability).toHaveBeenCalled());
+    expect(mocked.upsertCoachProfile).toHaveBeenCalledWith(expect.objectContaining({
+      headline: legacy.headline, bio: legacy.bio, specialties: legacy.specialties, hourly_rate_cents: 15000,
+    }));
+  });
+
+  it('bounds profile inputs to the server limits', async () => {
+    mocked.getCoach.mockResolvedValue(coach('pending'));
+    render(<CoachProfileScreen />);
+    await screen.findByDisplayValue('Openers that land');
+    const inputs = screen.UNSAFE_getAllByType(TextInput);
+    expect(inputs.slice(0, 3).map((input) => input.props.maxLength)).toEqual([200, 5000, 2038]);
+    expect(screen.getByPlaceholderText('America/New_York').props.maxLength).toBe(100);
+  });
+
+  it.each(['a'.repeat(101), Array.from({ length: 21 }, () => 'skill').join(',')])(
+    'rejects specialties outside the per-item or count limit', async (value) => {
+      mocked.getCoach.mockResolvedValue(coach('pending'));
+      mocked.upsertCoachProfile.mockClear();
+      render(<CoachProfileScreen />);
+      await screen.findByDisplayValue('Openers that land');
+      fireEvent.changeText(screen.getByPlaceholderText('openers, profile review, texting'), value);
+      fireEvent.press(screen.getByRole('button', { name: 'Save profile' }));
+      expect(await screen.findByText('Use at most 20 specialties, each at most 100 characters.')).toBeTruthy();
+      expect(mocked.upsertCoachProfile).not.toHaveBeenCalled();
+    },
+  );
+
   it('shows the under-review banner for a pending coach and keeps the editor usable', async () => {
     mocked.getCoach.mockResolvedValue(coach('pending'));
     render(<CoachProfileScreen />);

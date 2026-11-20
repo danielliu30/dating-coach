@@ -135,7 +135,7 @@ func (h *Handler) respondWithToken(w http.ResponseWriter, r *http.Request) {
 		Action    string `json:"action"`
 	}
 	if err := httpx.Decode(r, &in); err != nil {
-		httpx.Error(w, http.StatusBadRequest, "invalid request body")
+		httpx.DecodeError(w, err)
 		return
 	}
 	sessionID, err := uuid.Parse(in.SessionID)
@@ -200,7 +200,7 @@ func (h *Handler) respondAsCoach(w http.ResponseWriter, r *http.Request) {
 		Action string `json:"action"`
 	}
 	if err := httpx.Decode(r, &in); err != nil {
-		httpx.Error(w, http.StatusBadRequest, "invalid request body")
+		httpx.DecodeError(w, err)
 		return
 	}
 	session, err := h.svc.RespondAsCoach(r.Context(), sessionID, principal.UserID, in.Action)
@@ -288,7 +288,7 @@ func (h *Handler) createReview(w http.ResponseWriter, r *http.Request) {
 	}
 	var in CreateReviewInput
 	if err := httpx.Decode(r, &in); err != nil {
-		httpx.Error(w, http.StatusBadRequest, "invalid request body")
+		httpx.DecodeError(w, err)
 		return
 	}
 	review, err := h.svc.CreateReview(r.Context(), coachID, principal.UserID, in)
@@ -374,7 +374,7 @@ func (h *Handler) bookSession(w http.ResponseWriter, r *http.Request) {
 	}
 	var in BookInput
 	if err := httpx.Decode(r, &in); err != nil {
-		httpx.Error(w, http.StatusBadRequest, "invalid request body")
+		httpx.DecodeError(w, err)
 		return
 	}
 	session, err := h.svc.BookSession(r.Context(), principal.UserID, in)
@@ -434,7 +434,7 @@ func (h *Handler) rescheduleSession(w http.ResponseWriter, r *http.Request) {
 		ScheduledTime string `json:"scheduled_time"`
 	}
 	if err := httpx.Decode(r, &in); err != nil {
-		httpx.Error(w, http.StatusBadRequest, "invalid request body")
+		httpx.DecodeError(w, err)
 		return
 	}
 	session, err := h.svc.Reschedule(r.Context(), sessionID, principal.UserID, in.ScheduledTime)
@@ -454,7 +454,7 @@ func (h *Handler) upsertProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	var in UpsertProfileInput
 	if err := httpx.Decode(r, &in); err != nil {
-		httpx.Error(w, http.StatusBadRequest, "invalid request body")
+		httpx.DecodeError(w, err)
 		return
 	}
 	coach, err := h.svc.UpsertProfile(r.Context(), principal.UserID, in)
@@ -476,7 +476,7 @@ func (h *Handler) setAvailability(w http.ResponseWriter, r *http.Request) {
 		Availability []AvailabilityWindow `json:"availability"`
 	}
 	if err := httpx.Decode(r, &in); err != nil {
-		httpx.Error(w, http.StatusBadRequest, "invalid request body")
+		httpx.DecodeError(w, err)
 		return
 	}
 	windows, err := h.svc.SetAvailability(r.Context(), principal.UserID, in.Availability)
@@ -527,7 +527,7 @@ func (h *Handler) setSessionStatus(w http.ResponseWriter, r *http.Request) {
 		Status string `json:"status"`
 	}
 	if err := httpx.Decode(r, &in); err != nil {
-		httpx.Error(w, http.StatusBadRequest, "invalid request body")
+		httpx.DecodeError(w, err)
 		return
 	}
 	session, err := h.svc.SetStatus(r.Context(), sessionID, principal.UserID, in.Status)
@@ -553,7 +553,7 @@ func (h *Handler) setSessionNotes(w http.ResponseWriter, r *http.Request) {
 		CoachNotes string `json:"coach_notes"`
 	}
 	if err := httpx.Decode(r, &in); err != nil {
-		httpx.Error(w, http.StatusBadRequest, "invalid request body")
+		httpx.DecodeError(w, err)
 		return
 	}
 	session, err := h.svc.SetNotes(r.Context(), sessionID, principal.UserID, in.CoachNotes)
@@ -580,7 +580,7 @@ func (h *Handler) setSessionMeetingURL(w http.ResponseWriter, r *http.Request) {
 		MeetingURL string `json:"meeting_url"`
 	}
 	if err := httpx.Decode(r, &in); err != nil {
-		httpx.Error(w, http.StatusBadRequest, "invalid request body")
+		httpx.DecodeError(w, err)
 		return
 	}
 	session, err := h.svc.SetMeetingURL(r.Context(), sessionID, principal.UserID, in.MeetingURL)

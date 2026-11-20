@@ -390,7 +390,13 @@ func (s *Service) UpdateDatingProfile(ctx context.Context, principal Principal, 
 	}
 	preferences := strings.TrimSpace(in.DatingPreferences)
 	if utf8.RuneCountInString(preferences) > MaxDatingPreferencesLen {
-		return Profile{}, fmt.Errorf("%w: dating_preferences exceeds %d characters", ErrInvalidInput, MaxDatingPreferencesLen)
+		previous, err := s.queries.GetUserByID(ctx, principal.UserID)
+		if err != nil {
+			return Profile{}, fmt.Errorf("get existing dating profile: %w", err)
+		}
+		if preferences != strings.TrimSpace(previous.DatingPreferences) {
+			return Profile{}, fmt.Errorf("%w: dating_preferences exceeds %d characters", ErrInvalidInput, MaxDatingPreferencesLen)
+		}
 	}
 	user, err := s.queries.UpdateUserDatingProfile(ctx, db.UpdateUserDatingProfileParams{
 		ID:                principal.UserID,
@@ -443,6 +449,9 @@ func (s *Service) SignUp(ctx context.Context, in SignUpInput) (Session, error) {
 		return Session{}, err
 	}
 	displayName := strings.TrimSpace(in.DisplayName)
+	if err := validateIdentityLengths(email, displayName); err != nil {
+		return Session{}, err
+	}
 	if displayName == "" {
 		return Session{}, fmt.Errorf("%w: display_name is required", ErrInvalidInput)
 	}
@@ -571,6 +580,9 @@ func (s *Service) createGoogleUser(ctx context.Context, identity GoogleIdentity,
 	displayName := strings.TrimSpace(identity.Name)
 	if displayName == "" {
 		displayName, _, _ = strings.Cut(identity.Email, "@")
+	}
+	if err := validateIdentityLengths(identity.Email, displayName); err != nil {
+		return db.User{}, err
 	}
 	user, err := s.queries.CreateVerifiedUser(ctx, db.CreateVerifiedUserParams{
 		Email:        identity.Email,

@@ -46,7 +46,7 @@ func (h *Handler) submit(w http.ResponseWriter, r *http.Request) {
 	}
 	var in SubmitInput
 	if err := httpx.Decode(r, &in); err != nil {
-		httpx.Error(w, http.StatusBadRequest, "invalid request body")
+		httpx.DecodeError(w, err)
 		return
 	}
 	result, err := h.svc.Submit(r.Context(), principal.UserID, in)
@@ -143,7 +143,7 @@ func (h *Handler) label(w http.ResponseWriter, r *http.Request) {
 	}
 	var in LabelInput
 	if err := httpx.Decode(r, &in); err != nil {
-		httpx.Error(w, http.StatusBadRequest, "invalid request body")
+		httpx.DecodeError(w, err)
 		return
 	}
 	example, err := h.svc.Label(r.Context(), conversationID, principal.UserID, in)

@@ -1,8 +1,10 @@
 package main
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,8 +16,87 @@ import (
 	"github.com/danielliu30/dating-coach/backend/internal/chat"
 	"github.com/danielliu30/dating-coach/backend/internal/coaching"
 	"github.com/danielliu30/dating-coach/backend/internal/config"
+	"github.com/danielliu30/dating-coach/backend/internal/httpx"
 	"github.com/danielliu30/dating-coach/backend/internal/payments"
 )
+
+func TestRouterBodyLimits(t *testing.T) {
+	issuer := auth.NewTokenIssuer("test-secret")
+	router := testRouter(t, issuer)
+	token, _, err := issuer.Issue(uuid.New(), "user@example.com", auth.RoleUser, auth.ScopeSession, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		path string
+		size int
+		want int
+	}{
+		{"/api/v1/booking/respond", httpx.MaxJSONBodyBytes, http.StatusBadRequest},
+		{"/api/v1/booking/respond", httpx.MaxJSONBodyBytes + 1, http.StatusRequestEntityTooLarge},
+		{"/api/v1/analysis/conversations", 2 << 20, http.StatusBadRequest},
+		{"/api/v1/analysis/conversations", httpx.MaxTranscriptBodyBytes + 1, http.StatusRequestEntityTooLarge},
+	} {
+		field := "token"
+		if tc.path == "/api/v1/analysis/conversations" {
+			field = "unknown"
+		}
+		prefix := `{"` + field + `":"`
+		body := prefix + strings.Repeat("a", tc.size-len(prefix)-2) + `"}`
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(body))
+		req.Header.Set("Origin", "https://example.com")
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.ContentLength = -1
+		router.ServeHTTP(rec, req)
+		if rec.Code != tc.want {
+			t.Fatalf("path=%s size=%d status=%d want=%d", tc.path, tc.size, rec.Code, tc.want)
+		}
+		if rec.Header().Get("Access-Control-Allow-Origin") == "" {
+			t.Fatal("body-limit response missing CORS headers")
+		}
+	}
+}
+
+type unreadBody struct{ reads int }
+
+func (b *unreadBody) Read([]byte) (int, error) { b.reads++; return 0, io.EOF }
+func (*unreadBody) Close() error               { return nil }
+
+func TestPrivateRequestsAuthenticateBeforeReadingBodies(t *testing.T) {
+	issuer := auth.NewTokenIssuer("test-secret")
+	router := testRouter(t, issuer)
+	verifyToken, _, err := issuer.Issue(uuid.New(), "user@example.com", auth.RoleUser, auth.ScopeVerify, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/api/v1/analysis/conversations", "/api/v1/coaching/sessions", "/api/v1/auth/me"} {
+		for _, token := range []string{"", verifyToken} {
+			if path == "/api/v1/auth/me" && token != "" {
+				continue
+			}
+			body := &unreadBody{}
+			req := httptest.NewRequest(http.MethodPatch, path, nil)
+			if path != "/api/v1/auth/me" {
+				req.Method = http.MethodPost
+			}
+			req.Body = body
+			req.ContentLength = httpx.MaxTranscriptBodyBytes + 1
+			if token != "" {
+				req.Header.Set("Authorization", "Bearer "+token)
+			}
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			want := http.StatusUnauthorized
+			if token != "" {
+				want = http.StatusForbidden
+			}
+			if rec.Code != want || body.reads != 0 {
+				t.Fatalf("%s status=%d want=%d body reads=%d", path, rec.Code, want, body.reads)
+			}
+		}
+	}
+}
 
 func TestRouterDoesNotTrustForwardedHeadersByDefault(t *testing.T) {
 	router := testRouter(t, auth.NewTokenIssuer("test-secret"))

@@ -72,7 +72,7 @@ func (h *Handler) forgotPassword(w http.ResponseWriter, r *http.Request) {
 		Email string `json:"email"`
 	}
 	if err := httpx.Decode(r, &in); err != nil {
-		httpx.Error(w, http.StatusBadRequest, "invalid request body")
+		httpx.DecodeError(w, err)
 		return
 	}
 	if err := h.svc.ForgotPassword(r.Context(), in.Email); err != nil {
@@ -91,7 +91,7 @@ func (h *Handler) resetPassword(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"password"`
 	}
 	if err := httpx.Decode(r, &in); err != nil {
-		httpx.Error(w, http.StatusBadRequest, "invalid request body")
+		httpx.DecodeError(w, err)
 		return
 	}
 	err := h.svc.ResetPassword(r.Context(), in.Email, in.Code, in.Password)
@@ -110,7 +110,7 @@ func (h *Handler) resetPassword(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) signUp(w http.ResponseWriter, r *http.Request) {
 	var in SignUpInput
 	if err := httpx.Decode(r, &in); err != nil {
-		httpx.Error(w, http.StatusBadRequest, "invalid request body")
+		httpx.DecodeError(w, err)
 		return
 	}
 	session, err := h.svc.SignUp(r.Context(), in)
@@ -136,7 +136,7 @@ func (h *Handler) signIn(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"password"`
 	}
 	if err := httpx.Decode(r, &in); err != nil {
-		httpx.Error(w, http.StatusBadRequest, "invalid request body")
+		httpx.DecodeError(w, err)
 		return
 	}
 	session, err := h.svc.SignIn(r.Context(), in.Email, in.Password)
@@ -166,7 +166,7 @@ func (h *Handler) signIn(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) signInWithGoogle(w http.ResponseWriter, r *http.Request) {
 	var in GoogleSignInInput
 	if err := httpx.Decode(r, &in); err != nil || in.IDToken == "" {
-		httpx.Error(w, http.StatusBadRequest, "invalid request body")
+		httpx.DecodeError(w, err)
 		return
 	}
 	session, err := h.svc.SignInWithGoogle(r.Context(), in)
@@ -196,7 +196,7 @@ func (h *Handler) refresh(w http.ResponseWriter, r *http.Request) {
 		RefreshToken string `json:"refresh_token"`
 	}
 	if err := httpx.Decode(r, &in); err != nil {
-		httpx.Error(w, http.StatusBadRequest, "invalid request body")
+		httpx.DecodeError(w, err)
 		return
 	}
 	session, err := h.svc.Refresh(r.Context(), in.RefreshToken)
@@ -223,7 +223,7 @@ func (h *Handler) verify(w http.ResponseWriter, r *http.Request) {
 		Code  string `json:"code"`
 	}
 	if err := httpx.Decode(r, &in); err != nil {
-		httpx.Error(w, http.StatusBadRequest, "invalid request body")
+		httpx.DecodeError(w, err)
 		return
 	}
 	session, err := h.svc.VerifyEmail(r.Context(), in.Email, in.Code, bearerToken(r))
@@ -252,7 +252,7 @@ func (h *Handler) resendVerification(w http.ResponseWriter, r *http.Request) {
 		Email string `json:"email"`
 	}
 	if err := httpx.Decode(r, &in); err != nil {
-		httpx.Error(w, http.StatusBadRequest, "invalid request body")
+		httpx.DecodeError(w, err)
 		return
 	}
 	if err := h.svc.ResendVerification(r.Context(), in.Email); err != nil {
@@ -297,7 +297,7 @@ func (h *Handler) signOut(w http.ResponseWriter, r *http.Request) {
 		TokenAgeMS   *int64 `json:"token_age_ms"`
 	}
 	if err := httpx.Decode(r, &in); err != nil && !errors.Is(err, io.EOF) {
-		httpx.Error(w, http.StatusBadRequest, "invalid request body")
+		httpx.DecodeError(w, err)
 		return
 	}
 	req := SignOutRequest{IssuedAt: principal.IssuedAt, RefreshToken: in.RefreshToken}
@@ -328,7 +328,7 @@ func (h *Handler) updateMe(w http.ResponseWriter, r *http.Request) {
 	}
 	var in DatingProfileInput
 	if err := httpx.Decode(r, &in); err != nil {
-		httpx.Error(w, http.StatusBadRequest, "invalid request body")
+		httpx.DecodeError(w, err)
 		return
 	}
 	profile, err := h.svc.UpdateDatingProfile(r.Context(), principal, in)

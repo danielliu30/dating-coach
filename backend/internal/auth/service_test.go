@@ -732,11 +732,15 @@ func TestValidatePassword(t *testing.T) {
 }
 
 // TestUpdateDatingProfileRejectsOverlongPreferences pins the free-text cap:
-// the ML analyzer refuses longer preferences, so the API must too, before any
-// query runs.
+// newly enlarged preferences must not bypass the cap.
 func TestUpdateDatingProfileRejectsOverlongPreferences(t *testing.T) {
-	svc := &Service{}
-	_, err := svc.UpdateDatingProfile(context.Background(), Principal{}, DatingProfileInput{
+	svc, _, pool := newTestService(t)
+	user := verifiedUser(t, svc, pool)
+	row, err := svc.queries.GetUserByEmail(context.Background(), user.email)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = svc.UpdateDatingProfile(context.Background(), Principal{UserID: row.ID}, DatingProfileInput{
 		DatingPreferences: strings.Repeat("é", MaxDatingPreferencesLen+1),
 	})
 	if !errors.Is(err, ErrInvalidInput) {
