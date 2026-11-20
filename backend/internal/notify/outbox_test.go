@@ -32,6 +32,66 @@ type blockingNotifier struct {
 	err     error
 }
 
+type callbackNotifier struct {
+	Notifier
+	send func(Message) error
+}
+
+func (n callbackNotifier) Send(_ context.Context, m Message) error { return n.send(m) }
+
+func TestDrainCommitsEachRowAndStartsBackoffAfterSend(t *testing.T) {
+	q, pool := testQueries(t)
+	_, observer := testQueries(t)
+	ctx := context.Background()
+	to := t.Name() + "@example.test"
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM email_outbox WHERE to_email = $1", to) })
+	first, err := q.EnqueueEmail(ctx, db.EnqueueEmailParams{ToEmail: to, Subject: "first", Body: "b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := q.EnqueueEmail(ctx, db.EnqueueEmailParams{ToEmail: to, Subject: "second", Body: "b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, "UPDATE email_outbox SET next_attempt_at = now() - interval '2 minutes' WHERE id = $1", first.ID); err != nil {
+		t.Fatal(err)
+	}
+	var failedAt time.Time
+	calls := 0
+	n := callbackNotifier{send: func(m Message) error {
+		if m.To != to {
+			return nil
+		}
+		calls++
+		if m.Subject == "first" {
+			return nil
+		}
+		var sent bool
+		if err := observer.QueryRow(ctx, "SELECT sent_at IS NOT NULL FROM email_outbox WHERE id = $1", first.ID).Scan(&sent); err != nil || !sent {
+			t.Fatalf("first row not committed before second send: sent=%v err=%v", sent, err)
+		}
+		time.Sleep(100 * time.Millisecond)
+		if err := observer.QueryRow(ctx, "SELECT clock_timestamp()").Scan(&failedAt); err != nil {
+			t.Fatal(err)
+		}
+		return errors.New("SMTP unavailable")
+	}}
+	relay := NewRelay(q, n)
+	if sent, err := relay.Drain(ctx); err != nil || sent < 1 {
+		t.Fatalf("drain = %d, %v", sent, err)
+	}
+	var retryAt time.Time
+	if err := pool.QueryRow(ctx, "SELECT next_attempt_at FROM email_outbox WHERE id = $1", second.ID).Scan(&retryAt); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 || failedAt.IsZero() || retryAt.Before(failedAt.Add(minRetryDelay)) {
+		t.Fatalf("calls=%d failure=%v retry=%v", calls, failedAt, retryAt)
+	}
+	if _, err := relay.Drain(ctx); err != nil || calls != 2 {
+		t.Fatalf("repeated drain: calls=%d err=%v", calls, err)
+	}
+}
+
 func (n *blockingNotifier) Send(ctx context.Context, m Message) error {
 	if m.To != n.to {
 		return nil
