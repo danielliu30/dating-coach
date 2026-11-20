@@ -3,6 +3,7 @@ package config
 
 import (
 	"fmt"
+	"net/netip"
 	"os"
 	"strconv"
 	"strings"
@@ -35,6 +36,9 @@ type Config struct {
 	BcryptCost          int
 	AuthRateLimit       int
 	AuthRateWindow      time.Duration
+	TrustedProxyCIDRs   []netip.Prefix
+	LoginFailureLimit   int
+	LoginFailureWindow  time.Duration
 
 	MLServiceURL        string
 	MLServiceTimeout    time.Duration
@@ -134,6 +138,8 @@ func Load() (*Config, error) {
 		BcryptCost:                envInt("BCRYPT_COST", 12),
 		AuthRateLimit:             envInt("AUTH_RATE_LIMIT", 20),
 		AuthRateWindow:            envDuration("AUTH_RATE_WINDOW", time.Minute),
+		LoginFailureLimit:         envInt("LOGIN_FAILURE_LIMIT", 10),
+		LoginFailureWindow:        envDuration("LOGIN_FAILURE_WINDOW", 15*time.Minute),
 		MLServiceURL:              env("ML_SERVICE_URL", "http://localhost:8000"),
 		MLServiceTimeout:          envDuration("ML_SERVICE_TIMEOUT", 60*time.Second),
 		ProfileScoreEnabled:       envBool("PROFILE_SCORE_ENABLED", false),
@@ -158,6 +164,23 @@ func Load() (*Config, error) {
 		PaymentHoldTTL:      envDuration("PAYMENT_HOLD_TTL", 15*time.Minute),
 	}
 
+	proxyCIDRs := env("TRUSTED_PROXY_CIDRS", "127.0.0.0/8,::1/128,172.16.0.0/12")
+	if proxyCIDRs != "none" {
+		for _, raw := range strings.Split(proxyCIDRs, ",") {
+			prefix, err := netip.ParsePrefix(strings.TrimSpace(raw))
+			if err != nil {
+				bad = append(bad, "TRUSTED_PROXY_CIDRS must contain valid CIDRs or be none")
+				break
+			}
+			cfg.TrustedProxyCIDRs = append(cfg.TrustedProxyCIDRs, prefix)
+		}
+	}
+	if cfg.LoginFailureLimit <= 0 {
+		bad = append(bad, "LOGIN_FAILURE_LIMIT must be positive")
+	}
+	if cfg.LoginFailureWindow > 0 && cfg.LoginFailureWindow < time.Millisecond {
+		bad = append(bad, "LOGIN_FAILURE_WINDOW must be at least 1ms")
+	}
 	if cfg.DatabaseURL == "" {
 		return nil, fmt.Errorf("DATABASE_URL is required")
 	}
@@ -188,6 +211,7 @@ func Load() (*Config, error) {
 		{"RESET_CODE_TTL", cfg.ResetCodeTTL},
 		{"RESET_RESEND_COOLDOWN", cfg.ResetResendCooldown},
 		{"AUTH_RATE_WINDOW", cfg.AuthRateWindow},
+		{"LOGIN_FAILURE_WINDOW", cfg.LoginFailureWindow},
 		{"ML_SERVICE_TIMEOUT", cfg.MLServiceTimeout},
 		{"DEAD_LETTER_ALERT_PERIOD", cfg.DeadLetterAlertPeriod},
 		{"PAYMENT_HOLD_TTL", cfg.PaymentHoldTTL},

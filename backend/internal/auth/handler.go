@@ -141,6 +141,12 @@ func (h *Handler) signIn(w http.ResponseWriter, r *http.Request) {
 	}
 	session, err := h.svc.SignIn(r.Context(), in.Email, in.Password)
 	switch {
+	case errors.Is(err, ErrLoginThrottled):
+		w.Header().Set("Retry-After", fmt.Sprintf("%d", int64(math.Ceil(h.svc.loginThrottle.window.Seconds()))))
+		httpx.Error(w, http.StatusTooManyRequests, "too many requests")
+	case errors.Is(err, ErrLoginThrottleUnavailable):
+		slog.Error("login throttle", "error", err)
+		httpx.Error(w, http.StatusServiceUnavailable, "could not sign in")
 	case errors.Is(err, ErrInvalidCredentials):
 		httpx.Error(w, http.StatusUnauthorized, err.Error())
 	case errors.Is(err, ErrEmailNotVerified):

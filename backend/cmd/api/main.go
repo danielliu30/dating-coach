@@ -104,6 +104,7 @@ func run() error {
 	verificationCodes := auth.NewVerificationCache(rdb, auth.VerificationCodeTTL)
 
 	authSvc := auth.NewService(pg.Pool, pg.Queries, issuer, notifier, cfg.BcryptCost, cfg.PublicAppURL, verificationCodes, auth.NewResetCache(rdb, cfg.ResetCodeTTL, cfg.ResetResendCooldown), denylist, deletions, cfg.JWTTTL, cfg.VerifyTokenTTL, cfg.RefreshTokenTTL)
+	authSvc.SetLoginThrottle(auth.NewLoginThrottle(rdb, cfg.LoginFailureLimit, cfg.LoginFailureWindow))
 	if cfg.GoogleClientID != "" {
 		authSvc.SetGoogleVerifier(auth.NewGoogleVerifier(cfg.GoogleClientID, auth.GoogleJWKSURL, nil))
 	} else {
@@ -181,7 +182,7 @@ type handlers struct {
 // route costs a database round trip before reaching its handler.
 func newRouter(cfg *config.Config, authenticate func(http.Handler) http.Handler, h handlers) http.Handler {
 	router := chi.NewRouter()
-	router.Use(middleware.RequestID, middleware.RealIP, middleware.Recoverer, middleware.Logger)
+	router.Use(middleware.RequestID, auth.TrustedProxyMiddleware(cfg.TrustedProxyCIDRs), middleware.Recoverer, middleware.Logger)
 	router.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   cfg.CORSOrigins,
 		AllowedMethods:   []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodOptions},

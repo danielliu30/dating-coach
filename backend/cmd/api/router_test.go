@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	"github.com/danielliu30/dating-coach/backend/internal/analysis"
@@ -15,6 +16,22 @@ import (
 	"github.com/danielliu30/dating-coach/backend/internal/config"
 	"github.com/danielliu30/dating-coach/backend/internal/payments"
 )
+
+func TestRouterDoesNotTrustForwardedHeadersByDefault(t *testing.T) {
+	router := testRouter(t, auth.NewTokenIssuer("test-secret"))
+	router.(chi.Router).Get("/client-ip", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(auth.ClientIP(r)))
+	})
+	req := httptest.NewRequest(http.MethodGet, "/client-ip", nil)
+	req.RemoteAddr = "198.51.100.1:1234"
+	req.Header.Set("X-Forwarded-For", "203.0.113.1")
+	req.Header.Set("X-Real-IP", "203.0.113.2")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || rec.Body.String() != "198.51.100.1" {
+		t.Fatalf("status=%d client IP=%s", rec.Code, rec.Body)
+	}
+}
 
 // testRouter builds the real routing tree over handlers with no backing
 // services: every case below is decided by the auth middleware, so a request

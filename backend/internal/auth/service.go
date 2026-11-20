@@ -72,6 +72,7 @@ type Service struct {
 	verifyTokenTTL time.Duration
 	refreshTTL     time.Duration
 	google         GoogleTokenVerifier
+	loginThrottle  *LoginThrottle
 }
 
 // DeletionPublisher queues the row removal that follows a revoked account.
@@ -637,6 +638,10 @@ func (s *Service) claimGoogleUser(ctx context.Context, userID uuid.UUID) (db.Use
 	return user, nil
 }
 
+func (s *Service) SetLoginThrottle(throttle *LoginThrottle) {
+	s.loginThrottle = throttle
+}
+
 // SignIn verifies the password and opens a session. Unknown emails, wrong
 // passwords and accounts that have no password at all (NoPasswordHash, i.e.
 // created through Google) return ErrInvalidCredentials; an unverified account
@@ -646,6 +651,27 @@ func (s *Service) claimGoogleUser(ctx context.Context, userID uuid.UUID) (db.Use
 // one: the lookup skips rows marked deleted, so no session is ever minted for
 // an account whose data is on its way out, however long the removal takes.
 func (s *Service) SignIn(ctx context.Context, email, password string) (Session, error) {
+	if s.loginThrottle != nil {
+		if err := s.loginThrottle.check(ctx, email); err != nil {
+			return Session{}, err
+		}
+	}
+	session, err := s.signIn(ctx, email, password)
+	if s.loginThrottle != nil {
+		if errors.Is(err, ErrInvalidCredentials) {
+			if throttleErr := s.loginThrottle.failed(ctx, email); throttleErr != nil {
+				return Session{}, throttleErr
+			}
+		} else if err == nil {
+			if throttleErr := s.loginThrottle.clear(ctx, email); throttleErr != nil {
+				return Session{}, throttleErr
+			}
+		}
+	}
+	return session, err
+}
+
+func (s *Service) signIn(ctx context.Context, email, password string) (Session, error) {
 	user, err := s.queries.GetUserByEmail(ctx, strings.ToLower(strings.TrimSpace(email)))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

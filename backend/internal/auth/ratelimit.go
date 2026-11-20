@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -62,15 +61,8 @@ func (l *RateLimiter) Middleware(next http.Handler) http.Handler {
 	})
 }
 
-// ClientIP is the rate-limit key: the forwarded client address when the API
-// runs behind a proxy, otherwise the peer address.
+// ClientIP reads the peer resolved by TrustedProxyMiddleware.
 func ClientIP(r *http.Request) string {
-	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-		return strings.TrimSpace(strings.Split(fwd, ",")[0])
-	}
-	if realIP := r.Header.Get("X-Real-IP"); realIP != "" {
-		return strings.TrimSpace(realIP)
-	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr
