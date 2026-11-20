@@ -33,6 +33,12 @@ Images are still built and pushed to Docker Hub (`danielliu30/*`) by
 
 Local `docker compose` is unchanged (RabbitMQ, long-running worker, `QUEUE_BACKEND=rabbitmq` by default).
 
+Auth throttling uses `TRUSTED_PROXY_HOPS=1` for Cloud Run and the local nginx
+gateway: select the rightmost `X-Forwarded-For` address, never a caller-supplied
+prefix. Increase the count only for additional trusted proxies that append an
+address; use `0` when serving the API directly without a trusted proxy. Missing,
+short or malformed chains fall back to the socket peer, not `X-Real-IP`.
+
 Email, deletion and payment passes use session-level PostgreSQL advisory locks
 and commit each row separately. `DATABASE_URL` must use a direct PostgreSQL
 endpoint or a session-mode pooler, **not** a transaction-mode pooler (including

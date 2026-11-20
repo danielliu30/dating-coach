@@ -62,14 +62,41 @@ func (l *RateLimiter) Middleware(next http.Handler) http.Handler {
 	})
 }
 
-// ClientIP is the rate-limit key: the forwarded client address when the API
-// runs behind a proxy, otherwise the peer address.
-func ClientIP(r *http.Request) string {
-	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-		return strings.TrimSpace(strings.Split(fwd, ",")[0])
+type clientIPKey struct{}
+
+// ClientIPMiddleware selects the client address from the trusted end of the
+// proxy chain. Zero hops ignores forwarded headers and uses the socket peer.
+func ClientIPMiddleware(trustedHops int) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ip := forwardedClientIP(r, trustedHops)
+			r = r.WithContext(context.WithValue(r.Context(), clientIPKey{}, ip))
+			r.RemoteAddr = ip
+			next.ServeHTTP(w, r)
+		})
 	}
-	if realIP := r.Header.Get("X-Real-IP"); realIP != "" {
-		return strings.TrimSpace(realIP)
+}
+
+// ClientIP is the rate-limit key selected by ClientIPMiddleware. Without the
+// middleware, it trusts only the rightmost forwarded address.
+func ClientIP(r *http.Request) string {
+	if ip, ok := r.Context().Value(clientIPKey{}).(string); ok {
+		return ip
+	}
+	return forwardedClientIP(r, 1)
+}
+
+func forwardedClientIP(r *http.Request, trustedHops int) string {
+	if trustedHops > 0 {
+		var chain []string
+		for _, value := range r.Header.Values("X-Forwarded-For") {
+			chain = append(chain, strings.Split(value, ",")...)
+		}
+		if len(chain) >= trustedHops {
+			if ip := net.ParseIP(strings.TrimSpace(chain[len(chain)-trustedHops])); ip != nil {
+				return ip.String()
+			}
+		}
 	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {

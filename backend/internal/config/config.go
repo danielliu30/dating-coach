@@ -36,6 +36,7 @@ type Config struct {
 	BcryptCost           int
 	AuthRateLimit        int
 	AuthRateWindow       time.Duration
+	TrustedProxyHops     int
 
 	MLServiceURL        string
 	MLServiceTimeout    time.Duration
@@ -136,6 +137,7 @@ func Load() (*Config, error) {
 		BcryptCost:                envInt("BCRYPT_COST", 12),
 		AuthRateLimit:             envInt("AUTH_RATE_LIMIT", 20),
 		AuthRateWindow:            envDuration("AUTH_RATE_WINDOW", time.Minute),
+		TrustedProxyHops:          envInt("TRUSTED_PROXY_HOPS", 1),
 		MLServiceURL:              env("ML_SERVICE_URL", "http://localhost:8000"),
 		MLServiceTimeout:          envDuration("ML_SERVICE_TIMEOUT", 60*time.Second),
 		ProfileScoreEnabled:       envBool("PROFILE_SCORE_ENABLED", false),
@@ -174,6 +176,9 @@ func Load() (*Config, error) {
 	}
 	if cfg.MLServiceAuth != "none" && cfg.MLServiceAuth != "google" {
 		bad = append(bad, "ML_SERVICE_AUTH must be none or google")
+	}
+	if cfg.TrustedProxyHops < 0 {
+		bad = append(bad, "TRUSTED_PROXY_HOPS must be non-negative")
 	}
 	if cfg.JWTSecret == "" {
 		return nil, fmt.Errorf("JWT_SECRET is required")
