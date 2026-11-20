@@ -75,6 +75,8 @@ docker compose logs worker | grep 'worker started'
 ```
 Drop `--no-build` to build locally instead of pulling.
 
+All non-gateway published ports default to `127.0.0.1`: Postgres, Redis, RabbitMQ (AMQP/management), API, ML, raw web, Mailpit and pgAdmin. Their `*_PORT` variables accept host bindings like `API_PORT=127.0.0.1:8082`; a bare port or `0.0.0.0:port` explicitly exposes the service. Update old bare-port overrides in existing `.env` files to loopback bindings. Container-to-container URLs keep the original service names and ports. Only the nginx gateway retains a public default binding.
+
 ## Expose through nginx
 Routes (identical in both variants):
 - `/api/*` and `/healthz` -> api (`Upgrade`/`Connection` headers forwarded, `proxy_read_timeout 1h` for chat sockets)
@@ -103,7 +105,7 @@ systemctl status certbot.timer && sudo certbot renew --dry-run   # auto-renewal 
 printf '#!/bin/sh\nsystemctl reload nginx\n' | sudo tee /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh >/dev/null && sudo chmod +x /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
 curl -fsS https://<domain>/healthz && curl -fsS https://<domain>/ml/healthz && curl -sI http://<domain>/ | head -1   # last one: 301
 ```
-Upstreams are `127.0.0.1:8080` / `127.0.0.1:8000` / `127.0.0.1:3000` (`web`, published on `WEB_PORT`), i.e. the ports compose publishes. The `web` container still needs `--profile gateway`, so in `.env` set `NGINX_PORT=127.0.0.1:8088` and `WEB_PORT=127.0.0.1:3000` (off :80, localhost-only so the containerised web is reached solely via the host nginx); if you change `WEB_PORT`, edit the `location /` upstream in host-site.conf to match. Also set `PUBLIC_APP_URL=https://<domain>`, `CORS_ORIGINS=https://<domain>` and the GitHub variable `DEPLOY_HEALTHCHECK_URL=https://<domain>/healthz`.
+Upstreams are `127.0.0.1:8080` / `127.0.0.1:8000` / `127.0.0.1:3000`, matching the default `API_PORT`, `ML_ANALYZER_PORT` and `WEB_PORT` bindings. The `web` container still needs `--profile gateway`, so in `.env` set `NGINX_PORT=127.0.0.1:8088` (off :80, localhost-only); web already defaults to loopback. If you change any of these upstream port bindings, edit the corresponding upstream in host-site.conf to match. Also set `PUBLIC_APP_URL=https://<domain>`, `CORS_ORIGINS=https://<domain>` and the GitHub variable `DEPLOY_HEALTHCHECK_URL=https://<domain>/healthz`.
 
 WebSocket over HTTPS: the API's same-origin check (`coder/websocket` `authenticateOrigin`) compares the `Origin` host to `r.Host`, both `<domain>` because nginx forwards `Host: $http_host`, so `wss://<domain>/api/v1/chat/ws` is accepted; `https://<domain>` in `CORS_ORIGINS` also matches as a scheme-qualified pattern.
 
