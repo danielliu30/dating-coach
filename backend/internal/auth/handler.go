@@ -230,6 +230,10 @@ func (h *Handler) verify(w http.ResponseWriter, r *http.Request) {
 		slog.Error("verify email", "error", err)
 		httpx.Error(w, http.StatusInternalServerError, "could not verify email")
 	default:
+		if session.Token == "" {
+			httpx.JSON(w, http.StatusOK, map[string]string{"status": "verified"})
+			return
+		}
 		httpx.JSON(w, http.StatusOK, session)
 	}
 }
