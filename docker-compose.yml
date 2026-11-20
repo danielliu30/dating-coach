@@ -1,7 +1,7 @@
 name: dating-coach
 
 x-backend-env: &backend-env
-  APP_ENV: ${APP_ENV:-development}
+  APP_ENV: ${APP_ENV:-production}
   DATABASE_URL: postgres://${POSTGRES_USER:-datingcoach}:${POSTGRES_PASSWORD:-datingcoach}@postgres:5432/${POSTGRES_DB:-datingcoach}?sslmode=disable
   REDIS_URL: redis://redis:6379/0
   RABBITMQ_URL: amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASSWORD:-guest}@rabbitmq:5672/

@@ -115,7 +115,7 @@ func Load() (*Config, error) {
 	}
 
 	cfg := &Config{
-		Env:                       env("APP_ENV", "development"),
+		Env:                       env("APP_ENV", "production"),
 		HTTPAddr:                  env("HTTP_ADDR", ":"+env("PORT", "8080")),
 		QueueBackend:              env("QUEUE_BACKEND", "rabbitmq"),
 		GCPProjectID:              env("GCP_PROJECT_ID", ""),

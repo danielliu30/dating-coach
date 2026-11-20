@@ -1,9 +1,72 @@
 package config
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
+
+func TestLoadDefaultsToProduction(t *testing.T) {
+	t.Chdir(t.TempDir())
+	t.Setenv("JWT_SECRET", "q8Zr1vN0bT4xKp7LmW2yHs9cJd6Fg3Ae")
+	t.Setenv("DATABASE_URL", "postgres://app:db-test-password@localhost/db")
+	t.Setenv("POSTGRES_PASSWORD", "db-test-password")
+	t.Setenv("RABBITMQ_URL", "amqp://app:mq-test-password@localhost:5672/")
+	t.Setenv("SMTP_PASSWORD", "")
+
+	for _, value := range []string{"unset", "", "   "} {
+		t.Run("APP_ENV="+value, func(t *testing.T) {
+			t.Setenv("APP_ENV", value)
+			if value == "unset" {
+				if err := os.Unsetenv("APP_ENV"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cfg, err := Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Env != "production" {
+				t.Fatalf("Env = %q, want production", cfg.Env)
+			}
+			for _, tc := range []struct{ key, value string }{
+				{"JWT_SECRET", "change-me-to-a-long-random-string"},
+				{"JWT_SECRET", "dev-secret-change-me"},
+				{"POSTGRES_PASSWORD", "datingcoach"},
+				{"RABBITMQ_URL", "amqp://guest:guest@localhost:5672/"},
+			} {
+				t.Run(tc.key+"="+tc.value, func(t *testing.T) {
+					t.Setenv(tc.key, tc.value)
+					if _, err := Load(); err == nil || !strings.Contains(err.Error(), tc.key) {
+						t.Fatalf("Load() = %v, want error naming %s", err, tc.key)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestLoadDotenvOptsIntoDevelopment(t *testing.T) {
+	t.Chdir(t.TempDir())
+	t.Setenv("APP_ENV", "")
+	if err := os.Unsetenv("APP_ENV"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(".env", []byte("APP_ENV=development\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("JWT_SECRET", "dev-secret-change-me")
+	t.Setenv("DATABASE_URL", "postgres://datingcoach:datingcoach@localhost/datingcoach")
+	t.Setenv("POSTGRES_PASSWORD", "datingcoach")
+	t.Setenv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Env != "development" {
+		t.Fatalf("Env = %q, want development", cfg.Env)
+	}
+}
 
 func TestLoadProductionSecrets(t *testing.T) {
 	t.Setenv("APP_ENV", "production")

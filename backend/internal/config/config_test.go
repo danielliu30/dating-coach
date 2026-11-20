@@ -10,6 +10,7 @@ import (
 // test only has to state the variable it is exercising.
 func setRequired(t *testing.T) {
 	t.Helper()
+	t.Setenv("APP_ENV", "development")
 	t.Setenv("DATABASE_URL", "postgres://localhost:5432/dating_coach")
 	t.Setenv("JWT_SECRET", "test-secret")
 }
