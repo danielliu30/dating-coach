@@ -1,12 +1,10 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
 import { ApiError, api } from '../api/client';
 import type { RenewalResult, SessionEndReason, SignOutScope } from '../api/client';
 import type { AuthSession, DatingProfileInput, Profile, Role } from '../api/types';
 import { requestGoogleIdToken } from '../lib/googleIdentity';
-
-const STORAGE_KEY = 'dating-coach.session';
+import { sessionStorage } from './sessionStorage';
 
 // How long anything waits on a sign-out's server-side revocation, so a hung
 // connection cannot stall the caller or the next sign-in.
@@ -175,7 +173,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
       setToken(null);
       setUser(null);
       setSignedOutReason(reason);
-      void AsyncStorage.removeItem(STORAGE_KEY).catch(() => undefined);
+      void sessionStorage.clear().catch(() => undefined);
     });
   }, []);
 
@@ -191,7 +189,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
     setUser(session.user);
     setSignedOutReason(null);
     const record: StoredSession = { ...session, received_at: receivedAt };
-    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(record));
+    await sessionStorage.write(JSON.stringify(record));
     return session.user;
   }, []);
 
@@ -245,9 +243,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
   // already expired.
   useEffect(() => {
     void (async () => {
-      const forget = () => AsyncStorage.removeItem(STORAGE_KEY).catch(() => undefined);
+      const forget = () => sessionStorage.clear().catch(() => undefined);
       try {
-        const raw = await AsyncStorage.getItem(STORAGE_KEY);
+        const raw = await sessionStorage.read();
         const stored = parseSession(raw);
         if (!stored) {
           if (raw) await forget();
@@ -297,15 +295,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
     setToken(null);
     setUser(null);
     setSignedOutReason(null);
-    await AsyncStorage.removeItem(STORAGE_KEY);
+    await sessionStorage.clear();
   }, []);
 
   // Keeps a refreshed profile across restarts instead of only in memory.
   const persistUser = useCallback(async (profile: Profile) => {
     setUser(profile);
     if (!tokenRef.current) return profile;
-    await AsyncStorage.setItem(
-      STORAGE_KEY,
+    await sessionStorage.write(
       JSON.stringify({
         token: tokenRef.current,
         refresh_token: refreshRef.current,
