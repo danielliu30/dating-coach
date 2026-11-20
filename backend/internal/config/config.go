@@ -110,7 +110,7 @@ func Load() (*Config, error) {
 	}
 
 	cfg := &Config{
-		Env:                  env("APP_ENV", "development"),
+		Env:                  env("APP_ENV", "production"),
 		HTTPAddr:             env("HTTP_ADDR", ":8080"),
 		DatabaseURL:          env("DATABASE_URL", ""),
 		RedisURL:             env("REDIS_URL", "redis://localhost:6379/0"),

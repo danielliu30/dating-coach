@@ -64,6 +64,11 @@ Actions -> *Release (build, push, deploy)* -> *Run workflow*, `image_tag` = an e
 - Ports 80/443 reachable, host nginx + certbot installed (variant B below) with `NGINX_PORT`/`WEB_PORT` moved off 80. Smoke-test once by hand with `docker compose --profile gateway up -d` before enabling the secrets.
 
 ## Run from the published images
+For local use, copying `.env.example` explicitly sets `APP_ENV=development` and
+allows example secrets. Compose and standalone Go binaries default to production
+when `APP_ENV` is omitted or blank, rejecting shipped secrets at startup. Keep
+`APP_ENV=production` and provision non-default secrets for deployments.
+
 ```bash
 cp .env.example .env                       # only if .env missing; set JWT_SECRET for anything non-local
 docker compose --profile gateway pull api ml-analyzer web   # drop `--profile gateway`/`web` for API-only

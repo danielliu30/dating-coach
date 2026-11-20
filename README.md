@@ -52,6 +52,12 @@ docker compose up -d --build # postgres, redis, rabbitmq, migrations, api, worke
 
 Migrations run in a one-shot `migrate` service before `api` and `worker` start.
 
+Copying `.env.example` explicitly opts into `APP_ENV=development` for local use.
+Without `APP_ENV` (or when blank), Compose and standalone Go binaries default to
+`production`: API and worker startup reject the shipped JWT key and default
+database/broker credentials. For deployments, set `APP_ENV=production` and replace
+the example secrets; do not use the development opt-in.
+
 Prebuilt images are published to Docker Hub as `danielliu30/dating-coach-backend` (both `api` and `worker` entrypoints) and `danielliu30/dating-coach-ml-analyzer`. To run from them instead of building:
 
 ```bash
@@ -208,6 +214,10 @@ It asks for confirmation (pass `--yes` to skip), stops `api` and `worker`, repla
 ## Running components without Compose
 
 **Backend** (needs PostgreSQL, Redis and RabbitMQ reachable):
+
+First copy `.env.example` to `.env` in the repository root for local development.
+The Go binaries load that file as well; without it, supply `APP_ENV=development`
+explicitly for local example secrets, or provide valid non-development secrets.
 
 ```bash
 cd backend
