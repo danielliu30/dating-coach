@@ -123,7 +123,7 @@ func NewMLClient(baseURL string, timeout time.Duration) *MLClient {
 func NewAuthenticatedMLClient(ctx context.Context, baseURL string, timeout time.Duration, auth string) (*MLClient, error) {
 	c := NewMLClient(baseURL, timeout)
 	if auth == "google" {
-		h, err := idtoken.NewClient(ctx, baseURL)
+		h, err := idtoken.NewClient(ctx, c.baseURL)
 		if err != nil {
 			return nil, fmt.Errorf("ML identity client: %w", err)
 		}

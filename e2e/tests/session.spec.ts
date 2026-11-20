@@ -95,8 +95,8 @@ test.describe('short-lived tokens (JWT_TTL=30s, REFRESH_TOKEN_TTL=40s)', () => {
     const { page, userID } = await signUpAndVerify(ctx, account);
     const before = await dbCount(`select count(*) from refresh_tokens where user_id = '${userID}'`);
 
-    await page.waitForTimeout(32_000); // access token expired, refresh token (40s) still valid
     await openTab(page, 'Account');
+    await page.waitForTimeout(32_000); // access token expired, refresh token (40s) still valid
     await button(page, 'Refresh profile').click();
 
     await expect(page.getByRole('tab', { name: /Account/ })).toBeVisible();
@@ -118,8 +118,8 @@ test.describe('short-lived tokens (JWT_TTL=30s, REFRESH_TOKEN_TTL=40s)', () => {
     const account = makeAccount('idle', 'user');
     const { page } = await signUpAndVerify(ctx, account);
 
-    await page.waitForTimeout(45_000); // past REFRESH_TOKEN_TTL
     await openTab(page, 'Account');
+    await page.waitForTimeout(45_000); // past REFRESH_TOKEN_TTL
     await button(page, 'Refresh profile').click();
 
     await expectSignedOut(page);
@@ -134,8 +134,8 @@ test.describe('short-lived tokens (JWT_TTL=30s, REFRESH_TOKEN_TTL=40s)', () => {
     const { page, userID } = await signUpAndVerify(ctx, account);
     await db(`delete from refresh_tokens where user_id = '${userID}'`);
 
-    await page.waitForTimeout(32_000); // access token expired; nothing left to renew with
     await openTab(page, 'Account');
+    await page.waitForTimeout(32_000); // access token expired; nothing left to renew with
     await button(page, 'Refresh profile').click();
 
     await expectSignedOut(page);

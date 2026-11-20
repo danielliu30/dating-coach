@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http/httptest"
@@ -71,7 +72,7 @@ func TestWorkerTasks(t *testing.T) {
 		{"POST", "/tasks/unknown", 404, nil},
 		{"POST", "/tasks/sweep-payments", 404, nil},
 		{"POST", "/tasks/batch?task=a&task=unknown", 404, nil},
-		{"POST", "/tasks/batch?task=a&task=fail&task=b", 500, []string{"a"}},
+		{"POST", "/tasks/batch?task=a&task=fail&task=b", 500, []string{"a", "b"}},
 		{"GET", "/tasks/a", 405, nil},
 		{"POST", "/pubsub/email-outbox", 204, []string{"relay-emails"}},
 	} {
@@ -90,5 +91,62 @@ func TestWorkerTasks(t *testing.T) {
 	router.ServeHTTP(w, httptest.NewRequest("POST", "/pubsub/email-outbox", strings.NewReader(`{"message":{"data":"e30="}}`)))
 	if w.Code != 500 {
 		t.Fatalf("email failure status=%d", w.Code)
+	}
+}
+
+func TestWorkerBatchReportsEveryTask(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		names  []string
+		status int
+		want   []map[string]any
+	}{
+		{
+			name: "success", names: []string{"a", "b"}, status: 200,
+			want: []map[string]any{{"task": "a", "result": float64(1)}, {"task": "b", "result": float64(1)}},
+		},
+		{
+			name: "continues after failures", names: []string{"fail", "a", "fail-empty", "b"}, status: 500,
+			want: []map[string]any{
+				{"task": "fail", "result": float64(2), "error": "partial failure"},
+				{"task": "a", "result": float64(1)},
+				{"task": "fail-empty", "result": nil, "error": "failed"},
+				{"task": "b", "result": float64(1)},
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var calls []string
+			tasks := map[string]task{}
+			for _, name := range []string{"a", "b", "fail", "fail-empty"} {
+				tasks[name] = func(context.Context) (any, error) {
+					calls = append(calls, name)
+					switch name {
+					case "fail":
+						return 2, errors.New("partial failure")
+					case "fail-empty":
+						return nil, errors.New("failed")
+					default:
+						return 1, nil
+					}
+				}
+			}
+			w := httptest.NewRecorder()
+			path := "/tasks/batch?task=" + strings.Join(tt.names, "&task=")
+			workerRouter(nil, nil, 5, tasks).ServeHTTP(w, httptest.NewRequest("POST", path, nil))
+			if w.Code != tt.status || !reflect.DeepEqual(calls, tt.names) {
+				t.Fatalf("status=%d calls=%v", w.Code, calls)
+			}
+			if got := w.Header().Get("Content-Type"); got != "application/json" {
+				t.Fatalf("content type=%q", got)
+			}
+			var got []map[string]any
+			if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("results=%v, want %v", got, tt.want)
+			}
+		})
 	}
 }

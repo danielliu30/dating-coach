@@ -1,10 +1,18 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { act, renderHook, waitFor } from '@testing-library/react-native';
+import * as SecureStore from 'expo-secure-store';
 import React from 'react';
+import { Platform } from 'react-native';
 
 import { ApiError, api } from '../api/client';
 import type { AuthSession, Profile } from '../api/types';
 import { AuthProvider, SIGN_OUT_TIMEOUT_MS, useAuth } from './auth';
+
+jest.mock('expo-secure-store', () => ({
+  getItemAsync: jest.fn(async () => null),
+  setItemAsync: jest.fn(async () => undefined),
+  deleteItemAsync: jest.fn(async () => undefined),
+}));
 
 jest.mock('../api/client', () => {
   const actual = jest.requireActual<typeof import('../api/client')>('../api/client');
@@ -81,8 +89,32 @@ const registeredRejection = () => {
 };
 
 beforeEach(async () => {
+  jest.replaceProperty(Platform, 'OS', 'web');
   await AsyncStorage.clear();
   mocked.signOut.mockResolvedValue({ status: 'signed_out' });
+});
+
+afterEach(() => jest.restoreAllMocks());
+
+describe('native session persistence', () => {
+  it.each(['ios', 'android'] as const)('restores and migrates a legacy %s session, then clears both stores on sign-out', async (platform) => {
+    jest.replaceProperty(Platform, 'OS', platform);
+    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(session()));
+    const { result } = await renderAuth();
+
+    expect(result.current.token).toBe('access');
+    expect(result.current.user).toEqual(user);
+    expect(SecureStore.setItemAsync).toHaveBeenCalledWith(
+      STORAGE_KEY,
+      expect.stringContaining('"refresh_token":"refresh"'),
+    );
+    expect(await stored()).toBeNull();
+
+    await act(async () => { await result.current.signOut(); });
+    expect(result.current.token).toBeNull();
+    expect(SecureStore.deleteItemAsync).toHaveBeenCalledWith(STORAGE_KEY);
+    expect(await stored()).toBeNull();
+  });
 });
 
 describe('AuthProvider sign in / sign up', () => {
@@ -237,11 +269,12 @@ describe('AuthProvider verify', () => {
     expect(await stored()).toBeNull();
   });
 
-  it('resendVerification forwards the email', async () => {
-    mocked.resendVerification.mockResolvedValue({ status: 'sent' });
+  it('resendVerification forwards the email and returns cooldown guidance', async () => {
+    const response = { status: 'sent', resend_after_seconds: 90 };
+    mocked.resendVerification.mockResolvedValue(response);
     const { result } = await renderAuth();
     await act(async () => {
-      await result.current.resendVerification(' a@b.c ');
+      await expect(result.current.resendVerification(' a@b.c ')).resolves.toEqual(response);
     });
     expect(mocked.resendVerification).toHaveBeenCalledWith(' a@b.c ');
   });
