@@ -84,7 +84,7 @@ func (s *Service) bookPaid(ctx context.Context, userID, coachID uuid.UUID, sched
 		return Session{}, fmt.Errorf("create pending session: %w", err)
 	}
 
-	if err := tx.Commit(ctx); err != nil {
+	if err := s.commit(ctx, tx); err != nil {
 		return Session{}, fmt.Errorf("commit booking: %w", err)
 	}
 
@@ -179,7 +179,7 @@ func (s *Service) ApplyPaymentEvent(ctx context.Context, ev payments.Event) erro
 	if err != nil {
 		return fmt.Errorf("apply %s: %w", ev.Kind, err)
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := s.commit(ctx, tx); err != nil {
 		return fmt.Errorf("commit payment event: %w", err)
 	}
 	return nil
