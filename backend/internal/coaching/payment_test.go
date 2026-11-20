@@ -299,19 +299,46 @@ func TestLapsedHoldRefusesLateAuthorisationUnlessSlotStillFree(t *testing.T) {
 	outboxFor(t, pool, emailOf(t, pool, other))
 }
 
+func paymentFixtureTimezone(now time.Time) string {
+	if now.UTC().Hour() == 23 {
+		return "Etc/GMT+12"
+	}
+	return "UTC"
+}
+
+func TestPaymentFixtureAvoidsMidnight(t *testing.T) {
+	for minute := 0; minute < 24*60; minute++ {
+		now := time.Date(2026, 11, 19, 0, minute, 59, 0, time.UTC)
+		zone, err := time.LoadLocation(paymentFixtureTimezone(now))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, offset := range []time.Duration{minCheckoutWindow - time.Minute, minCheckoutWindow + time.Minute} {
+			start := now.Add(offset).In(zone)
+			if start.Hour()*60+start.Minute()+defaultSessionMinutes > 1440 {
+				t.Fatalf("fixture crosses local midnight: clock=%v start=%v", now, start)
+			}
+		}
+	}
+}
+
 func TestPaymentHoldNeverOutlivesSessionStart(t *testing.T) {
 	svc, provider, pool, coach := paidService(t)
 	ctx := context.Background()
 	client := insertUser(t, pool, "user")
+	now := time.Now().UTC()
+	if _, err := pool.Exec(ctx, "UPDATE coaches SET timezone = $2 WHERE user_id = $1", coach, paymentFixtureTimezone(now)); err != nil {
+		t.Fatal(err)
+	}
 
 	// Too close to start for a checkout at all.
-	soon := time.Now().Add(minCheckoutWindow - time.Minute).UTC().Format(time.RFC3339)
+	soon := now.Add(minCheckoutWindow - time.Minute).Format(time.RFC3339)
 	if _, err := svc.BookSession(ctx, client, BookInput{CoachID: coach.String(), ScheduledTime: soon}); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("booking %s before start: err = %v, want ErrInvalidInput", minCheckoutWindow-time.Minute, err)
 	}
 
 	// Sooner than holdTTL: the hold is capped at the session start.
-	start := time.Now().Add(minCheckoutWindow + time.Minute).Truncate(time.Second).UTC()
+	start := now.Add(minCheckoutWindow + time.Minute).Truncate(time.Second)
 	s, err := svc.BookSession(ctx, client, BookInput{CoachID: coach.String(), ScheduledTime: start.Format(time.RFC3339), DurationMinutes: 30})
 	if err != nil {
 		t.Fatalf("book: %v", err)
