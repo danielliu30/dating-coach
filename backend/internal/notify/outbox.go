@@ -65,8 +65,20 @@ func (r *Relay) Run(ctx context.Context) error {
 
 // Drain attempts up to relayBatch queued emails and reports how many were
 // delivered. A failed send is recorded on its row and retried on a later pass,
-// up to MaxAttempts; only a database error stops the pass.
+// up to MaxAttempts; only a database error stops the pass. Overlapping passes
+// across instances return without sending.
 func (r *Relay) Drain(ctx context.Context) (int, error) {
+	var sent int
+	err := r.queries.WithExclusivePass(ctx, "relay-emails", func(q *db.Queries) error {
+		var err error
+		locked := &Relay{queries: q, notifier: r.notifier}
+		sent, err = locked.drain(ctx)
+		return err
+	})
+	return sent, err
+}
+
+func (r *Relay) drain(ctx context.Context) (int, error) {
 	pending, err := r.queries.PendingEmails(ctx, db.PendingEmailsParams{Limit: relayBatch, Attempts: MaxAttempts})
 	if err != nil {
 		return 0, fmt.Errorf("read email outbox: %w", err)
@@ -112,15 +124,23 @@ func (r *Relay) WatchExhausted(ctx context.Context, period time.Duration) error 
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			n, err := r.queries.CountExhaustedEmails(ctx, MaxAttempts)
-			if err != nil {
-				return fmt.Errorf("count exhausted emails: %w", err)
-			}
-			if n > 0 {
-				slog.Warn("undelivered emails need an operator", "count", n, "max_attempts", MaxAttempts)
+			if _, err := r.CheckExhausted(ctx); err != nil {
+				return err
 			}
 		}
 	}
+}
+
+// CheckExhausted reports abandoned emails in one monitoring pass.
+func (r *Relay) CheckExhausted(ctx context.Context) (int64, error) {
+	n, err := r.queries.CountExhaustedEmails(ctx, MaxAttempts)
+	if err != nil {
+		return 0, fmt.Errorf("count exhausted emails: %w", err)
+	}
+	if n > 0 {
+		slog.Warn("undelivered emails need an operator", "count", n, "max_attempts", MaxAttempts)
+	}
+	return n, nil
 }
 
 // retryDelay is how long to wait before the next attempt after the given number

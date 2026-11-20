@@ -287,6 +287,18 @@ type SweepResult struct {
 // provider error.
 func (s *Service) SweepPayments(ctx context.Context, now time.Time) (SweepResult, error) {
 	var res SweepResult
+	err := s.queries.WithExclusivePass(ctx, "sweep-payments", func(q *db.Queries) error {
+		var err error
+		locked := *s
+		locked.queries = q
+		res, err = locked.sweepPayments(ctx, now)
+		return err
+	})
+	return res, err
+}
+
+func (s *Service) sweepPayments(ctx context.Context, now time.Time) (SweepResult, error) {
+	var res SweepResult
 	released, err := s.queries.ExpirePaymentHolds(ctx, &now)
 	if err != nil {
 		return res, fmt.Errorf("expire holds: %w", err)

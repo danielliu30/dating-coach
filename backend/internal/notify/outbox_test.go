@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"mime"
 	"mime/multipart"
@@ -12,6 +13,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,6 +22,141 @@ import (
 	"github.com/danielliu30/dating-coach/backend/internal/config"
 	"github.com/danielliu30/dating-coach/backend/internal/store/db"
 )
+
+type blockingNotifier struct {
+	Notifier
+	to      string
+	started chan struct{}
+	release chan struct{}
+	calls   atomic.Int32
+	err     error
+}
+
+type callbackNotifier struct {
+	Notifier
+	send func(Message) error
+}
+
+func (n callbackNotifier) Send(_ context.Context, m Message) error { return n.send(m) }
+
+func TestDrainCommitsEachRowAndStartsBackoffAfterSend(t *testing.T) {
+	q, pool := testQueries(t)
+	_, observer := testQueries(t)
+	ctx := context.Background()
+	to := t.Name() + "@example.test"
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM email_outbox WHERE to_email = $1", to) })
+	first, err := q.EnqueueEmail(ctx, db.EnqueueEmailParams{ToEmail: to, Subject: "first", Body: "b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := q.EnqueueEmail(ctx, db.EnqueueEmailParams{ToEmail: to, Subject: "second", Body: "b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, "UPDATE email_outbox SET next_attempt_at = now() - interval '2 minutes' WHERE id = $1", first.ID); err != nil {
+		t.Fatal(err)
+	}
+	var failedAt time.Time
+	calls := 0
+	n := callbackNotifier{send: func(m Message) error {
+		if m.To != to {
+			return nil
+		}
+		calls++
+		if m.Subject == "first" {
+			return nil
+		}
+		var sent bool
+		if err := observer.QueryRow(ctx, "SELECT sent_at IS NOT NULL FROM email_outbox WHERE id = $1", first.ID).Scan(&sent); err != nil || !sent {
+			t.Fatalf("first row not committed before second send: sent=%v err=%v", sent, err)
+		}
+		time.Sleep(100 * time.Millisecond)
+		if err := observer.QueryRow(ctx, "SELECT clock_timestamp()").Scan(&failedAt); err != nil {
+			t.Fatal(err)
+		}
+		return errors.New("SMTP unavailable")
+	}}
+	relay := NewRelay(q, n)
+	if sent, err := relay.Drain(ctx); err != nil || sent < 1 {
+		t.Fatalf("drain = %d, %v", sent, err)
+	}
+	var retryAt time.Time
+	if err := pool.QueryRow(ctx, "SELECT next_attempt_at FROM email_outbox WHERE id = $1", second.ID).Scan(&retryAt); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 || failedAt.IsZero() || retryAt.Before(failedAt.Add(minRetryDelay)) {
+		t.Fatalf("calls=%d failure=%v retry=%v", calls, failedAt, retryAt)
+	}
+	if _, err := relay.Drain(ctx); err != nil || calls != 2 {
+		t.Fatalf("repeated drain: calls=%d err=%v", calls, err)
+	}
+}
+
+func (n *blockingNotifier) Send(ctx context.Context, m Message) error {
+	if m.To != n.to {
+		return nil
+	}
+	if n.calls.Add(1) == 1 {
+		close(n.started)
+	}
+	select {
+	case <-n.release:
+		return n.err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func TestConcurrentDrainsSendOnce(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(fmt.Sprintf("failure=%v", fail), func(t *testing.T) {
+			q, pool := testQueries(t)
+			other, _ := testQueries(t)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			to := "concurrent-" + t.Name() + "@example.test"
+			t.Cleanup(func() { _, _ = pool.Exec(context.Background(), "DELETE FROM email_outbox WHERE to_email = $1", to) })
+			row, err := q.EnqueueEmail(ctx, db.EnqueueEmailParams{ToEmail: to, Subject: "s", Body: "b"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			n := &blockingNotifier{to: to, started: make(chan struct{}), release: make(chan struct{})}
+			if fail {
+				n.err = errors.New("SMTP unavailable")
+			}
+			var release sync.Once
+			defer release.Do(func() { close(n.release) })
+			done := make(chan error, 1)
+			go func() {
+				_, err := NewRelay(q, n).Drain(ctx)
+				done <- err
+			}()
+			select {
+			case <-n.started:
+			case <-ctx.Done():
+				t.Fatal("first relay did not start sending")
+			}
+			if sent, err := NewRelay(other, n).Drain(ctx); err != nil || sent != 0 {
+				t.Fatalf("overlapping drain = %d, %v", sent, err)
+			}
+			release.Do(func() { close(n.release) })
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+			if _, err := NewRelay(other, n).Drain(ctx); err != nil {
+				t.Fatal(err)
+			}
+			var attempts int32
+			var sent bool
+			if err := pool.QueryRow(ctx, "SELECT attempts, sent_at IS NOT NULL FROM email_outbox WHERE id = $1", row.ID).Scan(&attempts, &sent); err != nil {
+				t.Fatal(err)
+			}
+			if n.calls.Load() != 1 || attempts != 1 || sent == fail {
+				t.Fatalf("calls=%d attempts=%d sent=%v failure=%v", n.calls.Load(), attempts, sent, fail)
+			}
+		})
+	}
+}
 
 // stalledSMTP accepts connections and never speaks, standing in for a server
 // that hangs mid-handshake. It returns the port it listens on.

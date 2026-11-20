@@ -64,6 +64,17 @@ func (r *Relay) Run(ctx context.Context) error {
 // idempotent, which is what makes the duplicate harmless. It stops at the first
 // publish that fails, since the cause is the broker rather than the job.
 func (r *Relay) Drain(ctx context.Context) (int, error) {
+	var published int
+	err := r.queries.WithExclusivePass(ctx, "relay-deletions", func(q *db.Queries) error {
+		var err error
+		locked := &Relay{queries: q, publisher: r.publisher}
+		published, err = locked.drain(ctx)
+		return err
+	})
+	return published, err
+}
+
+func (r *Relay) drain(ctx context.Context) (int, error) {
 	pending, err := r.queries.PendingDeletions(ctx, relayBatch)
 	if err != nil {
 		return 0, fmt.Errorf("read deletion outbox: %w", err)
