@@ -26,15 +26,16 @@ type Config struct {
 	MLServiceAuth             string
 	EmailOutboxTopic          string
 
-	JWTSecret           string
-	JWTTTL              time.Duration
-	VerifyTokenTTL      time.Duration
-	RefreshTokenTTL     time.Duration
-	ResetCodeTTL        time.Duration
-	ResetResendCooldown time.Duration
-	BcryptCost          int
-	AuthRateLimit       int
-	AuthRateWindow      time.Duration
+	JWTSecret            string
+	JWTTTL               time.Duration
+	VerifyTokenTTL       time.Duration
+	RefreshTokenTTL      time.Duration
+	ResetCodeTTL         time.Duration
+	ResetResendCooldown  time.Duration
+	VerifyResendCooldown time.Duration
+	BcryptCost           int
+	AuthRateLimit        int
+	AuthRateWindow       time.Duration
 
 	MLServiceURL        string
 	MLServiceTimeout    time.Duration
@@ -131,6 +132,7 @@ func Load() (*Config, error) {
 		RefreshTokenTTL:           envDuration("REFRESH_TOKEN_TTL", 30*24*time.Hour),
 		ResetCodeTTL:              envDuration("RESET_CODE_TTL", 15*time.Minute),
 		ResetResendCooldown:       envDuration("RESET_RESEND_COOLDOWN", time.Minute),
+		VerifyResendCooldown:      envDuration("VERIFY_RESEND_COOLDOWN", time.Minute),
 		BcryptCost:                envInt("BCRYPT_COST", 12),
 		AuthRateLimit:             envInt("AUTH_RATE_LIMIT", 20),
 		AuthRateWindow:            envDuration("AUTH_RATE_WINDOW", time.Minute),
@@ -187,6 +189,7 @@ func Load() (*Config, error) {
 		{"REFRESH_TOKEN_TTL", cfg.RefreshTokenTTL},
 		{"RESET_CODE_TTL", cfg.ResetCodeTTL},
 		{"RESET_RESEND_COOLDOWN", cfg.ResetResendCooldown},
+		{"VERIFY_RESEND_COOLDOWN", cfg.VerifyResendCooldown},
 		{"AUTH_RATE_WINDOW", cfg.AuthRateWindow},
 		{"ML_SERVICE_TIMEOUT", cfg.MLServiceTimeout},
 		{"DEAD_LETTER_ALERT_PERIOD", cfg.DeadLetterAlertPeriod},

@@ -84,7 +84,7 @@ interface AuthState {
    */
   signInWithGoogle: (role?: Role) => Promise<Profile>;
   verify: (email: string, code: string) => Promise<Profile>;
-  resendVerification: (email: string) => Promise<void>;
+  resendVerification: (email: string) => Promise<{ status: string; resend_after_seconds?: number }>;
   refresh: () => Promise<void>;
   updateDatingProfile: (input: DatingProfileInput) => Promise<Profile>;
   deleteAccount: () => Promise<void>;
@@ -348,7 +348,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
         return session.user;
       },
       resendVerification: async (email) => {
-        await api.resendVerification(email);
+        return api.resendVerification(email);
       },
       refresh: async () => {
         if (!tokenRef.current) return;

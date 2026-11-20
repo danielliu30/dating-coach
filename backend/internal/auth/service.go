@@ -480,13 +480,12 @@ func (s *Service) SignUp(ctx context.Context, in SignUpInput) (Session, error) {
 	// The row and the code have to exist together: a registered address with no
 	// code cannot be verified and blocks every retry with ErrEmailTaken, so a
 	// failed store takes the row back out and lets the caller sign up again.
-	if err := s.codes.Store(ctx, user.ID.String(), code); err != nil {
+	if err := s.issueVerificationCode(ctx, user, code); err != nil {
 		if _, delErr := s.queries.DeleteUser(ctx, user.ID); delErr != nil {
 			slog.Error("roll back sign-up after failed code store", "error", delErr, "user_id", user.ID)
 		}
 		return Session{}, fmt.Errorf("store verification code: %w", err)
 	}
-	s.sendVerificationEmail(ctx, user.Email, code)
 
 	jwtToken, expiresAt, err := s.issuer.Issue(user.ID, user.Email, user.Role, ScopeVerify, s.verifyTokenTTL)
 	if err != nil {
@@ -826,9 +825,8 @@ func (s *Service) ownsBearer(ctx context.Context, userID uuid.UUID, bearer strin
 	return true, nil
 }
 
-// ResendVerification issues a fresh code, replacing any outstanding one, and
-// re-sends the email. It succeeds for unknown or already verified addresses so
-// callers cannot enumerate users.
+// ResendVerification issues a fresh code outside the per-account cooldown.
+// It succeeds for unknown, verified and cooling-down addresses alike.
 func (s *Service) ResendVerification(ctx context.Context, email string) error {
 	user, err := s.queries.GetUserByEmail(ctx, strings.ToLower(strings.TrimSpace(email)))
 	if err != nil {
@@ -843,6 +841,17 @@ func (s *Service) ResendVerification(ctx context.Context, email string) error {
 	code, err := randomCode()
 	if err != nil {
 		return err
+	}
+	return s.issueVerificationCode(ctx, user, code)
+}
+
+func (s *Service) issueVerificationCode(ctx context.Context, user db.User, code string) error {
+	allowed, err := s.codes.AllowSend(ctx, user.ID.String())
+	if err != nil {
+		return fmt.Errorf("claim verification cooldown: %w", err)
+	}
+	if !allowed {
+		return nil
 	}
 	if err := s.codes.Store(ctx, user.ID.String(), code); err != nil {
 		return fmt.Errorf("store verification code: %w", err)
