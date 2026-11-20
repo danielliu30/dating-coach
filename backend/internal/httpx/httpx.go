@@ -4,6 +4,7 @@ package httpx
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -35,6 +36,15 @@ func Error(w http.ResponseWriter, status int, message string) {
 	JSON(w, status, ErrorBody{Error: message})
 }
 
+func DecodeError(w http.ResponseWriter, err error) {
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		Error(w, http.StatusRequestEntityTooLarge, "request body too large")
+		return
+	}
+	Error(w, http.StatusBadRequest, "invalid request body")
+}
+
 // Decode reads a JSON request body into dst. Unknown fields are rejected, so a
 // typo in a client payload fails loudly instead of being silently ignored.
 func Decode(r *http.Request, dst any) error {
@@ -42,6 +52,13 @@ func Decode(r *http.Request, dst any) error {
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(dst); err != nil {
 		return err
+	}
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
+		if err != nil {
+			return err
+		}
+		return errors.New("request body must contain a single JSON value")
 	}
 	return nil
 }

@@ -2,7 +2,6 @@ package httpx
 
 import (
 	"errors"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -20,12 +19,13 @@ func TestRequestBodyLimit(t *testing.T) {
 		{"oversized trailing whitespace", `{}` + strings.Repeat(" ", 63), http.StatusRequestEntityTooLarge},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			called := false
 			h := LimitRequestBody(64)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				called = true
-				data, err := io.ReadAll(r.Body)
-				if err != nil || string(data) != tc.body {
-					t.Fatalf("body changed: %q err=%v", data, err)
+				if tc.body != "" {
+					var data any
+					if err := Decode(r, &data); err != nil {
+						DecodeError(w, err)
+						return
+					}
 				}
 				w.WriteHeader(http.StatusNoContent)
 			}))
@@ -33,8 +33,8 @@ func TestRequestBodyLimit(t *testing.T) {
 			req.ContentLength = -1
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, req)
-			if rec.Code != tc.want || called != (tc.want == http.StatusNoContent) {
-				t.Fatalf("status=%d called=%v", rec.Code, called)
+			if rec.Code != tc.want {
+				t.Fatalf("status=%d want=%d", rec.Code, tc.want)
 			}
 			if tc.want == http.StatusRequestEntityTooLarge && rec.Body.String() != "{\"error\":\"request body too large\"}\n" {
 				t.Fatalf("unexpected error body: %s", rec.Body)
@@ -52,10 +52,24 @@ func TestRequestBodyReadError(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/", nil)
 	req.Body = brokenBody{}
 	rec := httptest.NewRecorder()
-	LimitRequestBody(MaxJSONBodyBytes)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
-		t.Fatal("handler reached after read error")
+	LimitRequestBody(MaxJSONBodyBytes)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var data any
+		DecodeError(w, Decode(r, &data))
 	})).ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatal(rec.Code)
+	}
+}
+
+func TestBodyLimitDoesNotReadBeforeHandler(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
+	req.Body = brokenBody{}
+	req.ContentLength = MaxJSONBodyBytes + 1
+	rec := httptest.NewRecorder()
+	LimitRequestBody(MaxJSONBodyBytes)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	})).ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("middleware read body before authentication: %d", rec.Code)
 	}
 }

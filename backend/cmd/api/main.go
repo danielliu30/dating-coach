@@ -191,25 +191,25 @@ func newRouter(cfg *config.Config, authenticate func(http.Handler) http.Handler,
 		AllowCredentials: true,
 		MaxAge:           300,
 	}))
-	router.Use(func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			limit := int64(httpx.MaxJSONBodyBytes)
-			if r.Method == http.MethodPost && r.URL.Path == "/api/v1/analysis/conversations" {
-				limit = httpx.MaxTranscriptBodyBytes
-			}
-			httpx.LimitRequestBody(limit)(next).ServeHTTP(w, r)
-		})
-	})
 
 	router.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		httpx.JSON(w, http.StatusOK, map[string]string{"status": "ok", "env": cfg.Env})
 	})
 
 	router.Route("/api/v1", func(v1 chi.Router) {
-		v1.Mount("/auth", h.auth.Routes(authenticate))
-		v1.Mount("/booking", h.coaching.PublicRoutes())
+		v1.With(httpx.LimitRequestBody(httpx.MaxJSONBodyBytes)).Mount("/auth", h.auth.Routes(authenticate))
+		v1.With(httpx.LimitRequestBody(httpx.MaxJSONBodyBytes)).Mount("/booking", h.coaching.PublicRoutes())
 		v1.Group(func(private chi.Router) {
 			private.Use(authenticate, auth.RequireScope(auth.ScopeSession))
+			private.Use(func(next http.Handler) http.Handler {
+				return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					limit := int64(httpx.MaxJSONBodyBytes)
+					if r.Method == http.MethodPost && r.URL.Path == "/api/v1/analysis/conversations" {
+						limit = httpx.MaxTranscriptBodyBytes
+					}
+					httpx.LimitRequestBody(limit)(next).ServeHTTP(w, r)
+				})
+			})
 			private.Mount("/coaching", h.coaching.Routes())
 			private.Mount("/chat", h.chat.Routes())
 			private.Mount("/analysis", h.analysis.Routes())

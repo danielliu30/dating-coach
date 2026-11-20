@@ -85,7 +85,7 @@ func (h *Handler) startThread(w http.ResponseWriter, r *http.Request) {
 		SessionID *string `json:"session_id"`
 	}
 	if err := httpx.Decode(r, &in); err != nil {
-		httpx.Error(w, http.StatusBadRequest, "invalid request body")
+		httpx.DecodeError(w, err)
 		return
 	}
 	coachID, err := uuid.Parse(in.CoachID)
@@ -178,7 +178,7 @@ func (h *Handler) postMessage(w http.ResponseWriter, r *http.Request) {
 		Body string `json:"body"`
 	}
 	if err := httpx.Decode(r, &in); err != nil {
-		httpx.Error(w, http.StatusBadRequest, "invalid request body")
+		httpx.DecodeError(w, err)
 		return
 	}
 	msg, err := h.svc.Send(r.Context(), threadID, principal.UserID, in.Body, "")
