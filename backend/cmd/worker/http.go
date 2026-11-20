@@ -84,16 +84,19 @@ func workerRouter(a analysis.JobHandler, d account.JobHandler, maxAttempts int, 
 			}
 		}
 		results := make([]any, 0, len(names))
+		status := http.StatusOK
 		for _, name := range names {
 			result, err := tasks[name](r.Context())
+			entry := map[string]any{"task": name, "result": result}
 			if err != nil {
 				slog.Error("scheduled task failed", "task", name, "error", err)
-				http.Error(w, "task failed: "+name, 500)
-				return
+				entry["error"] = err.Error()
+				status = http.StatusInternalServerError
 			}
-			results = append(results, map[string]any{"task": name, "result": result})
+			results = append(results, entry)
 		}
 		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
 		_ = json.NewEncoder(w).Encode(results)
 	}
 	mux.HandleFunc("POST /tasks/batch", func(w http.ResponseWriter, r *http.Request) { run(w, r, r.URL.Query()["task"]) })
