@@ -150,6 +150,33 @@ describe('ApiClient transport failures', () => {
   });
 });
 
+describe('ApiClient profileScore', () => {
+  it('reads the owner score with the same cancellation signal after token renewal', async () => {
+    const score = {
+      band: 'collecting_evidence', rubric_version: 'profile-v1',
+      conversations_counted: 0, minimum_conversations: 3, evidence: [],
+    };
+    fetchMock.mockResolvedValueOnce(reply(401)).mockResolvedValueOnce(reply(200, score));
+    const client = new ApiClient();
+    let token = 'old';
+    client.useToken(() => token);
+    client.useRenewal(async () => {
+      token = 'new';
+      return 'renewed';
+    });
+    const { signal } = new AbortController();
+
+    await expect(client.profileScore(signal)).resolves.toEqual(score);
+    const url = `${API_BASE_URL}${API_PREFIX}/analysis/profile-score`;
+    expect(fetchMock).toHaveBeenNthCalledWith(1, url, expect.objectContaining({
+      method: 'GET', headers: expect.objectContaining({ Authorization: 'Bearer old' }), signal,
+    }));
+    expect(fetchMock).toHaveBeenNthCalledWith(2, url, expect.objectContaining({
+      method: 'GET', headers: expect.objectContaining({ Authorization: 'Bearer new' }), signal,
+    }));
+  });
+});
+
 describe('ApiClient 401 renewal', () => {
   it('renews once and retries a token-carrying request on 401', async () => {
     let token = 'old';

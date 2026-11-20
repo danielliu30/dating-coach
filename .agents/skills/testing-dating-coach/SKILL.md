@@ -6,6 +6,11 @@ description: How to bring up and end-to-end test the dating-coach monorepo (Go c
 # End-to-end testing the dating-coach stack
 
 ## Bring up the stack
+Local example secrets require an explicit `APP_ENV=development`, already set in
+`.env.example` and `e2e/.env`. Without `APP_ENV` (or when blank), Compose and Go
+binaries default to production and reject shipped secrets. Copy the example for
+local use only; deployments need non-default secrets.
+
 For the published web build behind nginx (rather than Expo dev server), from repo root:
 `docker compose --env-file e2e/.env --profile gateway up -d --build`, then browse
 `http://localhost`. Keep `--env-file e2e/.env` on later compose commands for this stack.

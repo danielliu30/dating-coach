@@ -108,7 +108,8 @@ export async function signIn(
   await expect(page.getByText('Sign in to Dating Humane')).toBeVisible({ timeout: 60_000 });
   await field(page, 'Email').fill(account.email);
   await field(page, 'Password').fill(account.password);
-  await button(page, 'Sign in').click();
+  // The page header also has a plain "Sign in" button; submit with the form's icon button.
+  await page.getByRole('button', { name: /^\p{Co}\s+Sign in$/u }).click();
   await expect(page.getByRole('tab').first()).toBeVisible({ timeout: 30_000 });
   return page;
 }
