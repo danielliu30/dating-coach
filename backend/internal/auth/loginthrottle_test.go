@@ -18,7 +18,7 @@ func TestLoginThrottleBlocksBeforeCredentialLookup(t *testing.T) {
 	throttle := NewLoginThrottle(cache.rdb, 3, 15*time.Minute)
 	ctx := context.Background()
 	for range 3 {
-		if err := throttle.failed(ctx, " User@Example.com "); err != nil {
+		if err := throttle.reserve(ctx, " User@Example.com "); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -26,11 +26,11 @@ func TestLoginThrottleBlocksBeforeCredentialLookup(t *testing.T) {
 	if _, err := svc.SignIn(ctx, "user@example.com", "correct-password"); !errors.Is(err, ErrLoginThrottled) {
 		t.Fatalf("SignIn=%v; must not reach missing database or password checker", err)
 	}
-	if err := throttle.check(ctx, "another@example.com"); err != nil {
+	if err := throttle.reserve(ctx, "another@example.com"); err != nil {
 		t.Fatal("another account was blocked:", err)
 	}
 	mr.FastForward(15 * time.Minute)
-	if err := throttle.check(ctx, "user@example.com"); err != nil {
+	if err := throttle.reserve(ctx, "user@example.com"); err != nil {
 		t.Fatal("cooldown did not expire:", err)
 	}
 }
@@ -79,7 +79,7 @@ func TestUnknownEmailsAreLoginThrottled(t *testing.T) {
 	}
 }
 
-func TestLoginFailureCounterIsAtomic(t *testing.T) {
+func TestLoginAttemptReservationIsAtomic(t *testing.T) {
 	cache, mr := newTestCache(t)
 	throttle := NewLoginThrottle(cache.rdb, 10, time.Minute)
 	var wg sync.WaitGroup
@@ -87,7 +87,7 @@ func TestLoginFailureCounterIsAtomic(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := throttle.failed(context.Background(), "user@example.com"); err != nil {
+			if err := throttle.reserve(context.Background(), "user@example.com"); err != nil && !errors.Is(err, ErrLoginThrottled) {
 				t.Error(err)
 			}
 		}()
@@ -97,11 +97,11 @@ func TestLoginFailureCounterIsAtomic(t *testing.T) {
 		t.Fatalf("count=%d err=%v", got, err)
 	}
 	mr.FastForward(30 * time.Second)
-	if err := throttle.failed(context.Background(), "user@example.com"); err != nil {
-		t.Fatal(err)
+	if err := throttle.reserve(context.Background(), "user@example.com"); !errors.Is(err, ErrLoginThrottled) {
+		t.Fatalf("over-limit attempt: %v", err)
 	}
 	mr.FastForward(30 * time.Second)
-	if err := throttle.check(context.Background(), "user@example.com"); err != nil {
+	if err := throttle.reserve(context.Background(), "user@example.com"); err != nil {
 		t.Fatal("failures extended the window:", err)
 	}
 }
@@ -114,10 +114,42 @@ func TestLoginThrottleRedisFailureIsClosed(t *testing.T) {
 	if _, err := svc.SignIn(context.Background(), "user@example.com", "password"); !errors.Is(err, ErrLoginThrottleUnavailable) {
 		t.Fatalf("SignIn should fail before credential lookup: %v", err)
 	}
-	if err := throttle.failed(context.Background(), "user@example.com"); !errors.Is(err, ErrLoginThrottleUnavailable) {
+	if err := throttle.reserve(context.Background(), "user@example.com"); !errors.Is(err, ErrLoginThrottleUnavailable) {
 		t.Fatal(err)
 	}
 	if err := throttle.clear(context.Background(), "user@example.com"); !errors.Is(err, ErrLoginThrottleUnavailable) {
 		t.Fatal(err)
+	}
+}
+
+func TestConcurrentWrongPasswordsRespectLoginLimit(t *testing.T) {
+	svc, _, pool := newTestService(t)
+	user := verifiedUser(t, svc, pool)
+	const limit, attempts = 3, 25
+	svc.SetLoginThrottle(NewLoginThrottle(svc.codes.rdb, limit, time.Minute))
+	routes := NewHandler(svc, NewRateLimiter(svc.codes.rdb, 100, time.Minute)).Routes(rejectAll)
+	start := make(chan struct{})
+	statuses := make(chan int, attempts)
+	for range attempts {
+		go func() {
+			<-start
+			rec := httptest.NewRecorder()
+			routes.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/signin", strings.NewReader(`{"email":"`+user.email+`","password":"wrong"}`)))
+			statuses <- rec.Code
+		}()
+	}
+	close(start)
+	checked := 0
+	for range attempts {
+		switch status := <-statuses; status {
+		case http.StatusUnauthorized:
+			checked++
+		case http.StatusTooManyRequests:
+		default:
+			t.Errorf("unexpected status: %d", status)
+		}
+	}
+	if checked != limit {
+		t.Fatalf("%d concurrent guesses reached credential checking; want %d", checked, limit)
 	}
 }

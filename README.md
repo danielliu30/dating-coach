@@ -68,10 +68,11 @@ ingress; do not expose another proxy that blindly relays client-supplied values.
 
 `LOGIN_FAILURE_LIMIT` (default `10`) and `LOGIN_FAILURE_WINDOW` (default `15m`)
 add a Redis-backed password-login limit per trimmed, lowercased email, including
-unknown accounts. After that many invalid-credential responses, further attempts
-return `429 {"error":"too many requests"}` without checking credentials until
-the window expires. A successful sign-in clears the counter. The window starts
-at the first failure, is not extended by retries, and is independent of the
+unknown accounts. Attempts are reserved atomically before checking credentials,
+so parallel guesses cannot exceed the limit. Further attempts return
+`429 {"error":"too many requests"}` until the window expires. A successful
+sign-in clears the counter; other outcomes retain the reservation. The window
+starts at the first attempt, is not extended by retries, and is independent of the
 existing per-IP `AUTH_RATE_LIMIT`. Redis failure makes password sign-in fail
 closed with `503`. Limit and window must be positive.
 

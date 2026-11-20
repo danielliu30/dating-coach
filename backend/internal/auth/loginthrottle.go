@@ -30,18 +30,7 @@ func loginFailureKey(email string) string {
 	return fmt.Sprintf("auth:login-failures:%x", sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(email)))))
 }
 
-func (l *LoginThrottle) check(ctx context.Context, email string) error {
-	count, err := l.rdb.Get(ctx, loginFailureKey(email)).Int64()
-	if err != nil && err != redis.Nil {
-		return fmt.Errorf("%w: %v", ErrLoginThrottleUnavailable, err)
-	}
-	if count >= int64(l.limit) {
-		return ErrLoginThrottled
-	}
-	return nil
-}
-
-var recordLoginFailure = redis.NewScript(`
+var reserveLoginAttempt = redis.NewScript(`
 local count = redis.call('INCR', KEYS[1])
 if count == 1 then
   redis.call('PEXPIRE', KEYS[1], ARGV[1])
@@ -49,9 +38,13 @@ end
 return count
 `)
 
-func (l *LoginThrottle) failed(ctx context.Context, email string) error {
-	if err := recordLoginFailure.Run(ctx, l.rdb, []string{loginFailureKey(email)}, l.window.Milliseconds()).Err(); err != nil {
+func (l *LoginThrottle) reserve(ctx context.Context, email string) error {
+	count, err := reserveLoginAttempt.Run(ctx, l.rdb, []string{loginFailureKey(email)}, l.window.Milliseconds()).Int64()
+	if err != nil {
 		return fmt.Errorf("%w: %v", ErrLoginThrottleUnavailable, err)
+	}
+	if count > int64(l.limit) {
+		return ErrLoginThrottled
 	}
 	return nil
 }

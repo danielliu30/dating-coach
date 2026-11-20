@@ -651,20 +651,14 @@ func (s *Service) SetLoginThrottle(throttle *LoginThrottle) {
 // an account whose data is on its way out, however long the removal takes.
 func (s *Service) SignIn(ctx context.Context, email, password string) (Session, error) {
 	if s.loginThrottle != nil {
-		if err := s.loginThrottle.check(ctx, email); err != nil {
+		if err := s.loginThrottle.reserve(ctx, email); err != nil {
 			return Session{}, err
 		}
 	}
 	session, err := s.signIn(ctx, email, password)
-	if s.loginThrottle != nil {
-		if errors.Is(err, ErrInvalidCredentials) {
-			if throttleErr := s.loginThrottle.failed(ctx, email); throttleErr != nil {
-				return Session{}, throttleErr
-			}
-		} else if err == nil {
-			if throttleErr := s.loginThrottle.clear(ctx, email); throttleErr != nil {
-				return Session{}, throttleErr
-			}
+	if s.loginThrottle != nil && err == nil {
+		if throttleErr := s.loginThrottle.clear(ctx, email); throttleErr != nil {
+			return Session{}, throttleErr
 		}
 	}
 	return session, err
