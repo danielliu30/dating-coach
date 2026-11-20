@@ -59,13 +59,29 @@ func run() error {
 	}
 	defer rdb.Close()
 
-	queue, err := analysis.OpenPublisher(cfg.RabbitMQURL, cfg.AnalysisQueue)
+	var queue interface {
+		analysis.Publisher
+		Close()
+	}
+	if cfg.QueueBackend == "pubsub" {
+		queue, err = analysis.OpenPubSubPublisher[analysis.Job](ctx, cfg.GCPProjectID, cfg.AnalysisQueue)
+	} else {
+		queue, err = analysis.OpenPublisher(cfg.RabbitMQURL, cfg.AnalysisQueue)
+	}
 	if err != nil {
 		return err
 	}
 	defer queue.Close()
 
-	deletions, err := account.OpenPublisher(cfg.RabbitMQURL, cfg.AccountDeletionQueue)
+	var deletions interface {
+		account.Publisher
+		Close()
+	}
+	if cfg.QueueBackend == "pubsub" {
+		deletions, err = analysis.OpenPubSubPublisher[account.Job](ctx, cfg.GCPProjectID, cfg.AccountDeletionQueue)
+	} else {
+		deletions, err = account.OpenPublisher(cfg.RabbitMQURL, cfg.AccountDeletionQueue)
+	}
 	if err != nil {
 		return err
 	}
