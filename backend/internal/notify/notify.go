@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"log/slog"
 	"mime/multipart"
@@ -56,12 +57,15 @@ func (s *Service) Email(ctx context.Context, to, subject, body string) error {
 
 // Send delivers msg over SMTP, as a plain-text message or, when it carries an
 // ICS payload, as a multipart/mixed message with the invite attached. When SMTP
-// is not configured the message is logged instead, including any invite, so
-// local runs can still read the links it contains. The whole exchange is bounded
+// is not configured in development the message is logged instead, so local
+// runs can still read its codes and links. The whole exchange is bounded
 // by SMTPTimeout and by ctx, so a stalled server fails this send instead of
 // blocking the caller (and the outbox behind it) indefinitely.
 func (s *Service) Send(ctx context.Context, msg Message) error {
 	if s.cfg.SMTPHost == "" {
+		if s.cfg.Env != "development" {
+			return errors.New("SMTP_HOST is required outside development")
+		}
 		slog.Info("email (smtp not configured, logging instead)", "to", msg.To, "subject", msg.Subject, "body", msg.Body, "has_ics", msg.ICS != "")
 		return nil
 	}
@@ -71,20 +75,23 @@ func (s *Service) Send(ctx context.Context, msg Message) error {
 		return err
 	}
 	if err := s.deliver(ctx, msg.To, raw); err != nil {
+		if s.cfg.Env != "development" {
+			return errors.New("send mail: SMTP delivery failed")
+		}
 		return fmt.Errorf("send mail: %w", err)
 	}
 	return nil
 }
 
-// deliver performs the SMTP conversation for one message: dial, STARTTLS when
-// offered, AUTH when credentials are configured, MAIL/RCPT/DATA, QUIT. The
+// deliver performs the SMTP conversation with implicit TLS on port 465 or
+// STARTTLS (required outside development), then AUTH, MAIL/RCPT/DATA, QUIT. The
 // connection carries an absolute deadline of SMTPTimeout and is closed as soon
 // as ctx is cancelled, which makes any blocked read or write return an error.
 func (s *Service) deliver(ctx context.Context, to string, raw []byte) error {
 	ctx, cancel := context.WithTimeout(ctx, s.cfg.SMTPTimeout)
 	defer cancel()
 
-	addr := fmt.Sprintf("%s:%d", s.cfg.SMTPHost, s.cfg.SMTPPort)
+	addr := net.JoinHostPort(s.cfg.SMTPHost, fmt.Sprint(s.cfg.SMTPPort))
 	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return err
@@ -97,17 +104,13 @@ func (s *Service) deliver(ctx context.Context, to string, raw []byte) error {
 	}
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
-
-	c, err := smtp.NewClient(conn, s.cfg.SMTPHost)
+	c, err := newSMTPClient(ctx, conn,
+		&tls.Config{ServerName: s.cfg.SMTPHost, MinVersion: tls.VersionTLS12},
+		s.cfg.SMTPPort == 465, s.cfg.SMTPTLS || s.cfg.Env != "development")
 	if err != nil {
 		return err
 	}
 	defer c.Close()
-	if ok, _ := c.Extension("STARTTLS"); ok {
-		if err := c.StartTLS(&tls.Config{ServerName: s.cfg.SMTPHost, MinVersion: tls.VersionTLS12}); err != nil {
-			return err
-		}
-	}
 	if s.cfg.SMTPUsername != "" {
 		if err := c.Auth(smtp.PlainAuth("", s.cfg.SMTPUsername, s.cfg.SMTPPassword, s.cfg.SMTPHost)); err != nil {
 			return err
@@ -130,6 +133,33 @@ func (s *Service) deliver(ctx context.Context, to string, raw []byte) error {
 		return err
 	}
 	return c.Quit()
+}
+
+func newSMTPClient(ctx context.Context, conn net.Conn, tlsConfig *tls.Config, implicitTLS, requireTLS bool) (*smtp.Client, error) {
+	if implicitTLS {
+		secured := tls.Client(conn, tlsConfig)
+		if err := secured.HandshakeContext(ctx); err != nil {
+			return nil, err
+		}
+		conn = secured
+	}
+
+	c, err := smtp.NewClient(conn, tlsConfig.ServerName)
+	if err != nil {
+		return nil, err
+	}
+	if !implicitTLS {
+		if ok, _ := c.Extension("STARTTLS"); ok {
+			if err := c.StartTLS(tlsConfig); err != nil {
+				c.Close()
+				return nil, err
+			}
+		} else if requireTLS {
+			c.Close()
+			return nil, errors.New("SMTP server does not offer required STARTTLS")
+		}
+	}
+	return c, nil
 }
 
 // encode renders msg as an RFC 5322 message from the given sender: text/plain
@@ -186,6 +216,10 @@ func icsMethod(ics string) string {
 
 // Push is a stub for mobile push delivery.
 func (s *Service) Push(_ context.Context, userID, title, body string) error {
-	slog.Info("push notification (stub)", "user_id", userID, "title", title, "body", body)
+	if s.cfg.Env == "development" {
+		slog.Info("push notification (stub)", "user_id", userID, "title", title, "body", body)
+	} else {
+		slog.Info("push notification (stub)", "user_id", userID)
+	}
 	return nil
 }

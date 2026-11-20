@@ -59,6 +59,7 @@ type Config struct {
 	SMTPUsername string
 	SMTPPassword string
 	SMTPTimeout  time.Duration
+	SMTPTLS      bool
 	MailFrom     string
 
 	// GoogleClientID is the OAuth client ID Google ID tokens must be minted
@@ -166,6 +167,15 @@ func Load() (*Config, error) {
 		StripeSecretKey:     env("STRIPE_SECRET_KEY", ""),
 		StripeWebhookSecret: env("STRIPE_WEBHOOK_SECRET", ""),
 		PaymentHoldTTL:      envDuration("PAYMENT_HOLD_TTL", 15*time.Minute),
+	}
+	cfg.SMTPTLS = envBool("SMTP_TLS", cfg.Env != "development")
+	if cfg.Env != "development" {
+		if cfg.SMTPHost == "" {
+			bad = append(bad, "SMTP_HOST is required outside development")
+		}
+		if !cfg.SMTPTLS {
+			bad = append(bad, "SMTP_TLS must be true outside development")
+		}
 	}
 
 	proxyCIDRs := env("TRUSTED_PROXY_CIDRS", "127.0.0.0/8,::1/128,172.16.0.0/12")

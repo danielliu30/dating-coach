@@ -38,7 +38,7 @@ cd app && npm install && npx expo start --web   # web on :8081
   by email. Locally, `docker compose --profile mail up -d` starts a Mailpit inbox at
   http://localhost:8025; set `SMTP_HOST=mailpit SMTP_PORT=1025` and restart `api`/`worker`
   (`docker compose up -d api worker`) to read every delivered email there.
-- No SMTP (`SMTP_HOST` empty, the default): read the six-digit verification code from the API log
+- In `APP_ENV=development` only, no SMTP (`SMTP_HOST` empty, the default): read the six-digit verification code from the API log
   and enter it on the Verify screen. Match the log entry to the account email when testing multiple roles. Codes expire
   after 3 minutes and are discarded after 3 wrong attempts; use Resend if needed.
 ```bash
@@ -114,7 +114,7 @@ Top tab labels may be truncated ("Coac…", "Analy…") at ~1024px — cosmetic,
   ~8 slots, so a desired later time may not be reachable there.
 - **Coach confirmation of bookings** (migration `000005_session_confirmation`): a new booking is
   `pending` and still holds the slot (a second client booking the same time gets 409). The coach is
-  emailed confirm/decline links; without SMTP the worker logs the email instead, so read it from
+  emailed confirm/decline links; in development without SMTP the worker logs the email instead, so read it from
   `select to_email, subject, body from email_outbox order by created_at desc limit 3` (the token is only
   in the link, its sha256 is in `coaching_sessions.confirmation_token`). Answer with
   `POST /api/v1/booking/respond {session_id, token, action: confirm|decline}` (no bearer) or
