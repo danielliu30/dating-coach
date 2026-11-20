@@ -54,6 +54,29 @@ All published non-gateway ports bind to `127.0.0.1` by default, including Postgr
 
 Migrations run in a one-shot `migrate` service before `api` and `worker` start.
 
+Client IPs for rate limits and request logs trust forwarding headers only from
+`TRUSTED_PROXY_CIDRS` (default `127.0.0.0/8,::1/128,172.16.0.0/12`). Loopback
+covers host nginx; the private `172.16/12` range covers Docker's default bridge
+networks, including host-to-container forwarding. These ranges are trusted
+infrastructure, not arbitrary clients: narrow them to your actual proxy
+addresses/subnets for production, or set `none` for a directly exposed API.
+If Docker uses a different subnet, configure that subnet explicitly. From a
+trusted peer, `X-Forwarded-For` is walked right-to-left to the first untrusted
+address; `X-Real-IP` is used only when XFF is absent. Malformed addresses fall
+back to the direct peer. Both nginx configurations overwrite these headers at
+ingress; do not expose another proxy that blindly relays client-supplied values.
+
+`LOGIN_FAILURE_LIMIT` (default `10`) and `LOGIN_FAILURE_WINDOW` (default `15m`)
+add a Redis-backed password-login limit per trimmed, lowercased email, including
+unknown accounts. Attempts are reserved atomically before checking credentials,
+so parallel guesses cannot exceed the limit. Further attempts return
+`429 {"error":"too many requests"}` until the window expires. A successful
+sign-in clears the counter; invalid credentials retain their reservation, while
+infrastructure errors release only their own reservation. The window
+starts at the first attempt, is not extended by retries, and is independent of the
+existing per-IP `AUTH_RATE_LIMIT`. Redis failure makes password sign-in fail
+closed with `503`. Limit and window must be positive.
+
 Copying `.env.example` explicitly opts into `APP_ENV=development` for local use.
 Without `APP_ENV` (or when blank), Compose and standalone Go binaries default to
 `production`: API and worker startup reject the shipped JWT key and default
