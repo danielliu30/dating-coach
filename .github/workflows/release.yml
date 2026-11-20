@@ -197,6 +197,7 @@ jobs:
           sed -i 's/^ *//' backend.env.yaml
 
       - name: Remember the revisions serving now (rollback target)
+        id: previous
         run: |
           for svc in dating-coach-api dating-coach-web; do
             rev="$(gcloud run services describe "$svc" --project "$PROJECT" --region "$REGION" \
@@ -296,7 +297,7 @@ jobs:
             --allow-unauthenticated --min-instances "$WEB_MIN_INSTANCES" --max-instances "$WEB_MAX_INSTANCES"
           gcloud run services update-traffic dating-coach-web --project "$PROJECT" --region "$REGION" --to-latest
 
-      - name: Health check, roll back on failure
+      - name: Health check
         run: |
           revision_url() {
             gcloud run services describe "$1" --project "$PROJECT" --region "$REGION" \
@@ -314,11 +315,17 @@ jobs:
           }
           if healthy; then echo "api and web healthy on $DEPLOY_TAG"; exit 0; fi
           echo "health checks failed for $DEPLOY_TAG"
+          exit 1
+
+      - name: Roll back public service traffic
+        if: ${{ failure() && steps.previous.outcome == 'success' }}
+        run: |
+          failed=0
           for svc in dating-coach-api dating-coach-web; do
             var="PREV_${svc//-/_}"; prev="${!var}"
             if [ -n "$prev" ]; then
               echo "reverting $svc to $prev"
-              gcloud run services update-traffic "$svc" --project "$PROJECT" --region "$REGION" --to-revisions "$prev"
+              gcloud run services update-traffic "$svc" --project "$PROJECT" --region "$REGION" --to-revisions "$prev" || failed=1
             fi
           done
-          exit 1
+          exit "$failed"
