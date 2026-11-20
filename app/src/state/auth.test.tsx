@@ -269,11 +269,12 @@ describe('AuthProvider verify', () => {
     expect(await stored()).toBeNull();
   });
 
-  it('resendVerification forwards the email', async () => {
-    mocked.resendVerification.mockResolvedValue({ status: 'sent' });
+  it('resendVerification forwards the email and returns cooldown guidance', async () => {
+    const response = { status: 'sent', resend_after_seconds: 90 };
+    mocked.resendVerification.mockResolvedValue(response);
     const { result } = await renderAuth();
     await act(async () => {
-      await result.current.resendVerification(' a@b.c ');
+      await expect(result.current.resendVerification(' a@b.c ')).resolves.toEqual(response);
     });
     expect(mocked.resendVerification).toHaveBeenCalledWith(' a@b.c ');
   });

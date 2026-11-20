@@ -254,7 +254,10 @@ func (h *Handler) resendVerification(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusInternalServerError, "could not resend verification email")
 		return
 	}
-	httpx.JSON(w, http.StatusAccepted, map[string]string{"status": "sent"})
+	httpx.JSON(w, http.StatusAccepted, map[string]any{
+		"status":               "sent",
+		"resend_after_seconds": int64(math.Ceil(h.svc.codes.cooldown.Seconds())),
+	})
 }
 
 // deleteMe handles DELETE /me. It answers 202 rather than 204: the deletion is

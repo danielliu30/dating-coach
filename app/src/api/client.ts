@@ -242,7 +242,7 @@ export class ApiClient {
   }
 
   resendVerification(email: string) {
-    return this.request<{ status: string }>('POST', '/auth/resend-verification', { email });
+    return this.request<{ status: string; resend_after_seconds?: number }>('POST', '/auth/resend-verification', { email });
   }
 
   forgotPassword(email: string) {

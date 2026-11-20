@@ -20,14 +20,16 @@ func setRequired(t *testing.T) {
 // non-positive interval and would take the worker down at startup.
 func TestLoadRejectsNonPositiveDurations(t *testing.T) {
 	cases := map[string]struct{ key, value string }{
-		"zero alert period":     {"DEAD_LETTER_ALERT_PERIOD", "0s"},
-		"negative alert period": {"DEAD_LETTER_ALERT_PERIOD", "-1m"},
-		"zero jwt ttl":          {"JWT_TTL", "0"},
-		"negative rate window":  {"AUTH_RATE_WINDOW", "-30s"},
-		"zero refresh ttl":      {"REFRESH_TOKEN_TTL", "0"},
-		"zero reset ttl":        {"RESET_CODE_TTL", "0"},
-		"zero reset cooldown":   {"RESET_RESEND_COOLDOWN", "0"},
-		"negative refresh ttl":  {"REFRESH_TOKEN_TTL", "-1h"},
+		"zero alert period":        {"DEAD_LETTER_ALERT_PERIOD", "0s"},
+		"negative alert period":    {"DEAD_LETTER_ALERT_PERIOD", "-1m"},
+		"zero jwt ttl":             {"JWT_TTL", "0"},
+		"negative rate window":     {"AUTH_RATE_WINDOW", "-30s"},
+		"zero refresh ttl":         {"REFRESH_TOKEN_TTL", "0"},
+		"zero reset ttl":           {"RESET_CODE_TTL", "0"},
+		"zero reset cooldown":      {"RESET_RESEND_COOLDOWN", "0"},
+		"zero verify cooldown":     {"VERIFY_RESEND_COOLDOWN", "0"},
+		"negative verify cooldown": {"VERIFY_RESEND_COOLDOWN", "-1s"},
+		"negative refresh ttl":     {"REFRESH_TOKEN_TTL", "-1h"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -81,6 +83,26 @@ func TestResetResendCooldown(t *testing.T) {
 	}
 	if cfg.ResetResendCooldown != 90*time.Second {
 		t.Fatal(cfg.ResetResendCooldown)
+	}
+}
+
+func TestVerifyResendCooldown(t *testing.T) {
+	setRequired(t)
+	t.Setenv("VERIFY_RESEND_COOLDOWN", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.VerifyResendCooldown != time.Minute {
+		t.Fatal(cfg.VerifyResendCooldown)
+	}
+	t.Setenv("VERIFY_RESEND_COOLDOWN", "90s")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.VerifyResendCooldown != 90*time.Second {
+		t.Fatal(cfg.VerifyResendCooldown)
 	}
 }
 

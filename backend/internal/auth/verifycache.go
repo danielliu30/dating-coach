@@ -23,8 +23,8 @@ type VerificationCache struct {
 	cooldown time.Duration
 }
 
-func NewVerificationCache(rdb *redis.Client, ttl time.Duration) *VerificationCache {
-	return &VerificationCache{rdb: rdb, ttl: ttl, prefix: "verify"}
+func NewVerificationCache(rdb *redis.Client, ttl, cooldown time.Duration) *VerificationCache {
+	return &VerificationCache{rdb: rdb, ttl: ttl, prefix: "verify", cooldown: cooldown}
 }
 
 func NewResetCache(rdb *redis.Client, ttl, cooldown time.Duration) *VerificationCache {
