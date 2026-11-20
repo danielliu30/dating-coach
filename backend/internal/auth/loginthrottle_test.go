@@ -153,3 +153,36 @@ func TestConcurrentWrongPasswordsRespectLoginLimit(t *testing.T) {
 		t.Fatalf("%d concurrent guesses reached credential checking; want %d", checked, limit)
 	}
 }
+
+func TestCancelledSignInStillReservesAttempt(t *testing.T) {
+	svc, _, pool := newTestService(t)
+	user := verifiedUser(t, svc, pool)
+	svc.SetLoginThrottle(NewLoginThrottle(svc.codes.rdb, 1, time.Minute))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := svc.SignIn(ctx, user.email, "wrong"); err == nil || errors.Is(err, ErrLoginThrottleUnavailable) {
+		t.Fatalf("cancelled sign-in: %v", err)
+	}
+	if got, err := svc.codes.rdb.Get(context.Background(), loginFailureKey(user.email)).Int(); err != nil || got != 1 {
+		t.Fatalf("cancelled attempt count=%d err=%v", got, err)
+	}
+	if _, err := svc.SignIn(context.Background(), user.email, user.password); !errors.Is(err, ErrLoginThrottled) {
+		t.Fatalf("cancelled attempt did not consume budget: %v", err)
+	}
+}
+
+func TestCancelledContextStillClearsLoginAttempts(t *testing.T) {
+	cache, _ := newTestCache(t)
+	throttle := NewLoginThrottle(cache.rdb, 1, time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := throttle.reserve(ctx, "user@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	if err := throttle.clear(ctx, "user@example.com"); err != nil {
+		t.Fatalf("clear after cancellation: %v", err)
+	}
+	if err := throttle.reserve(context.Background(), "user@example.com"); err != nil {
+		t.Fatalf("success counter was not cleared: %v", err)
+	}
+}

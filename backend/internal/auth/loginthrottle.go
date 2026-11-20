@@ -39,7 +39,7 @@ return count
 `)
 
 func (l *LoginThrottle) reserve(ctx context.Context, email string) error {
-	count, err := reserveLoginAttempt.Run(ctx, l.rdb, []string{loginFailureKey(email)}, l.window.Milliseconds()).Int64()
+	count, err := reserveLoginAttempt.Run(context.WithoutCancel(ctx), l.rdb, []string{loginFailureKey(email)}, l.window.Milliseconds()).Int64()
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrLoginThrottleUnavailable, err)
 	}
@@ -50,7 +50,7 @@ func (l *LoginThrottle) reserve(ctx context.Context, email string) error {
 }
 
 func (l *LoginThrottle) clear(ctx context.Context, email string) error {
-	if err := l.rdb.Del(ctx, loginFailureKey(email)).Err(); err != nil {
+	if err := l.rdb.Del(context.WithoutCancel(ctx), loginFailureKey(email)).Err(); err != nil {
 		return fmt.Errorf("%w: %v", ErrLoginThrottleUnavailable, err)
 	}
 	return nil
