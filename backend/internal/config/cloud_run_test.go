@@ -42,3 +42,29 @@ func TestPubSubSkipsRabbitSecret(t *testing.T) {
 		t.Fatal("expected RabbitMQ default password rejection")
 	}
 }
+
+func TestTrustedProxyHops(t *testing.T) {
+	for _, tt := range []struct {
+		value   string
+		want    int
+		invalid bool
+	}{{"", 0, false}, {"0", 0, false}, {"1", 1, false}, {"2", 2, false}, {"-1", 0, true}, {"invalid", 0, true}} {
+		t.Run(tt.value, func(t *testing.T) {
+			setRequired(t)
+			t.Setenv("TRUSTED_PROXY_HOPS", tt.value)
+			cfg, err := Load()
+			if tt.invalid {
+				if err == nil {
+					t.Fatal("expected invalid configuration")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.TrustedProxyHops != tt.want {
+				t.Fatalf("TrustedProxyHops = %d, want %d", cfg.TrustedProxyHops, tt.want)
+			}
+		})
+	}
+}

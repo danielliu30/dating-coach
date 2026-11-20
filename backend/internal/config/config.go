@@ -37,6 +37,7 @@ type Config struct {
 	BcryptCost           int
 	AuthRateLimit        int
 	AuthRateWindow       time.Duration
+	TrustedProxyHops     int
 	TrustedProxyCIDRs    []netip.Prefix
 	LoginFailureLimit    int
 	LoginFailureWindow   time.Duration
@@ -140,6 +141,7 @@ func Load() (*Config, error) {
 		BcryptCost:                envInt("BCRYPT_COST", 12),
 		AuthRateLimit:             envInt("AUTH_RATE_LIMIT", 20),
 		AuthRateWindow:            envDuration("AUTH_RATE_WINDOW", time.Minute),
+		TrustedProxyHops:          envInt("TRUSTED_PROXY_HOPS", 0),
 		LoginFailureLimit:         envInt("LOGIN_FAILURE_LIMIT", 10),
 		LoginFailureWindow:        envDuration("LOGIN_FAILURE_WINDOW", 15*time.Minute),
 		MLServiceURL:              env("ML_SERVICE_URL", "http://localhost:8000"),
@@ -197,6 +199,9 @@ func Load() (*Config, error) {
 	}
 	if cfg.MLServiceAuth != "none" && cfg.MLServiceAuth != "google" {
 		bad = append(bad, "ML_SERVICE_AUTH must be none or google")
+	}
+	if cfg.TrustedProxyHops < 0 {
+		bad = append(bad, "TRUSTED_PROXY_HOPS must be non-negative")
 	}
 	if cfg.JWTSecret == "" {
 		return nil, fmt.Errorf("JWT_SECRET is required")

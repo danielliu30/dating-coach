@@ -178,44 +178,9 @@ WebSockets and the same-origin model are unaffected: the browser-facing origin s
 
 ## Deployment flow (CI/CD)
 
-`.github/workflows/release.yml` turns a merge to `main` into a production deploy:
+`.github/workflows/release.yml` turns a merge to `main` into a production deploy on Google Cloud Run: tests, then images pushed to Docker Hub tagged with the commit SHA (`latest` only for the tip of `main`), then a migrations job and one Cloud Run service each for the API, worker, ML analyzer and web bundle. Postgres is on Neon, Redis on Upstash, and the worker is driven by Pub/Sub push and Cloud Scheduler instead of idling. Setup, required accounts, GitHub variables and rollback: [docs/deploy-cloud-run.md](docs/deploy-cloud-run.md).
 
-```
-push to main
-  ├─ backend.yml ─┐
-  ├─ app.yml      ├─ (reusable workflow_call jobs; any failure stops the release)
-  ├─ ml-analyzer.yml
-  └─ e2e.yml     ─┘
-        └─ build-push: docker compose --profile gateway build/push api ml-analyzer web
-              tags: <git sha> and latest  (worker reuses the backend image)
-              └─ deploy: ssh to the VM → compose pull → git checkout <sha> → pin IMAGE_TAG in .env → compose up -d → curl /healthz, /ml/healthz, /
-```
-
-**Tagging convention.** Every image (`dating-coach-backend`, `-ml-analyzer`, `-web`) is pushed with the full commit SHA; `latest` is additionally promoted only when the run is on `main` *and* that SHA is still the tip of `main` (so an older queued run or a manual dispatch on another branch can never move `latest` backwards). The VM always runs a SHA tag: the deploy step writes `IMAGE_TAG=<sha>` into the production `.env`, so a later manual `docker compose up -d` on the VM keeps the same images instead of drifting to `latest`.
-
-**Required GitHub repository secrets**
-
-| Secret | Used by | Value |
-|---|---|---|
-| `DOCKERHUB_USERNAME` | build-push, deploy | Docker Hub account / namespace (`danielliu30`) |
-| `DOCKERHUB_TOKEN` | build-push | Docker Hub access token with Read & Write |
-| `DEPLOY_HOST` | deploy | VM hostname or IP |
-| `DEPLOY_USER` | deploy | SSH user on the VM (must be in the `docker` group) |
-| `DEPLOY_SSH_KEY` | deploy | Private key whose public half is in that user's `~/.ssh/authorized_keys` |
-
-Optional repository **variables**: `GOOGLE_CLIENT_ID` (baked into the web bundle), `DEPLOY_DIR` (default `~/dating-coach`), `DEPLOY_HEALTHCHECK_URL` (default `http://localhost/healthz`; use `https://<domain>/healthz` once TLS is in front).
-
-**Rolling back.** Actions → *Release (build, push, deploy)* → *Run workflow* and set `image_tag` to an earlier commit SHA (any tag listed on Docker Hub). Tests and the build are skipped and only the deploy job runs, so the VM is back on the previous images in about a minute. The same input can re-deploy the current tag after fixing the VM.
-
-**One-time VM prerequisites**
-
-1. Docker Engine + the Compose plugin installed; the deploy user can run `docker` without sudo.
-2. `git clone` of this repo at `DEPLOY_DIR`. The deploy job runs `git fetch && git checkout <sha>` there so `docker-compose.yml`, `nginx/default.conf` and `backend/migrations/` (bind-mounted into the `migrate` service) always match the deployed images.
-3. A production `.env` in that directory (start from `.env.example`; set `APP_ENV`, `JWT_SECRET`, `POSTGRES_PASSWORD`, `PUBLIC_APP_URL=https://<domain>`, `CORS_ORIGINS=https://<domain>`, SMTP, Stripe, `GOOGLE_CLIENT_ID`). The deploy step appends/replaces only `IMAGE_TAG` and `DOCKERHUB_NAMESPACE`.
-4. Ports 80 and 443 open, host nginx + certbot set up as in [HTTPS](#https-host-nginx--certbot) with `NGINX_PORT`/`WEB_PORT` moved off 80 and bound to localhost; `DEPLOY_HEALTHCHECK_URL=https://<domain>/healthz`.
-5. A deploy key: `ssh-keygen -t ed25519 -f deploy_key -N ''`, append `deploy_key.pub` to `~/.ssh/authorized_keys`, store the private half as `DEPLOY_SSH_KEY`.
-
-A first `docker compose --profile gateway up -d` by hand is a good smoke test before wiring the secrets; after that every merge to `main` deploys itself, and the run goes red in Actions if `/healthz`, `/ml/healthz` or `/` does not answer through nginx within 90 s (the VM is then reverted to the previously pinned `IMAGE_TAG`/checkout automatically and the failing tag's logs are printed; the run still fails). Note that `migrate` only runs `up`, so a rollback does not undo schema changes — keep migrations backward-compatible with the previous release (expand/contract), or restore the DB separately before rolling back across a breaking migration.
+The nginx and HTTPS sections above still apply to a self-hosted compose stack.
 
 ## Backups
 

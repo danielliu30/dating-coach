@@ -42,8 +42,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
-      # Same-origin web bundle: REST + chat WebSocket use the page's origin via nginx.
-      WEB_API_URL: ""
+      # The web bundle calls the API's own Cloud Run URL (cross-origin; see CORS_ORIGINS).
+      WEB_API_URL: ${{ vars.API_PUBLIC_URL }}
       GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
     steps:
       - uses: actions/checkout@v4
@@ -56,10 +56,10 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build images (tagged with the git SHA)
-        run: docker compose --profile gateway build api ml-analyzer web
+        run: docker compose --profile gateway build api ml-analyzer web migrate
 
       - name: Push SHA tags
-        run: docker compose --profile gateway push api ml-analyzer web
+        run: docker compose --profile gateway push api ml-analyzer web migrate
 
       # `latest` only ever points at the current tip of main: skip promotion for
       # manual runs on other refs, and when a newer main commit has already landed
@@ -79,83 +79,254 @@ jobs:
       - name: Push latest tags
         if: steps.promote.outputs.latest == 'true'
         run: |
-          for img in dating-coach-backend dating-coach-ml-analyzer dating-coach-web; do
+          for img in dating-coach-backend dating-coach-ml-analyzer dating-coach-web dating-coach-migrate; do
             docker tag "$DOCKERHUB_NAMESPACE/$img:$IMAGE_TAG" "$DOCKERHUB_NAMESPACE/$img:latest"
           done
-          IMAGE_TAG=latest docker compose --profile gateway push api ml-analyzer web
+          IMAGE_TAG=latest docker compose --profile gateway push api ml-analyzer web migrate
 
-  # Push-based deploy: SSH into the production VM, pin IMAGE_TAG in its .env so
-  # later manual `docker compose up` calls keep the same images, pull, up, and
-  # if the health checks do not come back, revert to the previously pinned tag and fail the job.
-  deploy:
+  # Production scaling is opt-in: SCALE_PROFILE=production only deploys after the
+  # load test passes and someone approves the production-scale environment
+  # (configure required reviewers on it). Otherwise the free starter profile is used.
+  load-test:
     needs: [build-push]
-    if: ${{ !cancelled() && (inputs.image_tag || needs.build-push.result == 'success') }}
+    if: ${{ !cancelled() && vars.SCALE_PROFILE == 'production' && (inputs.image_tag || needs.build-push.result == 'success') }}
+    uses: ./.github/workflows/load-test.yml
+    with:
+      api_url: ${{ vars.API_PUBLIC_URL }}
+      image_tag: ${{ inputs.image_tag || github.sha }}
+
+  scale-approval:
+    needs: [load-test]
+    if: ${{ !cancelled() && needs.load-test.result == 'success' }}
+    runs-on: ubuntu-latest
+    environment: production-scale
+    steps:
+      - run: echo "production scaling approved for ${{ inputs.image_tag || github.sha }}"
+
+  # Deploy to Google Cloud Run (one service each for api, worker, ml-analyzer and
+  # web; migrations as a Cloud Run job). Images are pulled straight from Docker
+  # Hub. The worker is private and scales to zero: Pub/Sub pushes jobs to it and
+  # Cloud Scheduler calls its /tasks endpoints. One-time setup:
+  # scripts/gcp-bootstrap.sh and docs/deploy-cloud-run.md.
+  # If the api or web health check fails, traffic goes back to the revisions
+  # that served before this run and the job fails.
+  deploy:
+    needs: [build-push, scale-approval]
+    if: >-
+      ${{ !cancelled() && github.ref == 'refs/heads/main' && (inputs.image_tag || needs.build-push.result == 'success')
+      && (vars.SCALE_PROFILE != 'production' || needs.scale-approval.result == 'success') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
     environment:
       name: production
-      url: ${{ vars.DEPLOY_HEALTHCHECK_URL }}
+      url: ${{ vars.PUBLIC_APP_URL }}
+    env:
+      PROJECT: ${{ vars.GCP_PROJECT_ID }}
+      REGION: ${{ vars.GCP_REGION || 'us-central1' }}
+      RUNTIME_SA: ${{ vars.GCP_RUNTIME_SERVICE_ACCOUNT }}
+      WEB_SA: ${{ vars.GCP_WEB_SERVICE_ACCOUNT }}
+      INVOKER_SA: ${{ vars.GCP_INVOKER_SERVICE_ACCOUNT }}
+      IMAGES: docker.io/${{ secrets.DOCKERHUB_USERNAME }}
+      PUBLIC_APP_URL: ${{ vars.PUBLIC_APP_URL }}
+      SCALE_PROFILE: ${{ vars.SCALE_PROFILE == 'production' && 'production' || 'starter' }}
+      ANALYSIS_TOPIC: conversation.analysis
+      DELETION_TOPIC: account.deletion
+      EMAIL_TOPIC: email.outbox
+      MAX_DELIVERY_ATTEMPTS: '5'
+      PAYMENTS_ENABLED: 'false'
     steps:
-      - uses: appleboy/ssh-action@v1.2.4
+      - uses: google-github-actions/auth@v2
         with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          username: ${{ secrets.DEPLOY_USER }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
-          envs: DEPLOY_TAG,DEPLOY_DIR,DOCKERHUB_NAMESPACE,HEALTHCHECK_URL
-          command_timeout: 25m
-          script: |
-            set -euo pipefail
-            cd "${DEPLOY_DIR:-$HOME/dating-coach}"
-            test -f .env || { echo "production .env missing in $(pwd)"; exit 1; }
-            git rev-parse --is-inside-work-tree >/dev/null 2>&1 || { echo "$(pwd) must be a git checkout of the repo"; exit 1; }
-            export IMAGE_TAG="$DEPLOY_TAG" DOCKERHUB_NAMESPACE
-            # one VM, possibly several concurrent runs (main push + manual rollback): serialise on the host
-            exec 9>.deploy.lock
-            flock -w 900 9 || { echo "another deploy has held .deploy.lock for 15 min"; exit 1; }
-            git fetch -q origin
-            # preflight: pull with the target revision's compose file, before touching the checkout or .env,
-            # so a missing tag or image leaves the VM untouched
-            target_compose="$(mktemp)"; trap 'rm -f "$target_compose"' EXIT
-            git show "$DEPLOY_TAG:docker-compose.yml" > "$target_compose"
-            docker compose -f "$target_compose" --project-directory . --profile gateway pull api worker ml-analyzer web
-            prev_tag="$(sed -n 's/^IMAGE_TAG=//p' .env | tail -n1)"
-            prev_ns="$(sed -n 's/^DOCKERHUB_NAMESPACE=//p' .env | tail -n1)"
-            prev_rev="$(git rev-parse HEAD)"
-            healthy() {
-              base="${HEALTHCHECK_URL:-http://localhost/healthz}"; base="${base%/healthz}"
-              for i in $(seq 1 45); do
-                if curl -fsS "$base/healthz" >/dev/null 2>&1 \
-                  && curl -fsS "$base/ml/healthz" >/dev/null 2>&1 \
-                  && curl -fsS -o /dev/null "$base/"; then
-                  echo "$1: health checks OK after ${i} attempts"; return 0
-                fi
-                sleep 2
-              done
-              echo "$1: health checks failed"
-              docker compose --profile gateway ps
-              docker compose --profile gateway logs --no-color --tail 50 api ml-analyzer web migrate nginx
-              return 1
-            }
-            pin() {
-              # migrations and nginx config are bind-mounted from the checkout, so it must match the image
-              git checkout -q --detach "$1" || return 1
-              sed -i '/^IMAGE_TAG=/d;/^DOCKERHUB_NAMESPACE=/d' .env || return 1
-              printf 'IMAGE_TAG=%s\nDOCKERHUB_NAMESPACE=%s\n' "$2" "$3" >> .env || return 1
-              IMAGE_TAG="$2" DOCKERHUB_NAMESPACE="$3" docker compose --profile gateway up -d --no-build
-            }
-            # a failed `up` (e.g. migration error) is treated like a failed health check
-            if pin "$DEPLOY_TAG" "$DEPLOY_TAG" "$DOCKERHUB_NAMESPACE" && healthy "deployed $DEPLOY_TAG"; then
-              docker image prune -af --filter "until=168h" >/dev/null
-              exit 0
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Pick scaling profile
+        run: |
+          # starter: free tier, everything scales to zero. production: warm API and
+          # web, higher ceilings (gated above). Any value can be overridden by a
+          # repository variable of the same name.
+          if [ "$SCALE_PROFILE" = production ]; then
+            d=(2 20 10 10 1 10)
+          else
+            d=(0 2 2 2 0 2)
+          fi
+          names=(API_MIN_INSTANCES API_MAX_INSTANCES WORKER_MAX_INSTANCES ML_MAX_INSTANCES WEB_MIN_INSTANCES WEB_MAX_INSTANCES)
+          overrides=("${{ vars.API_MIN_INSTANCES }}" "${{ vars.API_MAX_INSTANCES }}" "${{ vars.WORKER_MAX_INSTANCES }}"
+                     "${{ vars.ML_MAX_INSTANCES }}" "${{ vars.WEB_MIN_INSTANCES }}" "${{ vars.WEB_MAX_INSTANCES }}")
+          for i in "${!names[@]}"; do
+            echo "${names[$i]}=${overrides[$i]:-${d[$i]}}" | tee -a "$GITHUB_ENV"
+          done
+          echo "deploying with the $SCALE_PROFILE profile"
+
+      - name: Write service settings
+        run: |
+          set -euo pipefail
+          num="$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')"
+          url() { echo "https://$1-$num.$REGION.run.app"; }
+          echo "ML_URL=$(url dating-coach-ml)" >> "$GITHUB_ENV"
+          echo "WORKER_URL=$(url dating-coach-worker)" >> "$GITHUB_ENV"
+          echo "API_URL=$(url dating-coach-api)" >> "$GITHUB_ENV"
+          echo "WEB_URL=$(url dating-coach-web)" >> "$GITHUB_ENV"
+          app_url="${PUBLIC_APP_URL:-$(url dating-coach-web)}"
+          # Non-secret backend settings shared by api and worker.
+          cat > backend.env.yaml <<YAML
+          APP_ENV: production
+          QUEUE_BACKEND: pubsub
+          TRUSTED_PROXY_HOPS: "1"
+          TRUSTED_PROXY_CIDRS: "0.0.0.0/0,::/0"
+          GCP_PROJECT_ID: "$PROJECT"
+          ANALYSIS_QUEUE: "$ANALYSIS_TOPIC"
+          ACCOUNT_DELETION_QUEUE: "$DELETION_TOPIC"
+          EMAIL_OUTBOX_TOPIC: "$EMAIL_TOPIC"
+          PUBSUB_MAX_DELIVERY_ATTEMPTS: "$MAX_DELIVERY_ATTEMPTS"
+          ML_SERVICE_URL: "$(url dating-coach-ml)"
+          ML_SERVICE_AUTH: google
+          PUBLIC_APP_URL: "$app_url"
+          CORS_ORIGINS: "$app_url"
+          SMTP_HOST: "${{ vars.SMTP_HOST }}"
+          SMTP_PORT: "${{ vars.SMTP_PORT || '587' }}"
+          SMTP_USERNAME: "${{ vars.SMTP_USERNAME }}"
+          MAIL_FROM: "${{ vars.MAIL_FROM }}"
+          GOOGLE_CLIENT_ID: "${{ vars.GOOGLE_CLIENT_ID }}"
+          PAYMENTS_ENABLED: "$PAYMENTS_ENABLED"
+          YAML
+          sed -i 's/^ *//' backend.env.yaml
+
+      - name: Remember the revisions serving now (rollback target)
+        id: previous
+        run: |
+          for svc in dating-coach-api dating-coach-web; do
+            rev="$(gcloud run services describe "$svc" --project "$PROJECT" --region "$REGION" \
+              --flatten='status.traffic[]' --filter='status.traffic.percent>0' \
+              --format='csv[no-heading](status.traffic.revisionName,status.traffic.percent)' 2>/dev/null \
+              | sed 's/,/=/g' | paste -sd, - || true)"
+            echo "PREV_${svc//-/_}=$rev" >> "$GITHUB_ENV"
+          done
+
+      - name: Run migrations (Cloud Run job)
+        run: |
+          gcloud run jobs deploy dating-coach-migrate --project "$PROJECT" --region "$REGION" \
+            --image "$IMAGES/dating-coach-migrate:$DEPLOY_TAG" \
+            --service-account "$RUNTIME_SA" \
+            --set-secrets DATABASE_URL=DATABASE_URL:latest \
+            --max-retries 0 --task-timeout 10m \
+            --execute-now --wait
+
+      - name: Deploy ml-analyzer (private)
+        run: |
+          gcloud run deploy dating-coach-ml --project "$PROJECT" --region "$REGION" \
+            --image "$IMAGES/dating-coach-ml-analyzer:$DEPLOY_TAG" \
+            --service-account "$RUNTIME_SA" --no-allow-unauthenticated \
+            --memory 1Gi --min-instances 0 --max-instances "$ML_MAX_INSTANCES" --timeout 120 \
+            --set-env-vars "ML_BACKEND=llm,LLM_PROVIDER=${{ vars.LLM_PROVIDER || 'anthropic' }},LLM_MODEL=${{ vars.LLM_MODEL || 'claude-sonnet-4-5' }}" \
+            --set-secrets LLM_API_KEY=LLM_API_KEY:latest
+          gcloud run services update-traffic dating-coach-ml --project "$PROJECT" --region "$REGION" --to-latest
+
+      - name: Deploy worker (private, push-driven)
+        run: |
+          gcloud run deploy dating-coach-worker --project "$PROJECT" --region "$REGION" \
+            --image "$IMAGES/dating-coach-backend:$DEPLOY_TAG" --command worker \
+            --service-account "$RUNTIME_SA" --no-allow-unauthenticated \
+            --min-instances 0 --max-instances "$WORKER_MAX_INSTANCES" --timeout 600 \
+            --env-vars-file backend.env.yaml \
+            --set-secrets DATABASE_URL=DATABASE_URL:latest,REDIS_URL=REDIS_URL:latest,JWT_SECRET=JWT_SECRET:latest,SMTP_PASSWORD=SMTP_PASSWORD:latest
+          gcloud run services update-traffic dating-coach-worker --project "$PROJECT" --region "$REGION" --to-latest
+
+      - name: Point Pub/Sub push subscriptions and Cloud Scheduler at the worker
+        run: |
+          set -euo pipefail
+          sub() { # topic, path
+            name="$1.worker-push"
+            args=(--push-endpoint "$WORKER_URL$2" --push-auth-service-account "$INVOKER_SA"
+                  --push-auth-token-audience "$WORKER_URL"
+                  --ack-deadline 600 --min-retry-delay 10s --max-retry-delay 600s
+                  --expiration-period=never
+                  --dead-letter-topic "$1.dlq" --max-delivery-attempts "$MAX_DELIVERY_ATTEMPTS")
+            if gcloud pubsub subscriptions describe "$name" --project "$PROJECT" >/dev/null 2>&1; then
+              gcloud pubsub subscriptions update "$name" --project "$PROJECT" "${args[@]}"
+            else
+              gcloud pubsub subscriptions create "$name" --project "$PROJECT" --topic "$1" "${args[@]}"
             fi
-            # roll back to what was running before; the job still fails so the bad release is visible
-            if [ -z "$prev_tag" ]; then
-              echo "no previous IMAGE_TAG in .env, leaving $DEPLOY_TAG in place for inspection"; exit 1
+            gcloud pubsub subscriptions add-iam-policy-binding "$name" --project "$PROJECT" \
+              --member "serviceAccount:service-$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')@gcp-sa-pubsub.iam.gserviceaccount.com" \
+              --role roles/pubsub.subscriber >/dev/null
+          }
+          sub "$ANALYSIS_TOPIC" /pubsub/analysis
+          sub "$DELETION_TOPIC" /pubsub/account-deletion
+          sub "$EMAIL_TOPIC" /pubsub/email-outbox
+          # Two jobs cover every timed loop (Cloud Scheduler's free tier is 3 jobs).
+          job() { # name, schedule, path
+            args=(--location "$REGION" --schedule "$2" --time-zone UTC --uri "$WORKER_URL$3"
+                  --http-method POST --oidc-service-account-email "$INVOKER_SA" --oidc-token-audience "$WORKER_URL"
+                  --attempt-deadline 300s)
+            if gcloud scheduler jobs describe "$1" --project "$PROJECT" --location "$REGION" >/dev/null 2>&1; then
+              gcloud scheduler jobs update http "$1" --project "$PROJECT" "${args[@]}"
+            else
+              gcloud scheduler jobs create http "$1" --project "$PROJECT" "${args[@]}"
             fi
-            echo "reverting to $prev_tag ($prev_rev)"
-            pin "$prev_rev" "$prev_tag" "${prev_ns:-$DOCKERHUB_NAMESPACE}" || echo "rollback to $prev_tag failed to start"
-            healthy "reverted to $prev_tag" || echo "rollback to $prev_tag is also unhealthy"
-            exit 1
-        env:
-          DEPLOY_DIR: ${{ vars.DEPLOY_DIR }}
-          HEALTHCHECK_URL: ${{ vars.DEPLOY_HEALTHCHECK_URL }}
+          }
+          minute_batch='/tasks/batch?task=relay-emails&task=relay-deletions&task=expire-bookings&task=replay-revocations&task=check-email-outbox'
+          if [ "$PAYMENTS_ENABLED" = true ]; then
+            minute_batch+='&task=sweep-payments'
+          fi
+          job dating-coach-every-minute '* * * * *' "$minute_batch"
+          job dating-coach-hourly '0 * * * *' '/tasks/batch?task=purge-refresh-tokens'
+
+      - name: Deploy api (public)
+        run: |
+          gcloud run deploy dating-coach-api --project "$PROJECT" --region "$REGION" \
+            --image "$IMAGES/dating-coach-backend:$DEPLOY_TAG" --command api \
+            --tag release-check \
+            --service-account "$RUNTIME_SA" --allow-unauthenticated \
+            --min-instances "$API_MIN_INSTANCES" --max-instances "$API_MAX_INSTANCES" \
+            --timeout 3600 --session-affinity \
+            --env-vars-file backend.env.yaml \
+            --set-secrets DATABASE_URL=DATABASE_URL:latest,REDIS_URL=REDIS_URL:latest,JWT_SECRET=JWT_SECRET:latest,SMTP_PASSWORD=SMTP_PASSWORD:latest
+          gcloud run services update-traffic dating-coach-api --project "$PROJECT" --region "$REGION" --to-latest
+
+      - name: Deploy web (public)
+        run: |
+          gcloud run deploy dating-coach-web --project "$PROJECT" --region "$REGION" \
+            --image "$IMAGES/dating-coach-web:$DEPLOY_TAG" --port 80 \
+            --tag release-check \
+            --service-account "$WEB_SA" \
+            --allow-unauthenticated --min-instances "$WEB_MIN_INSTANCES" --max-instances "$WEB_MAX_INSTANCES"
+          gcloud run services update-traffic dating-coach-web --project "$PROJECT" --region "$REGION" --to-latest
+
+      - name: Health check
+        run: |
+          revision_url() {
+            gcloud run services describe "$1" --project "$PROJECT" --region "$REGION" \
+              --flatten='status.traffic[]' --filter='status.traffic.tag=release-check' \
+              --format='value(status.traffic.url)'
+          }
+          api_check="$(revision_url dating-coach-api)"
+          web_check="$(revision_url dating-coach-web)"
+          healthy() {
+            for i in $(seq 1 30); do
+              curl -fsS "$api_check/healthz" >/dev/null 2>&1 && curl -fsS -o /dev/null "$web_check/" && return 0
+              sleep 4
+            done
+            return 1
+          }
+          if healthy; then echo "api and web healthy on $DEPLOY_TAG"; exit 0; fi
+          echo "health checks failed for $DEPLOY_TAG"
+          exit 1
+
+      - name: Roll back public service traffic
+        if: ${{ failure() && steps.previous.outcome == 'success' }}
+        run: |
+          failed=0
+          for svc in dating-coach-api dating-coach-web; do
+            var="PREV_${svc//-/_}"; prev="${!var}"
+            if [ -n "$prev" ]; then
+              echo "reverting $svc to $prev"
+              gcloud run services update-traffic "$svc" --project "$PROJECT" --region "$REGION" --to-revisions "$prev" || failed=1
+            fi
+          done
+          exit "$failed"

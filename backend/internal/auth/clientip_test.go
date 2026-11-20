@@ -49,6 +49,23 @@ func TestNoTrustedProxies(t *testing.T) {
 	})).ServeHTTP(httptest.NewRecorder(), req)
 }
 
+func TestTrustedProxyHopCountRequiresTrustedPeer(t *testing.T) {
+	trusted := []netip.Prefix{netip.MustParsePrefix("172.18.0.0/16")}
+	for _, tc := range []struct{ peer, want string }{
+		{"172.18.0.2:1234", "198.51.100.7"},
+		{"203.0.113.4:1234", "203.0.113.4"},
+	} {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.RemoteAddr = tc.peer
+		req.Header.Set("X-Forwarded-For", "192.0.2.1, 198.51.100.7")
+		TrustedProxyMiddleware(trusted, 1)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			if got := ClientIP(r); got != tc.want {
+				t.Errorf("peer %s: ClientIP=%q, want %q", tc.peer, got, tc.want)
+			}
+		})).ServeHTTP(httptest.NewRecorder(), req)
+	}
+}
+
 func TestRateLimiterUsesResolvedClientIP(t *testing.T) {
 	for _, trusted := range []bool{false, true} {
 		t.Run(map[bool]string{false: "untrusted", true: "trusted"}[trusted], func(t *testing.T) {
