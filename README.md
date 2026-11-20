@@ -158,6 +158,33 @@ like password reset, the endpoint returns `202` with
 including for unknown or already verified addresses. The e2e environment uses
 `1s` so its verification retry helper need not wait a full minute.
 
+### Security response headers
+
+Gateway, host nginx and the raw web container send `X-Content-Type-Options:
+nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy:
+strict-origin-when-cross-origin`, and `Permissions-Policy: camera=(),
+microphone=(), geolocation=()`, including on errors. The app does not use those
+device APIs. Auth API responses also use `Cache-Control: no-store`, including
+rejected requests and preflights; all Go API responses receive `nosniff`.
+
+The CSP permits bundled scripts/fonts, react-native-web inline styles, data/blob
+images, Unsplash artwork, and Google Identity Services scripts/styles/frames
+and connections. Inline scripts, eval, plugins and framing the app are blocked.
+Stripe checkout navigates the top-level tab, so no Stripe script/frame exception
+is needed. API and ML proxy paths use the same origin. WebSockets explicitly
+allow the page host (including its port); localhost API HTTP/WS on port 8080 is
+also allowed for the raw web container's development default. If a web build
+uses a different `WEB_API_URL`/`EXPO_PUBLIC_API_URL`, add that exact HTTP(S) origin
+and its WS(S) equivalent to `connect-src` in all three nginx configurations.
+Keep the repeated CSP/header lists in sync: the web entry/asset locations need
+their own copies because their cache headers override nginx header inheritance.
+
+Run `python3 scripts/test-security-headers.py` to syntax-check both templates
+and exercise isolated nginx containers with `curl -I` assertions (Docker, curl
+and OpenSSL required; `NGINX_TEST_IMAGE` may override the nginx image). It leaves
+the running Compose stack alone. These header changes do not introduce HSTS or
+HTTPS redirects; the host template's existing TLS/redirect settings are unchanged.
+
 ### HTTPS (host nginx + certbot)
 
 Production terminates TLS in an nginx installed on the VM; the compose stack keeps speaking plain HTTP on localhost. `nginx/host-site.conf` has a port-80 server that answers ACME challenges and 301s everything else to `https://`, and a `443 ssl` server with the same `/api/`, `/healthz`, `/ml/`, `/` routes (WebSocket `Upgrade`/`Connection` forwarding and `proxy_read_timeout 1h` included) using the Let's Encrypt paths `/etc/letsencrypt/live/<domain>/{fullchain,privkey}.pem`.

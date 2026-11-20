@@ -20,6 +20,31 @@ import (
 	"github.com/danielliu30/dating-coach/backend/internal/payments"
 )
 
+func TestRouterSecurityHeaders(t *testing.T) {
+	router := testRouter(t, auth.NewTokenIssuer("test-secret"))
+	for _, tc := range []struct {
+		method, path string
+		status       int
+		cache        string
+	}{
+		{http.MethodGet, "/healthz", http.StatusOK, ""},
+		{http.MethodGet, "/api/v1/auth/me", http.StatusUnauthorized, "no-store"},
+		{http.MethodGet, "/api/v1/auth/missing", http.StatusNotFound, "no-store"},
+		{http.MethodOptions, "/api/v1/auth/login", http.StatusOK, "no-store"},
+	} {
+		req := httptest.NewRequest(tc.method, tc.path, nil)
+		if tc.method == http.MethodOptions {
+			req.Header.Set("Origin", "https://example.com")
+			req.Header.Set("Access-Control-Request-Method", http.MethodPost)
+		}
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != tc.status || rec.Header().Get("X-Content-Type-Options") != "nosniff" || rec.Header().Get("Cache-Control") != tc.cache {
+			t.Fatalf("%s %s: status=%d headers=%v", tc.method, tc.path, rec.Code, rec.Header())
+		}
+	}
+}
+
 func TestRouterBodyLimits(t *testing.T) {
 	issuer := auth.NewTokenIssuer("test-secret")
 	router := testRouter(t, issuer)
