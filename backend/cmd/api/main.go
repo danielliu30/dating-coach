@@ -183,6 +183,7 @@ type handlers struct {
 // route costs a database round trip before reaching its handler.
 func newRouter(cfg *config.Config, authenticate func(http.Handler) http.Handler, h handlers) http.Handler {
 	router := chi.NewRouter()
+	router.Use(httpx.SecurityHeaders)
 	router.Use(middleware.RequestID, auth.TrustedProxyMiddleware(cfg.TrustedProxyCIDRs, cfg.TrustedProxyHops), middleware.Recoverer, middleware.Logger)
 	router.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   cfg.CORSOrigins,
