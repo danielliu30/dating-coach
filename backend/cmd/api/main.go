@@ -191,6 +191,15 @@ func newRouter(cfg *config.Config, authenticate func(http.Handler) http.Handler,
 		AllowCredentials: true,
 		MaxAge:           300,
 	}))
+	router.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			limit := int64(httpx.MaxJSONBodyBytes)
+			if r.Method == http.MethodPost && r.URL.Path == "/api/v1/analysis/conversations" {
+				limit = httpx.MaxTranscriptBodyBytes
+			}
+			httpx.LimitRequestBody(limit)(next).ServeHTTP(w, r)
+		})
+	})
 
 	router.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		httpx.JSON(w, http.StatusOK, map[string]string{"status": "ok", "env": cfg.Env})

@@ -93,6 +93,15 @@ def test_analyze_images_rejects_image_with_both_sources() -> None:
     assert response.status_code == 422
 
 
+def test_analyze_images_accepts_payload_above_default_api_limit() -> None:
+    image = base64.b64decode(_png_base64(1200, 900)) + bytes(1024 * 1024)
+    response = client.post(
+        "/analyze/images", json={"images": [{"base64": base64.b64encode(image).decode()}]}
+    )
+    assert response.status_code == 200
+    assert response.json()["images"][0]["is_clear"] is True
+
+
 def test_message_range_shifts_only_the_prose() -> None:
     """The shared formatter every backend writes feedback with counts from 1."""
     segment = Segment(start_position=0, end_position=5, engagement_score=0.5, comment="")

@@ -73,9 +73,10 @@ export default function SignUpScreen({
         </Text>
       </View>
       <View style={{ gap: 14 }}>
-        <Field label="Name" value={displayName} onChangeText={setDisplayName} placeholder="Alex" />
+        <Field label="Name" value={displayName} onChangeText={setDisplayName} placeholder="Alex" maxLength={100} />
         <Field
           label="Email"
+          maxLength={254}
           value={email}
           onChangeText={setEmail}
           autoCapitalize="none"
@@ -84,6 +85,7 @@ export default function SignUpScreen({
         />
         <Field
           label="Password"
+          maxLength={72}
           value={password}
           onChangeText={setPassword}
           secureTextEntry

@@ -443,6 +443,9 @@ func (s *Service) SignUp(ctx context.Context, in SignUpInput) (Session, error) {
 		return Session{}, err
 	}
 	displayName := strings.TrimSpace(in.DisplayName)
+	if err := validateIdentityLengths(email, displayName); err != nil {
+		return Session{}, err
+	}
 	if displayName == "" {
 		return Session{}, fmt.Errorf("%w: display_name is required", ErrInvalidInput)
 	}
@@ -571,6 +574,9 @@ func (s *Service) createGoogleUser(ctx context.Context, identity GoogleIdentity,
 	displayName := strings.TrimSpace(identity.Name)
 	if displayName == "" {
 		displayName, _, _ = strings.Cut(identity.Email, "@")
+	}
+	if err := validateIdentityLengths(identity.Email, displayName); err != nil {
+		return db.User{}, err
 	}
 	user, err := s.queries.CreateVerifiedUser(ctx, db.CreateVerifiedUserParams{
 		Email:        identity.Email,

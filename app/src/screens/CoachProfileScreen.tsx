@@ -171,6 +171,11 @@ export default function CoachProfileScreen(): React.ReactElement {
       setError('Your saved profile could not be loaded, so saving now would overwrite it. Reload first.');
       return;
     }
+    const specialtyItems = specialties.split(',').map((item) => item.trim()).filter(Boolean);
+    if (specialtyItems.length > 20 || specialtyItems.some((item) => Array.from(item).length > 100)) {
+      setError('Use at most 20 specialties, each at most 100 characters.');
+      return;
+    }
     const payload: AvailabilityWindow[] = [];
     for (const window of windows) {
       const startMinute = parseClock(window.start);
@@ -188,10 +193,7 @@ export default function CoachProfileScreen(): React.ReactElement {
       const saved = await api.upsertCoachProfile({
         headline: headline.trim(),
         bio: bio.trim(),
-        specialties: specialties
-          .split(',')
-          .map((item) => item.trim())
-          .filter(Boolean),
+        specialties: specialtyItems,
         phases,
         hourly_rate_cents: Math.round(Number(rate) * 100) || 0,
         timezone: timezone.trim() || 'UTC',
@@ -292,10 +294,11 @@ export default function CoachProfileScreen(): React.ReactElement {
           icon="person-circle-outline"
           hue="sage"
         />
-        <Field label="Headline" value={headline} onChangeText={setHeadline} placeholder="Opening messages that land" />
-        <Field label="Bio" value={bio} onChangeText={setBio} multiline />
+        <Field label="Headline" value={headline} onChangeText={setHeadline} placeholder="Opening messages that land" maxLength={200} />
+        <Field label="Bio" value={bio} onChangeText={setBio} multiline maxLength={5000} />
         <Field
           label="Specialties (comma separated)"
+          maxLength={2038}
           value={specialties}
           onChangeText={setSpecialties}
           placeholder="openers, profile review, texting"
@@ -320,7 +323,7 @@ export default function CoachProfileScreen(): React.ReactElement {
             <Field label="Years experience" value={years} onChangeText={setYears} keyboardType="numeric" />
           </View>
         </View>
-        <Field label="Timezone (IANA)" value={timezone} onChangeText={setTimezone} placeholder="America/New_York" />
+        <Field label="Timezone (IANA)" value={timezone} onChangeText={setTimezone} placeholder="America/New_York" maxLength={100} />
         <Pressable
           accessibilityRole="switch"
           accessibilityState={{ checked: accepting }}

@@ -3,6 +3,7 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,8 +15,45 @@ import (
 	"github.com/danielliu30/dating-coach/backend/internal/chat"
 	"github.com/danielliu30/dating-coach/backend/internal/coaching"
 	"github.com/danielliu30/dating-coach/backend/internal/config"
+	"github.com/danielliu30/dating-coach/backend/internal/httpx"
 	"github.com/danielliu30/dating-coach/backend/internal/payments"
 )
+
+func TestRouterBodyLimits(t *testing.T) {
+	router := testRouter(t, auth.NewTokenIssuer("test-secret"))
+	for _, path := range []string{"/body-check", "/api/v1/analysis/conversations"} {
+		router.(chi.Router).Post(path, func(w http.ResponseWriter, r *http.Request) {
+			var data struct{ Text string }
+			if err := httpx.Decode(r, &data); err != nil {
+				t.Errorf("decode: %v", err)
+			}
+			w.WriteHeader(http.StatusNoContent)
+		})
+	}
+	for _, tc := range []struct {
+		path string
+		size int
+		want int
+	}{
+		{"/body-check", httpx.MaxJSONBodyBytes, http.StatusNoContent},
+		{"/body-check", httpx.MaxJSONBodyBytes + 1, http.StatusRequestEntityTooLarge},
+		{"/api/v1/auth/signup", httpx.MaxJSONBodyBytes + 1, http.StatusRequestEntityTooLarge},
+		{"/api/v1/analysis/conversations", 2 << 20, http.StatusNoContent},
+		{"/api/v1/analysis/conversations", httpx.MaxTranscriptBodyBytes + 1, http.StatusRequestEntityTooLarge},
+	} {
+		body := `{"Text":"` + strings.Repeat("a", tc.size-len(`{"Text":""}`)) + `"}`
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(body))
+		req.Header.Set("Origin", "https://example.com")
+		router.ServeHTTP(rec, req)
+		if rec.Code != tc.want {
+			t.Fatalf("path=%s size=%d status=%d want=%d", tc.path, tc.size, rec.Code, tc.want)
+		}
+		if rec.Header().Get("Access-Control-Allow-Origin") == "" {
+			t.Fatal("body-limit response missing CORS headers")
+		}
+	}
+}
 
 func TestRouterDoesNotTrustForwardedHeadersByDefault(t *testing.T) {
 	router := testRouter(t, auth.NewTokenIssuer("test-secret"))

@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import React from 'react';
+import { TextInput } from 'react-native';
 
 import { useAuth } from '../state/auth';
 import SignInScreen from './SignInScreen';
@@ -34,6 +35,12 @@ function mount(Screen: typeof SignInScreen | typeof SignUpScreen, signInWithGoog
 const googleButton = () => screen.getByRole('button', { name: /Continue with Google/ });
 
 describe('Continue with Google', () => {
+  it('bounds signup inputs to the server limits', () => {
+    mount(SignUpScreen, jest.fn(), nav());
+    const inputs = screen.UNSAFE_getAllByType(TextInput);
+    expect(inputs.map((input) => input.props.maxLength)).toEqual([100, 254, 72]);
+  });
+
   afterEach(() => {
     googleIdentity.googleSignInAvailable = true;
   });
