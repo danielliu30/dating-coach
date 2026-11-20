@@ -115,6 +115,14 @@ Sign-up returns a short-lived `verify`-scoped token that only reaches `/api/v1/a
 docker compose logs api | grep -i verification
 ```
 
+`VERIFY_RESEND_COOLDOWN` sets the minimum interval between verification emails
+per account (default `1m`, must be positive). Signup's initial email starts the
+Redis-backed cooldown. Resends during it neither replace the code nor send mail;
+like password reset, the endpoint returns `202` with
+`{"status":"sent","resend_after_seconds":60}` using the configured interval,
+including for unknown or already verified addresses. The e2e environment uses
+`1s` so its verification retry helper need not wait a full minute.
+
 ### HTTPS (host nginx + certbot)
 
 Production terminates TLS in an nginx installed on the VM; the compose stack keeps speaking plain HTTP on localhost. `nginx/host-site.conf` has a port-80 server that answers ACME challenges and 301s everything else to `https://`, and a `443 ssl` server with the same `/api/`, `/healthz`, `/ml/`, `/` routes (WebSocket `Upgrade`/`Connection` forwarding and `proxy_read_timeout 1h` included) using the Let's Encrypt paths `/etc/letsencrypt/live/<domain>/{fullchain,privkey}.pem`.

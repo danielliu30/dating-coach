@@ -27,7 +27,9 @@ function mount(resendVerification: jest.Mock) {
 describe('Resend code', () => {
   it('issues a single request while one is in flight, then re-enables', async () => {
     let finish: () => void = () => {};
-    const resendVerification = jest.fn(() => new Promise<void>((resolve) => (finish = resolve)));
+    const resendVerification = jest.fn(() => new Promise<{ status: string; resend_after_seconds: number }>((resolve) => {
+      finish = () => resolve({ status: 'sent', resend_after_seconds: 90 });
+    }));
     mount(resendVerification);
 
     const button = screen.getByRole('button', { name: 'Resend code' });
@@ -40,8 +42,14 @@ describe('Resend code', () => {
     expect(screen.getByRole('button', { name: 'Sending…' })).toBeDisabled();
 
     await act(async () => finish());
-    await waitFor(() => expect(screen.getByText('Verification code sent.')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('If your email is unverified, check your inbox for a code. Please wait 90 seconds before requesting another code.')).toBeTruthy());
     expect(screen.getByRole('button', { name: 'Resend code' })).toBeEnabled();
+  });
+
+  it.each([undefined, 0, -1, Number.NaN])('uses a safe default when cooldown is %s', async (cooldown) => {
+    mount(jest.fn().mockResolvedValue({ status: 'sent', resend_after_seconds: cooldown }));
+    fireEvent.press(screen.getByRole('button', { name: 'Resend code' }));
+    await waitFor(() => expect(screen.getByText(/Please wait 60 seconds/)).toBeTruthy());
   });
 
   it('re-enables and shows the error when the resend fails', async () => {
