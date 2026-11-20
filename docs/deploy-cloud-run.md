@@ -11,7 +11,7 @@ Cloud Scheduler calls it.
 | ML analyzer (`dating-coach-ml`) | Cloud Run, private | API and worker call it with a Google ID token (`ML_SERVICE_AUTH=google`) |
 | Web (`dating-coach-web`) | Cloud Run, public | Static Expo bundle, calls the API URL baked in at build (`API_PUBLIC_URL`) |
 | Migrations (`dating-coach-migrate`) | Cloud Run job | Runs `migrate up` once per deploy, before the services |
-| Postgres | Neon free plan | `DATABASE_URL` with `?sslmode=require` |
+| Postgres | Neon free plan | Direct (not transaction-pooled) `DATABASE_URL` with `?sslmode=require` |
 | Redis | Upstash free plan | `REDIS_URL` as `rediss://default:<password>@<host>:6379` |
 | Queue | Pub/Sub push | Topics `conversation.analysis`, `account.deletion`, `email.outbox`; 5 attempts, then `<topic>.dlq` |
 | Timers | Cloud Scheduler, 2 jobs | Every minute: emails, deletions outbox, booking expiry, revocation replay, email-outbox check; payment sweep only when enabled. Hourly: refresh-token purge |
@@ -33,12 +33,17 @@ Images are still built and pushed to Docker Hub (`danielliu30/*`) by
 
 Local `docker compose` is unchanged (RabbitMQ, long-running worker, `QUEUE_BACKEND=rabbitmq` by default).
 
+Email, deletion and payment passes use session-level PostgreSQL advisory locks
+and commit each row separately. `DATABASE_URL` must use a direct PostgreSQL
+endpoint or a session-mode pooler, **not** a transaction-mode pooler (including
+Neon's `-pooler` host). The backend already pools its own database connections.
+
 ## One-time setup
 
 ### 1. Accounts to create
 
 1. **Google Cloud**: a project with billing enabled (required even for the free tier). Install the `gcloud` CLI and `gcloud auth login`.
-2. **Neon** (neon.tech): a free project; copy the pooled connection string.
+2. **Neon** (neon.tech): a free project; copy the **direct**, non-pooler connection string.
 3. **Upstash** (upstash.com): a free Redis database; copy the `rediss://` URL.
 4. An SMTP provider (e.g. Resend) if real email is wanted; without `SMTP_HOST` codes are only logged.
 5. An LLM API key (Anthropic by default) for the ML analyzer.
