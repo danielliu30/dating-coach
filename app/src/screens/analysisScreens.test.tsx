@@ -3,6 +3,7 @@ import React from 'react';
 
 import { api } from '../api/client';
 import type { AnalysisResult } from '../api/types';
+import { useAuth } from '../state/auth';
 import AnalysisHistoryScreen from './AnalysisHistoryScreen';
 import AnalysisResultScreen from './AnalysisResultScreen';
 
@@ -20,9 +21,12 @@ jest.mock('../api/client', () => ({
     labelConversation: jest.fn(),
   },
 }));
+jest.mock('../config', () => ({ PROFILE_SCORE_UI_ENABLED: true }));
+jest.mock('../state/auth', () => ({ useAuth: jest.fn() }));
 
 const mocked = api as jest.Mocked<typeof api>;
-const navigation = { navigate: jest.fn() };
+const accountNavigate = jest.fn();
+const navigation = { navigate: jest.fn(), getParent: () => ({ navigate: accountNavigate }) };
 
 /** Analysis fixture; defaults to a completed result with one scored segment. */
 const resultFixture = (overrides: Partial<AnalysisResult> = {}): AnalysisResult => ({
@@ -88,10 +92,27 @@ describe('AnalysisResultScreen', () => {
     route: { key: 'Result', name: 'Result', params: { analysisID: 'a1', conversationID: 'conv1' } },
   } as unknown as React.ComponentProps<typeof AnalysisResultScreen>;
 
-  beforeEach(() => jest.useFakeTimers());
+  beforeEach(() => {
+    jest.useFakeTimers();
+    accountNavigate.mockClear();
+    jest.mocked(useAuth).mockReturnValue({ user: { role: 'user' } } as ReturnType<typeof useAuth>);
+  });
   afterEach(() => jest.useRealTimers());
 
   const flush = () => act(async () => {});
+
+  it('links completed feedback to the private score for clients only', async () => {
+    mocked.analysisResult.mockResolvedValue(resultFixture());
+    const { rerender } = render(<AnalysisResultScreen {...props} />);
+    await flush();
+
+    fireEvent.press(screen.getByRole('button', { name: 'View my profile score' }));
+    expect(accountNavigate).toHaveBeenCalledWith('Account');
+
+    jest.mocked(useAuth).mockReturnValue({ user: { role: 'admin' } } as ReturnType<typeof useAuth>);
+    rerender(<AnalysisResultScreen {...props} />);
+    expect(screen.queryByRole('button', { name: 'View my profile score' })).toBeNull();
+  });
 
   it('renders the completed result', async () => {
     mocked.analysisResult.mockResolvedValue(resultFixture());

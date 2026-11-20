@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import type { NavigationProp } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
@@ -7,8 +8,10 @@ import { api } from '../api/client';
 import type { AnalysisResult, Outcome } from '../api/types';
 import { Divider, EmptyState, IconDisc, SectionHeader, Skeleton, SkeletonCard, StatusPill } from '../components/kit';
 import { Badge, Button, Loading, Screen, ScoreBar, type IconName } from '../components/ui';
-import type { AnalysisStackParams } from '../navigation/types';
+import { PROFILE_SCORE_UI_ENABLED } from '../config';
 import { COACHING_GOAL_LABELS } from '../lib/coachingGoals';
+import type { AnalysisStackParams, RootTabParams } from '../navigation/types';
+import { useAuth } from '../state/auth';
 import { colors, fonts, radii, scoreColor, shared, type } from '../theme';
 
 const OUTCOMES: { value: Outcome; label: string; icon: IconName }[] = [
@@ -26,8 +29,10 @@ const POLL_MS = 2000;
 const MAX_POLL_FAILURES = 5;
 
 export default function AnalysisResultScreen({
+  navigation,
   route,
 }: NativeStackScreenProps<AnalysisStackParams, 'Result'>): React.ReactElement {
+  const { user } = useAuth();
   const { conversationID } = route.params;
   // A retry scores the conversation under a new analysis id, so the id being
   // polled outlives the one this screen was opened with.
@@ -271,6 +276,13 @@ export default function AnalysisResultScreen({
           <Ionicons name="hardware-chip-outline" size={14} color={colors.muted} />
           <Text style={type.caption}>model {result.model_version}</Text>
         </View>
+        {PROFILE_SCORE_UI_ENABLED && user?.role === 'user' ? (
+          <Button
+            label="View my profile score"
+            variant="secondary"
+            onPress={() => navigation.getParent<NavigationProp<RootTabParams>>()?.navigate('Account')}
+          />
+        ) : null}
       </View>
 
       <SectionHeader
