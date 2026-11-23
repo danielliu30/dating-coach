@@ -1,8 +1,9 @@
 // lt-analysis load-tests the conversation-analysis pipeline while asserting
 // end-to-end correctness:
 //
-//   - Each VU submits transcripts at -interval and polls the result at the
-//     app's real 2-second cadence until terminal or -terminal-timeout.
+//   - Each VU submits transcripts gated at -rps aggregate (or -interval per
+//     VU when -rps is 0) and polls the result at the app's real 2-second
+//     cadence until terminal or -terminal-timeout.
 //   - Every terminal result must be 'succeeded' with model_version,
 //     segments, overall, and a matching conversation_id — malformed,
 //     wrong-owner, or timed-out analyses are counted.
@@ -37,26 +38,33 @@ const (
 
 func main() {
 	base := flag.String("base", "http://localhost", "gateway base URL")
-	vus := flag.Int("vus", 4, "concurrent submitting users")
+	stagesCSV := flag.String("vus", "10,20,50", "comma-separated VU counts per ramp stage")
+	rps := flag.Float64("rps", 150, "aggregate submits per second per stage (0 = paced by -interval)")
 	duration := flag.Duration("duration", 30*time.Second, "stage duration")
-	interval := flag.Duration("interval", 3*time.Second, "pause between submits per VU")
+	interval := flag.Duration("interval", 3*time.Second, "pause between submits per VU when -rps is 0")
 	msgCount := flag.Int("messages", 40, "transcript messages per submission")
 	terminalTimeout := flag.Duration("terminal-timeout", 45*time.Second, "max wait for a terminal result")
 	out := flag.String("out", "out", "report output directory")
 	flag.Parse()
+
+	stages, err := harness.Stages(*stagesCSV, *duration)
+	if err != nil {
+		log.Fatalf("%v", err)
+	}
+	maxVUs := harness.MaxVUs(stages)
 
 	tag := harness.Tag("anls")
 	ctx := context.Background()
 	m := harness.NewMetrics()
 	defer harness.CleanupTag(tag)
 
-	emails, err := harness.SeedUsers(tag, 1, *vus, "user")
+	emails, err := harness.SeedUsers(tag, 1, maxVUs, "user")
 	if err != nil {
 		log.Fatalf("seed users: %v", err)
 	}
 
-	clients := make([]*harness.Client, *vus)
-	latestAnalysis := make([]atomic.Value, *vus) // stores string analysis ids
+	clients := make([]*harness.Client, maxVUs)
+	latestAnalysis := make([]atomic.Value, maxVUs) // stores string analysis ids
 	for i := range clients {
 		c := harness.NewClient(*base, m)
 		res, err := c.SignIn(ctx, emails[i], harness.SeedPassword)
@@ -106,8 +114,8 @@ func main() {
 	}
 
 	var seq int64
-	res := harness.Run(ctx, m, []harness.Stage{{Name: "submit", VUs: *vus, Duration: *duration}},
-		func(ctx context.Context, vu int) {
+	res := harness.RunRate(ctx, m, stages, *rps,
+		func(ctx context.Context, vu int, rate *harness.Rate) {
 			c := clients[vu]
 			var pending []struct {
 				id      string
@@ -115,7 +123,14 @@ func main() {
 				convID  string
 				checked bool
 			}
-			for ctx.Err() == nil {
+			for {
+				if rate != nil {
+					if !rate.Wait(ctx) {
+						break
+					}
+				} else if ctx.Err() != nil {
+					break
+				}
 				// Submit one transcript.
 				n := atomic.AddInt64(&seq, 1)
 				msgs := make([]harness.SubmitMessage, *msgCount)
@@ -184,7 +199,7 @@ func main() {
 				pending = kept
 
 				// Ownership probe: read the neighbor's latest analysis.
-				if neighbor := (vu + 1) % *vus; neighbor != vu {
+				if neighbor := (vu + 1) % maxVUs; neighbor != vu {
 					if v := latestAnalysis[neighbor].Load(); v != nil {
 						if id, ok := v.(string); ok && id != "" {
 							_, rr, err := c.AnalysisResult(ctx, id)
@@ -198,7 +213,9 @@ func main() {
 						}
 					}
 				}
-				harness.Pace(ctx, *interval)
+				if rate == nil {
+					harness.Pace(ctx, *interval)
+				}
 			}
 			// Stage end: anything still pending that can't be polled counts
 			// against the next stage's timeout budget implicitly.
