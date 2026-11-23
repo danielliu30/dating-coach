@@ -1,2 +1,9 @@
-*.sh text eol=lf
+# Keep LF on disk for everything the toolchain expects LF-native — Windows
+# checkouts with autocrlf were handing tools CRLF (broke the migrate
+# entrypoint) and IDE diffs showed whole-file churn.
+*.go  text eol=lf
+*.sh  text eol=lf
 *.sql text eol=lf
+*.yml text eol=lf
+*.mod text eol=lf
+*.sum text eol=lf
