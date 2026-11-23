@@ -49,6 +49,59 @@ Each PR is independently green and the existing charge flow works at every step.
 - [ ] Tests for the changed code are included in this PR.
 - [ ] The PR description names its dependency PR(s) and merge order.
 
+## Automated merge protocol
+
+`main` is protected: PRs are required, and a PR merges automatically once the
+required checks pass (`build-test`, `typecheck-export`, `test`, `e2e`,
+`dependency-gate`, `merge-gate-tests`). Do not merge by hand.
+
+- **Declare dependencies in the body.** Any PR that must land after another PR
+  must contain `Depends on: #N` (aliases `Merge after #N`, `Blocked by #N`;
+  lists like `Depends on: #1, #2 and #3` also work). The `dependency-gate` check
+  fails while any declared dependency is unmerged - including references that
+  cannot be resolved (it fails closed). Circular dependencies deadlock the
+  queue - never create them. If a dependency is abandoned, edit it out of the
+  PR body: the `edited` event re-runs the gate.
+- **Branch dependent PRs off their parent's head branch** (stacked). When the
+  parent merges, its branch is deleted, GitHub retargets the child to `main`,
+  and the child's checks re-run against the new base. A dependent PR based on
+  `main` instead still merges in order (the gate holds it), but its diff shows
+  the parent's commits until the parent lands.
+- **Auto-merge is enabled for you** on every non-draft PR (merge commit; merge
+  commits keep stacked diffs clean - do not squash stacked PRs). Nothing else
+  is needed after `gh pr create`.
+- **Drafts are held**: the auto-merge marker is only set when a draft is marked
+  ready for review.
+- **Fork PRs never auto-merge.** `pull_request` checks are produced by
+  workflows evaluated from the PR head, so a PR could weaken its own checks;
+  same-repo authors are trusted (push access can already change workflows),
+  but a fork must be merged by hand after reviewing the diff - `.github/**`
+  first.
+- **Branches must be up to date** (`strict` required checks): a PR merges only
+  after validating against the exact main it lands on. When a PR merges,
+  `merge-gate.yml`'s cascade merges `main` into every open non-draft branch
+  (fresh full check suite via `synchronize`), and when a dependent's branch is
+  already up to date it re-evaluates the gate and posts the result onto its
+  head so the required check never stays stale.
+- The gate scripts live in `scripts/` (`dependency-gate.sh`, `merge-cascade.sh`,
+  `pr-deps.sh`) and are exercised offline by `bash scripts/test-merge-gate.sh`;
+  that harness also runs in CI as the required `merge-gate-tests` check. Run it
+  after any change to the automation.
+- Watch progress with `gh pr checks <n>` / `gh run list`. If the gate is red,
+  fix the declared dependencies; if CI is red, fix the code - the queue resumes
+  by itself. A manual re-check is `gh workflow run merge-gate.yml -f pr=<n>`.
+
+## Required secret: MERGE_BOT_TOKEN
+
+Merges are attributed to whoever *armed* auto-merge. GitHub suppresses all
+workflow events caused by `GITHUB_TOKEN` (anti-recursion), so merges armed by
+the workflow itself would fire no `closed` cascade and no `push`-triggered
+release. Set repo secret `MERGE_BOT_TOKEN` to a PAT (or app token) with
+`contents:write` + `pull_requests:write`; `merge-gate.yml` uses it for arming
+auto-merge and update-branch pushes, falling back to `GITHUB_TOKEN` with a
+warning. Same for the cascade's update-branch pushes: under `GITHUB_TOKEN`
+the resulting `synchronize` is suppressed and dependents stall.
+
 ## Forbidden
 
 - One PR that adds a helper, updates its callers, and adds the feature that uses it.

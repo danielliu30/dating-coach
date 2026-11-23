@@ -1,16 +1,10 @@
 name: ML analyzer (Python)
 
+# Runs on every PR (required check) and from release.yml on push to main.
 on:
   workflow_call:
-  push:
-    branches: [main]
-    paths:
-      - "ml-analyzer/**"
-      - ".github/workflows/ml-analyzer.yml"
   pull_request:
-    paths:
-      - "ml-analyzer/**"
-      - ".github/workflows/ml-analyzer.yml"
+    types: [opened, edited, synchronize, reopened, ready_for_review]
 
 defaults:
   run:

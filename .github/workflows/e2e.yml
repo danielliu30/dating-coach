@@ -1,26 +1,11 @@
 name: E2E (Playwright against the full stack)
 
+# Runs on every PR (required check) and from release.yml on push to main.
+# No path filters: required checks must report on every pull request.
 on:
   workflow_call:
-  push:
-    branches: [main]
-    paths:
-      - "app/**"
-      - "backend/**"
-      - "ml-analyzer/**"
-      - "nginx/**"
-      - "docker-compose.yml"
-      - "e2e/**"
-      - ".github/workflows/e2e.yml"
   pull_request:
-    paths:
-      - "app/**"
-      - "backend/**"
-      - "ml-analyzer/**"
-      - "nginx/**"
-      - "docker-compose.yml"
-      - "e2e/**"
-      - ".github/workflows/e2e.yml"
+    types: [opened, edited, synchronize, reopened, ready_for_review]
 
 concurrency:
   group: e2e-${{ github.workflow }}-${{ github.ref }}

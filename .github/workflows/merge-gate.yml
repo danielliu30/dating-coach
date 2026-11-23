@@ -1,0 +1,157 @@
+name: Merge gate
+
+# Fully automated PR lifecycle:
+# - dependency-gate: required check; fails while the PR body declares
+#   "Depends on / Merge after / Blocked by #N" against unmerged PRs.
+#   Gate semantics are checked out from the BASE branch so a PR cannot weaken
+#   its own gate.
+# - merge-gate-tests: offline test harness for the gate scripts themselves
+#   (required check; keeps the automation honest).
+# - enable-auto-merge: marks every PR for auto-merge (merge commit) so a green,
+#   unblocked PR merges with no human action.
+# - cascade: when a PR merges, re-runs this gate on every open PR that declared
+#   a dependency on it, and merges the new base into that branch so its full
+#   check suite re-runs.
+# Stacked PRs (child branched off the parent's head branch) additionally get
+# their base retargeted to main by GitHub when the parent's branch is deleted
+# after merge; that fires `edited`, which also re-runs everything here.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review, closed]
+  pull_request_target:
+    types: [opened, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: PR number to re-check dependencies for
+        required: true
+
+# Re-runs of the gate are idempotent and cheap; cancel stale ones on rapid
+# pushes. Grouped per event + PR (run id for dispatches so those never cancel):
+# pull_request and pull_request_target runs for the same PR must NOT cancel
+# each other (arming and gating are different jobs in different contexts).
+concurrency:
+  group: merge-gate-${{ github.event_name }}-${{ github.event.pull_request.number || inputs.pr || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  dependency-gate:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && github.event.action != 'closed')
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+      checks: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          sparse-checkout: scripts
+          sparse-checkout-cone-mode: false
+      # Gate semantics come from the base branch; on the very first PR that
+      # introduces them (or before they exist on main), fall back to the PR head.
+      - name: Bootstrap gate scripts from PR head when absent on base
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if [ ! -f scripts/dependency-gate.sh ]; then
+            git fetch --depth 1 origin "$HEAD_SHA"
+            git checkout FETCH_HEAD -- scripts
+          fi
+      - name: Check declared dependencies are merged
+        id: gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ inputs.pr || github.event.pull_request.number }}
+        run: bash scripts/dependency-gate.sh "$PR"
+      # A dispatched re-check runs on main's tip, so its own check run would not
+      # land on the target PR: post the result onto the PR head explicitly.
+      - name: Report gate result onto the PR head
+        if: >-
+          always() && github.event_name == 'workflow_dispatch' &&
+          (steps.gate.outcome == 'success' || steps.gate.outcome == 'failure')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ inputs.pr }}
+          OUTCOME: ${{ steps.gate.outcome }}
+        run: |
+          [ "$OUTCOME" = success ] && c=success || c=failure
+          sha=$(gh pr view "$PR" --json headRefOid --jq .headRefOid)
+          gh api -X POST "repos/$GITHUB_REPOSITORY/check-runs" \
+            -f name=dependency-gate -f head_sha="$sha" -f status=completed \
+            -f conclusion="$c" -f "output[title]=dependency gate" \
+            -f "output[summary]=manual re-check of PR #$PR"
+
+  merge-gate-tests:
+    if: github.event_name == 'pull_request' && github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/test-merge-gate.sh
+
+  enable-auto-merge:
+    if: github.event_name == 'pull_request_target'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Enable auto-merge (merge commit)
+        env:
+          # A PAT, not GITHUB_TOKEN: merges armed by github-actions suppress the
+          # `closed`/`push` events (anti-recursion), which would silently stop
+          # the cascade AND release.yml. MERGE_BOT_TOKEN must be a PAT or app
+          # token with contents:write + pull_requests:write.
+          GH_TOKEN: ${{ secrets.MERGE_BOT_TOKEN || secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          # Security: pull_request checks are produced by workflows evaluated
+          # from the PR head, so a PR could weaken its own required checks and
+          # auto-merge through. Same-repo authors are trusted (push access can
+          # already change workflows); fork PRs get CI but never auto-merge -
+          # a maintainer merges them after reviewing the diff, .github/** first.
+          if [ "${{ github.event.pull_request.head.repo.fork }}" = "true" ]; then
+            echo "PR #$PR is from a fork; auto-merge not armed (manual merge required)"; exit 0
+          fi
+          if [ "$(gh pr view "$PR" --json isDraft --jq .isDraft)" = "true" ]; then
+            echo "PR #$PR is a draft; auto-merge deferred until ready_for_review"; exit 0
+          fi
+          if [ "$(gh pr view "$PR" --json autoMergeRequest --jq 'if .autoMergeRequest then "on" else "off" end')" = "on" ]; then
+            echo "auto-merge already enabled"; exit 0
+          fi
+          gh pr merge "$PR" --auto --merge
+          # strict required checks demand the branch be up to date with main;
+          # refresh now so a PR opened before the last merge does not stall.
+          gh api -X PUT "repos/$GH_REPO/pulls/$PR/update-branch" || true
+          if [ -z "${{ secrets.MERGE_BOT_TOKEN }}" ]; then
+            echo "::warning::MERGE_BOT_TOKEN is not set; this merge will be bot-attributed and downstream events (cascade, release) will be suppressed."
+          fi
+
+  cascade:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.action == 'closed' &&
+      github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    permissions:
+      checks: write
+      contents: write
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts
+          sparse-checkout-cone-mode: false
+      - name: Re-check open PRs that depended on the merged PR
+        env:
+          # update-branch pushes must be attributed to the PAT too, or the
+          # resulting synchronize events are suppressed and dependents stall.
+          GH_TOKEN: ${{ secrets.MERGE_BOT_TOKEN || secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          MERGED: ${{ github.event.pull_request.number }}
+        run: bash scripts/merge-cascade.sh "$MERGED"
