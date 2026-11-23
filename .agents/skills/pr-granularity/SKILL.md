@@ -72,10 +72,17 @@ required checks pass (`build-test`, `typecheck-export`, `test`, `e2e`,
   is needed after `gh pr create`.
 - **Drafts are held**: the auto-merge marker is only set when a draft is marked
   ready for review.
-- When a PR merges, `merge-gate.yml`'s cascade merges `main` into every open
-  dependent branch (fresh full check suite via `synchronize`) and, when the
-  branch is already up to date, re-evaluates the gate and posts the result
-  onto the dependent's head so its required check never stays stale.
+- **Fork PRs never auto-merge.** `pull_request` checks are produced by
+  workflows evaluated from the PR head, so a PR could weaken its own checks;
+  same-repo authors are trusted (push access can already change workflows),
+  but a fork must be merged by hand after reviewing the diff - `.github/**`
+  first.
+- **Branches must be up to date** (`strict` required checks): a PR merges only
+  after validating against the exact main it lands on. When a PR merges,
+  `merge-gate.yml`'s cascade merges `main` into every open non-draft branch
+  (fresh full check suite via `synchronize`), and when a dependent's branch is
+  already up to date it re-evaluates the gate and posts the result onto its
+  head so the required check never stays stale.
 - The gate scripts live in `scripts/` (`dependency-gate.sh`, `merge-cascade.sh`,
   `pr-deps.sh`) and are exercised offline by `bash scripts/test-merge-gate.sh`;
   that harness also runs in CI as the required `merge-gate-tests` check. Run it
