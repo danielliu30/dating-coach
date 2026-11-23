@@ -15,10 +15,14 @@ client, seeding, metrics, `pg_stat_statements` diffs, staged ramp, fake Stripe.
 | `lt-analysis` | analysis | queue throughput, terminal correctness, poll cost |
 | `lt-booking` | coaching | slot mutual exclusion, confirm/expire races |
 | `lt-payments` | payments | authorize/capture/release via fake Stripe + signed webhooks |
-| `lt-e2e` | journey | each VU walks the whole product flow concurrently |
+| `lt-e2e` | journey | `-journey all|book|chat|analyze` customer journeys under the ramp |
 | `lt-mixed` | interference | thin cross-service run (optional) |
 
 Each lands as its own PR; only `lt-sanity` ships with the skeleton.
+
+`run.sh` health-checks the gateway, then runs every component at the
+standard profile (`LT_*` env vars override `LT_VUS`/`LT_RPS`/`LT_DURATION`/
+`LT_COMPONENTS`) and prints a per-component summary of the newest report.
 
 ## Setup
 
