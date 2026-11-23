@@ -3,11 +3,15 @@ name: Merge gate
 # Fully automated PR lifecycle:
 # - dependency-gate: required check; fails while the PR body declares
 #   "Depends on / Merge after / Blocked by #N" against unmerged PRs.
+#   Gate semantics are checked out from the BASE branch so a PR cannot weaken
+#   its own gate.
+# - merge-gate-tests: offline test harness for the gate scripts themselves
+#   (required check; keeps the automation honest).
 # - enable-auto-merge: marks every PR for auto-merge (merge commit) so a green,
 #   unblocked PR merges with no human action.
 # - cascade: when a PR merges, re-runs this gate on every open PR that declared
-#   a dependency on it, and merges main into the dependent branch so its full
-#   check suite re-runs against the new base.
+#   a dependency on it, and merges the new base into that branch so its full
+#   check suite re-runs.
 # Stacked PRs (child branched off the parent's head branch) additionally get
 # their base retargeted to main by GitHub when the parent's branch is deleted
 # after merge; that fires `edited`, which also re-runs everything here.
@@ -31,29 +35,43 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       pull-requests: read
+      checks: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          sparse-checkout: scripts
+          sparse-checkout-cone-mode: false
       - name: Check declared dependencies are merged
+        id: gate
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR: ${{ inputs.pr || github.event.pull_request.number }}
+        run: bash scripts/dependency-gate.sh "$PR"
+      # A dispatched re-check runs on main's tip, so its own check run would not
+      # land on the target PR: post the result onto the PR head explicitly.
+      - name: Report gate result onto the PR head
+        if: >-
+          always() && github.event_name == 'workflow_dispatch' &&
+          (steps.gate.outcome == 'success' || steps.gate.outcome == 'failure')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ inputs.pr }}
+          OUTCOME: ${{ steps.gate.outcome }}
         run: |
-          body=$(gh pr view "$PR" --json body --jq '.body // ""')
-          deps=$(grep -oEi '(depends on|merge after|blocked by)[:[:space:]]*#[0-9]+' <<<"$body" \
-            | grep -oE '[0-9]+$' | sort -u || true)
-          if [ -z "$deps" ]; then
-            echo "No dependencies declared on PR #$PR"; exit 0
-          fi
-          fail=0
-          for d in $deps; do
-            if [ "$d" = "$PR" ]; then echo "Ignoring self-reference #$d"; continue; fi
-            merged=$(gh pr view "$d" --json mergedAt --jq 'if .mergedAt then "merged" else "open" end' 2>/dev/null || echo "unresolvable")
-            echo "dependency #$d: $merged"
-            [ "$merged" = "merged" ] || fail=1
-          done
-          if [ "$fail" != 0 ]; then
-            echo "::error::PR #$PR has unmerged dependencies; auto-merge stays blocked until they land."
-            exit 1
-          fi
+          [ "$OUTCOME" = success ] && c=success || c=failure
+          sha=$(gh pr view "$PR" --json headRefOid --jq .headRefOid)
+          gh api -X POST "repos/$GITHUB_REPOSITORY/check-runs" \
+            -f name=dependency-gate -f head_sha="$sha" -f status=completed \
+            -f conclusion="$c" -f "output[title]=dependency gate" \
+            -f "output[summary]=manual re-check of PR #$PR"
+
+  merge-gate-tests:
+    if: github.event_name == 'pull_request' && github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/test-merge-gate.sh
 
   enable-auto-merge:
     if: github.event_name == 'pull_request_target'
@@ -70,6 +88,9 @@ jobs:
           if [ "$(gh pr view "$PR" --json isDraft --jq .isDraft)" = "true" ]; then
             echo "PR #$PR is a draft; auto-merge deferred until ready_for_review"; exit 0
           fi
+          if [ "$(gh pr view "$PR" --json autoMergeRequest --jq 'if .autoMergeRequest then "on" else "off" end')" = "on" ]; then
+            echo "auto-merge already enabled"; exit 0
+          fi
           gh pr merge "$PR" --auto --merge
 
   cascade:
@@ -79,22 +100,16 @@ jobs:
       github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     permissions:
-      actions: write
+      checks: write
       contents: write
       pull-requests: read
     steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts
+          sparse-checkout-cone-mode: false
       - name: Re-check open PRs that depended on the merged PR
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MERGED: ${{ github.event.pull_request.number }}
-        run: |
-          deps=$(gh pr list --state open --json number,body --limit 200 \
-            --jq --arg re "(?i)(depends on|merge after|blocked by)[:\\s]*#$MERGED([^0-9]|\$)" \
-            '.[] | select((.body // "") | test($re)) | .number')
-          for n in $deps; do
-            echo "PR #$n declared a dependency on #$MERGED: re-running gate and updating branch"
-            gh workflow run merge-gate.yml -f "pr=$n" || true
-            # Merges the (possibly retargeted) base into the branch so its full
-            # check suite re-runs; a no-op when already up to date or on conflict.
-            gh api -X PUT "repos/$GITHUB_REPOSITORY/pulls/$n/update-branch" || true
-          done
+        run: bash scripts/merge-cascade.sh "$MERGED"

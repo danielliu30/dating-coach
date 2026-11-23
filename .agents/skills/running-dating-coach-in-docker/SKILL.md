@@ -29,7 +29,7 @@ Repository descriptions can be set with `updateRepositoryInfo`.
 ## Deployment flow (CI/CD)
 `main` is protected: PRs are required and auto-merge as merge commits once the
 required checks (`build-test`, `typecheck-export`, `test`, `e2e`,
-`dependency-gate`) pass. Merge order for dependent PRs is declared in the PR
+`dependency-gate`, `merge-gate-tests`) pass. Merge order for dependent PRs is declared in the PR
 body (`Depends on: #N`) and enforced by `merge-gate.yml`; see
 `.agents/skills/pr-granularity/SKILL.md` for the protocol. Every merge to `main`
 therefore flows straight into the release below — the path from green PR to
