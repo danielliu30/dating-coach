@@ -3,7 +3,7 @@
 //
 //   - Each VU owns one seeded account, creates a thread with the seeded
 //     coach, opens the websocket, and sends -messages frames paced at
-//     -pace with unique client_ids.
+//     -rps aggregate (or -pace when -rps is 0) with unique client_ids.
 //   - A reader per socket matches echoes by client_id; missing or
 //     mismatched echoes are counted.
 //   - After each cycle the REST history is paged through and every sent
@@ -13,6 +13,9 @@
 //     without hurting other subscribers' echoes.
 //   - A share of sends also goes over REST POST /messages to cover the
 //     non-WS path.
+//   - Fan-out phase: the coach replies into every thread at once. Each
+//     client's socket must see only its own thread's tagged replies —
+//     a foreign tag on the wrong socket is a fan-out routing bug.
 //
 // The component never logs tokens or message contents beyond the
 // synthetic lt-<vu>-<seq> bodies it generated.
@@ -24,7 +27,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -41,29 +43,22 @@ const (
 
 func main() {
 	base := flag.String("base", "http://localhost", "gateway base URL")
-	stagesCSV := flag.String("vus", "5", "comma-separated VU counts per ramp stage")
-	duration := flag.Duration("duration", 20*time.Second, "duration of each stage")
+	stagesCSV := flag.String("vus", "10,20,50", "comma-separated VU counts per ramp stage")
+	rps := flag.Float64("rps", 150, "aggregate message sends per second per stage (0 = paced by -pace)")
+	duration := flag.Duration("duration", 30*time.Second, "duration of each stage")
 	messages := flag.Int("messages", 30, "messages per VU per cycle")
-	pace := flag.Duration("pace", 200*time.Millisecond, "delay between sends within a cycle")
+	pace := flag.Duration("pace", 200*time.Millisecond, "delay between sends within a cycle when -rps is 0")
 	slow := flag.Int("slow", 2, "sockets that connect and never read")
 	restShare := flag.Float64("rest-share", 0.1, "fraction of messages sent over REST instead of WS")
+	fanMsgs := flag.Int("fan-msgs", 10, "coach replies per thread in the fan-out phase")
 	out := flag.String("out", "out", "report output directory")
 	flag.Parse()
 
-	var vusList []int
-	for _, s := range strings.Split(*stagesCSV, ",") {
-		n, err := strconv.Atoi(strings.TrimSpace(s))
-		if err != nil || n < 1 {
-			log.Fatalf("bad -vus list %q", *stagesCSV)
-		}
-		vusList = append(vusList, n)
+	stages, err := harness.Stages(*stagesCSV, *duration)
+	if err != nil {
+		log.Fatalf("%v", err)
 	}
-	maxVUs := 0
-	for _, n := range vusList {
-		if n > maxVUs {
-			maxVUs = n
-		}
-	}
+	maxVUs := harness.MaxVUs(stages)
 
 	tag := harness.Tag("chat")
 	ctx := context.Background()
@@ -109,11 +104,6 @@ func main() {
 	}
 	extra := map[string]any{"threads": maxVUs, "coach": coachID != ""}
 
-	stages := make([]harness.Stage, len(vusList))
-	for i, n := range vusList {
-		stages[i] = harness.Stage{Name: fmt.Sprintf("%dvu", n), VUs: n, Duration: *duration}
-	}
-
 	trip := func(mm *harness.Metrics) (bool, string) {
 		if ok, reason := harness.ErrorRateTripwire(0.01)(mm); ok {
 			return true, reason
@@ -124,7 +114,7 @@ func main() {
 		return false, ""
 	}
 
-	res := harness.Run(ctx, m, stages, func(ctx context.Context, vu int) {
+	res := harness.RunRate(ctx, m, stages, *rps, func(ctx context.Context, vu int, rate *harness.Rate) {
 		c, threadID := clients[vu], threads[vu]
 		sock, err := c.OpenChat(ctx, threadID)
 		if err != nil {
@@ -202,7 +192,11 @@ func main() {
 					_ = sock.Typing(ctx, true)
 					m.Inc("typing_sent")
 				}
-				harness.Pace(ctx, *pace)
+				if rate != nil {
+					rate.Wait(ctx)
+				} else {
+					harness.Pace(ctx, *pace)
+				}
 			}
 			m.Add("messages_sent", int64(len(sent)))
 
@@ -252,6 +246,122 @@ func main() {
 	}, trip)
 
 	extra["ramp"] = res
+
+	// --- Fan-out phase --------------------------------------------------------
+	// One coach, many client threads: the coach answers every thread at once
+	// over REST while every client holds an open socket. A socket may only
+	// ever see its own thread's tagged replies — a lt-fan-t<j> body arriving
+	// on thread i's socket (j != i) is a cross-thread routing bug.
+	{
+		coach := harness.NewClient(*base, m)
+		if res, err := coach.SignIn(ctx, tag+"-coach@loadtest.local", harness.SeedPassword); err != nil || res.Status != http.StatusOK {
+			m.Note("fan-out: coach signin failed — phase skipped")
+		} else {
+			got := make([]int64, maxVUs)
+			readCtx, stopReads := context.WithCancel(ctx)
+			var fanWG sync.WaitGroup
+			var fanSocks []*harness.Socket
+			for i := 0; i < maxVUs; i++ {
+				sock, err := clients[i].OpenChat(ctx, threads[i])
+				if err != nil {
+					m.Inc("fan_ws_open_failed")
+					continue
+				}
+				fanSocks = append(fanSocks, sock)
+				fanWG.Add(1)
+				go func(vu int, s *harness.Socket) {
+					defer fanWG.Done()
+					own := fmt.Sprintf("lt-fan-t%d-", vu)
+					for {
+						ev, err := s.Read(readCtx)
+						if err != nil {
+							return
+						}
+						if ev.Type != "message" {
+							continue
+						}
+						switch {
+						case strings.HasPrefix(ev.Body, own):
+							atomic.AddInt64(&got[vu], 1)
+						case strings.HasPrefix(ev.Body, "lt-fan-t"):
+							m.Inc("fanout_cross_thread")
+						default:
+							m.Inc("fanout_unexpected_body")
+						}
+					}
+				}(i, sock)
+			}
+
+			// Coach replies into every thread at the stage rate.
+			rate := harness.NewRate(*rps)
+			sent := make([]int, maxVUs)
+			for i := 0; i < maxVUs && rate.Wait(ctx); i++ {
+				for seq := 0; seq < *fanMsgs; seq++ {
+					if !rate.Wait(ctx) {
+						break
+					}
+					body := fmt.Sprintf("lt-fan-t%d-%d", i, seq)
+					r, err := coach.Raw(ctx, http.MethodPost,
+						fmt.Sprintf("/api/v1/chat/threads/%s/messages", threads[i]),
+						"POST /chat/threads/{id}/messages", map[string]string{"body": body},
+						map[string]string{"Authorization": "Bearer " + coach.Token()})
+					if err != nil || (r.Status != http.StatusCreated && r.Status != http.StatusOK) {
+						m.Inc("fan_send_failed")
+						continue
+					}
+					sent[i]++
+				}
+			}
+			rate.Close()
+
+			// Let in-flight fan events land, then stop the readers.
+			time.Sleep(echoWait)
+			stopReads()
+			fanWG.Wait()
+			for _, s := range fanSocks {
+				s.Close()
+			}
+
+			var delivered, missing int64
+			for i := 0; i < maxVUs; i++ {
+				delivered += got[i]
+				if d := int64(sent[i]) - got[i]; d > 0 {
+					missing += d
+					m.Note("fan-out: thread %d got %d/%d coach replies on its socket", i, got[i], sent[i])
+				}
+			}
+			extra["fanout"] = map[string]any{
+				"threads": maxVUs, "sent_per_thread": *fanMsgs,
+				"delivered": delivered, "missing": missing,
+				"cross_thread": m.Count("fanout_cross_thread"),
+			}
+
+			// Persistence: each fan reply must live in exactly its own thread.
+			for i := 0; i < maxVUs && sent[i] > 0; i++ {
+				seen := 0
+				for page := 0; page < historyMaxI; page++ {
+					msgs, r, err := historyPage(ctx, clients[i], threads[i], page)
+					if err != nil || r.Status != http.StatusOK {
+						break
+					}
+					for _, msg := range msgs {
+						if strings.HasPrefix(msg.Body, fmt.Sprintf("lt-fan-t%d-", i)) {
+							seen++
+						}
+					}
+					if len(msgs) < pageLimit {
+						break
+					}
+				}
+				if seen == sent[i] {
+					m.Inc("fanout_persist_ok")
+				} else {
+					m.Inc("fanout_persist_missing")
+				}
+			}
+		}
+	}
+
 	if len(slowSocks) > 0 {
 		if n, err := harness.CountLogLines("api", "30m", "dropping chat event for slow client"); err == nil {
 			extra["slow_client_drops"] = n
