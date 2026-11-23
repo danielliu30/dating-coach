@@ -79,6 +79,28 @@ func ComposeLogs(service, since string) (string, error) {
 	return string(out), nil
 }
 
+// ComposeUp runs `docker compose up -d --wait` for the given services with the
+// loadtest env file and override, used by lt-payments to bring the
+// payments-enabled api-pay/worker-pay services up next to the base stack.
+func ComposeUp(services ...string) error {
+	root, err := RepoRoot()
+	if err != nil {
+		return err
+	}
+	args := []string{
+		"compose", "--env-file", filepath.Join(root, "loadtest", ".env"),
+		"-f", filepath.Join(root, "docker-compose.yml"),
+		"-f", filepath.Join(root, "loadtest", "docker-compose.override.yml"),
+		"up", "-d", "--wait",
+	}
+	args = append(args, services...)
+	out, err := exec.Command("docker", args...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("compose up %v failed: %w: %s", services, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 // CountLogLines greps service logs for a substring and returns the number of
 // matching lines — e.g. "dropping chat event for slow client".
 func CountLogLines(service, since, needle string) (int, error) {
