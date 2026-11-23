@@ -1,0 +1,21 @@
+# dating-coach guardrails
+
+Monorepo: `backend/` (Go: `cmd/api` + `cmd/worker`, `internal/*`, `migrations/`, sqlc), `app/` (Expo SDK 57 web + jest), `ml-analyzer/` (FastAPI + heuristic/LLM scorers), `e2e/` (Playwright against the compose gateway), `.github/` + `scripts/` (CI, merge gate, release).
+
+Each service directory has its own `AGENTS.md` — read it before working there.
+
+## Non-negotiables
+
+- **Security:** never commit or log secrets/tokens; prod endpoints fail closed on auth; don't weaken startup credential rejection, auth checks, or proxy-trust settings.
+- **Correctness:** tests ship in the same PR as the code they cover; gates fail closed (an unresolvable condition blocks, never passes).
+- **Performance:** no needless work in request/scoring hot paths; keep `/healthz` endpoints dependency-free.
+- **Availability:** DB migrations only go `up` — every migration must be backward-compatible so old code and new schema coexist during a deploy; scale-to-zero services hold no in-process state or timers.
+
+## Merge protocol
+
+`main` is protected (strict, PR required). Required checks: `build-test`, `typecheck-export`, `test`, `e2e`, `dependency-gate`, `merge-gate-tests`. One logical change per PR; dependencies declared in the body (`Depends on: #N`); same-repo non-draft PRs auto-merge on green via `merge-gate.yml`. See `.agents/skills/pr-granularity/SKILL.md`.
+
+## Ops skills
+
+- `.agents/skills/testing-dating-coach/` — local stack bring-up, click-through recipes, adversarial scenarios.
+- `.agents/skills/running-dating-coach-in-docker/` — images, release pipeline, `DEPLOY_TARGET` switch, local vs Cloud Run deploys, rollback, backups.
