@@ -74,6 +74,10 @@ type Config struct {
 	PaymentsEnabled     bool
 	StripeSecretKey     string
 	StripeWebhookSecret string
+	// StripeAPIBaseURL overrides the Stripe API base URL, used to point the
+	// provider at a stub server in tests and local load runs. Empty means the
+	// SDK's default (https://api.stripe.com).
+	StripeAPIBaseURL string
 	// PaymentHoldTTL is how long an unpaid booking keeps its slot reserved.
 	PaymentHoldTTL time.Duration
 }
@@ -166,6 +170,7 @@ func Load() (*Config, error) {
 		PaymentsEnabled:     envBool("PAYMENTS_ENABLED", false),
 		StripeSecretKey:     env("STRIPE_SECRET_KEY", ""),
 		StripeWebhookSecret: env("STRIPE_WEBHOOK_SECRET", ""),
+		StripeAPIBaseURL:    env("STRIPE_API_BASE_URL", ""),
 		PaymentHoldTTL:      envDuration("PAYMENT_HOLD_TTL", 15*time.Minute),
 	}
 	cfg.SMTPTLS = envBool("SMTP_TLS", cfg.Env != "development")
