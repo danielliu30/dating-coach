@@ -56,6 +56,7 @@ jobs:
         id: gate
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
           PR: ${{ inputs.pr || github.event.pull_request.number }}
         run: bash scripts/dependency-gate.sh "$PR"
       # A dispatched re-check runs on main's tip, so its own check run would not
@@ -66,6 +67,7 @@ jobs:
           (steps.gate.outcome == 'success' || steps.gate.outcome == 'failure')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
           PR: ${{ inputs.pr }}
           OUTCOME: ${{ steps.gate.outcome }}
         run: |
@@ -93,6 +95,7 @@ jobs:
       - name: Enable auto-merge (merge commit)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
         run: |
           if [ "$(gh pr view "$PR" --json isDraft --jq .isDraft)" = "true" ]; then
@@ -121,5 +124,6 @@ jobs:
       - name: Re-check open PRs that depended on the merged PR
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
           MERGED: ${{ github.event.pull_request.number }}
         run: bash scripts/merge-cascade.sh "$MERGED"
