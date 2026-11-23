@@ -92,6 +92,9 @@ func (m *Metrics) ErrorRate() float64 {
 	var total, bad int
 	for _, e := range m.eps {
 		for status, n := range e.statuses {
+			if status < 0 {
+				continue // canceled at stage end: neither success nor failure
+			}
 			total += n
 			if status == 0 || status >= 500 {
 				bad += n
