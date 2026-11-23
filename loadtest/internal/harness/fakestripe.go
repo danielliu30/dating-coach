@@ -58,12 +58,16 @@ type fakeIntent struct {
 	LatestCharge any    `json:"latest_charge,omitempty"`
 }
 
-// NewFakeStripe builds an unstarted stub.
+// NewFakeStripe builds an unstarted stub. The id counter is seeded from the
+// clock so checkout refs (stored as the unique coaching_sessions.payment_ref)
+// cannot collide with a previous run's rows, including ones a crashed run
+// left behind.
 func NewFakeStripe() *FakeStripe {
 	return &FakeStripe{
 		checkouts: map[string]*fakeCheckout{},
 		intents:   map[string]*fakeIntent{},
 		idem:      map[string][]byte{},
+		n:         int(time.Now().UnixNano() % 1e9),
 	}
 }
 
@@ -135,21 +139,29 @@ func (f *FakeStripe) nextID(prefix string) string {
 	return fmt.Sprintf("%s_lt_%d", prefix, f.n)
 }
 
-func (f *FakeStripe) record(r *http.Request) (string, []byte, bool) {
-	_, _ = io.ReadAll(r.Body)
-	key := r.Header.Get("Idempotency-Key")
+// record logs the call and returns the idempotency key, a prior replayed
+// response, and the parsed form. The body is drained here, so handlers must
+// use the returned form rather than r.ParseForm, which would see an empty
+// body.
+func (f *FakeStripe) record(r *http.Request) (key string, prior []byte, form url.Values, replayed bool) {
+	body, _ := io.ReadAll(r.Body)
+	form = r.URL.Query()
+	if strings.Contains(r.Header.Get("Content-Type"), "application/x-www-form-urlencoded") {
+		form, _ = url.ParseQuery(string(body))
+	}
+	key = r.Header.Get("Idempotency-Key")
 	f.mu.Lock()
 	f.calls = append(f.calls, StripeCall{
 		At: time.Now(), Method: r.Method, Path: r.URL.Path, IdempotencyKey: key,
 	})
 	if key != "" {
-		if prior, ok := f.idem[key]; ok {
+		if p, ok := f.idem[key]; ok {
 			f.mu.Unlock()
-			return "", prior, true
+			return "", p, form, true
 		}
 	}
 	f.mu.Unlock()
-	return key, nil, false
+	return key, nil, form, false
 }
 
 func (f *FakeStripe) writeJSON(w http.ResponseWriter, key string, status int, v any) {
@@ -170,13 +182,12 @@ func formAmount(form url.Values) int64 {
 }
 
 func (f *FakeStripe) createCheckout(w http.ResponseWriter, r *http.Request) {
-	key, prior, replayed := f.record(r)
+	key, prior, form, replayed := f.record(r)
 	if replayed {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(prior)
 		return
 	}
-	_ = r.ParseForm()
 	f.mu.Lock()
 	id := f.nextID("cs")
 	piID := f.nextID("pi")
@@ -184,13 +195,13 @@ func (f *FakeStripe) createCheckout(w http.ResponseWriter, r *http.Request) {
 	if amount == 0 {
 		amount = 12000
 	}
-	currency := r.Form.Get("line_items[0][price_data][currency]")
+	currency := form.Get("line_items[0][price_data][currency]")
 	if currency == "" {
 		currency = "usd"
 	}
 	f.intents[piID] = &fakeIntent{ID: piID, Object: "payment_intent", Status: "requires_capture", Amount: amount, Currency: currency}
 	expires := time.Now().Add(time.Hour).Unix()
-	if raw := r.Form.Get("expires_at"); raw != "" {
+	if raw := form.Get("expires_at"); raw != "" {
 		if v, err := strconv.ParseInt(raw, 10, 64); err == nil {
 			expires = v
 		}
@@ -205,7 +216,7 @@ func (f *FakeStripe) createCheckout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (f *FakeStripe) getCheckout(w http.ResponseWriter, r *http.Request) {
-	key, prior, replayed := f.record(r)
+	key, prior, _, replayed := f.record(r)
 	if replayed {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(prior)
@@ -231,7 +242,7 @@ func (f *FakeStripe) getCheckout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (f *FakeStripe) expireCheckout(w http.ResponseWriter, r *http.Request) {
-	key, prior, replayed := f.record(r)
+	key, prior, _, replayed := f.record(r)
 	if replayed {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(prior)
@@ -256,7 +267,7 @@ func (f *FakeStripe) expireCheckout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (f *FakeStripe) getIntent(w http.ResponseWriter, r *http.Request) {
-	key, prior, replayed := f.record(r)
+	key, prior, _, replayed := f.record(r)
 	if replayed {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(prior)
@@ -273,7 +284,7 @@ func (f *FakeStripe) getIntent(w http.ResponseWriter, r *http.Request) {
 }
 
 func (f *FakeStripe) captureIntent(w http.ResponseWriter, r *http.Request) {
-	key, prior, replayed := f.record(r)
+	key, prior, _, replayed := f.record(r)
 	if replayed {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(prior)
@@ -294,7 +305,7 @@ func (f *FakeStripe) captureIntent(w http.ResponseWriter, r *http.Request) {
 }
 
 func (f *FakeStripe) cancelIntent(w http.ResponseWriter, r *http.Request) {
-	key, prior, replayed := f.record(r)
+	key, prior, _, replayed := f.record(r)
 	if replayed {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(prior)
@@ -314,19 +325,18 @@ func (f *FakeStripe) cancelIntent(w http.ResponseWriter, r *http.Request) {
 }
 
 func (f *FakeStripe) createRefund(w http.ResponseWriter, r *http.Request) {
-	key, prior, replayed := f.record(r)
+	key, prior, form, replayed := f.record(r)
 	if replayed {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(prior)
 		return
 	}
-	_ = r.ParseForm()
 	f.mu.Lock()
 	id := f.nextID("re")
 	f.mu.Unlock()
 	f.writeJSON(w, key, http.StatusOK, map[string]any{
 		"id": id, "object": "refund", "status": "succeeded",
-		"charge": r.Form.Get("charge"), "payment_intent": r.Form.Get("payment_intent"),
+		"charge": form.Get("charge"), "payment_intent": form.Get("payment_intent"),
 	})
 }
 

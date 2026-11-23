@@ -53,5 +53,8 @@ deltas.
   tag everything `*-@loadtest.local` and call `CleanupTag` on exit.
 - Ramp via `harness.Run` with a `Tripwire` (error rate, lost echoes, p99);
   the report records the last stage that stayed healthy.
-- `lt-payments` needs `PAYMENTS_ENABLED=true` + `STRIPE_BASE_URL` pointing at
-  the driver's `FakeStripe`; everything else runs against the stock .env.
+- `lt-payments` starts `FakeStripe` on the host (`:12111`) and brings up
+  `api-pay`/`worker-pay` (compose override, `extends` api/worker with
+  `PAYMENTS_ENABLED=true` + `STRIPE_API_BASE_URL=http://host.docker.internal:12111`,
+  api on `127.0.0.1:8082`) — everything else runs against the stock .env,
+  where payments stay off.
