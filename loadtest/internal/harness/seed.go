@@ -14,6 +14,13 @@ import (
 // hash is produced by Postgres's crypt() so seeding stays pure SQL.
 const SeedPassword = "loadtest-password"
 
+// Tag builds a per-run fixture tag ("component-<time>-<pid>") so concurrent
+// components never share the CleanupTag prefix — one run's cleanup can never
+// delete another run's seeded accounts mid-flight.
+func Tag(component string) string {
+	return fmt.Sprintf("%s-%x-%d", component, time.Now().UnixNano()&0xffffff, os.Getpid()%0x1000)
+}
+
 // RepoRoot walks up from the working directory to the folder containing
 // docker-compose.yml.
 func RepoRoot() (string, error) {
