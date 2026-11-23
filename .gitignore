@@ -32,3 +32,7 @@ ml-analyzer/data/*
 /e2e/test-results/
 .deploy.lock
 
+
+# Load test reports
+/loadtest/out/
+!/loadtest/.env
