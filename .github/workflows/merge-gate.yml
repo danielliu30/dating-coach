@@ -27,6 +27,12 @@ on:
         description: PR number to re-check dependencies for
         required: true
 
+# Re-runs of the gate are idempotent and cheap; cancel stale ones on rapid
+# pushes. Grouped per PR (run id for dispatches so those never cancel).
+concurrency:
+  group: merge-gate-${{ github.event.pull_request.number || inputs.pr || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   dependency-gate:
     if: >-
@@ -98,6 +104,14 @@ jobs:
           GH_REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
         run: |
+          # Security: pull_request checks are produced by workflows evaluated
+          # from the PR head, so a PR could weaken its own required checks and
+          # auto-merge through. Same-repo authors are trusted (push access can
+          # already change workflows); fork PRs get CI but never auto-merge -
+          # a maintainer merges them after reviewing the diff, .github/** first.
+          if [ "${{ github.event.pull_request.head.repo.fork }}" = "true" ]; then
+            echo "PR #$PR is from a fork; auto-merge not armed (manual merge required)"; exit 0
+          fi
           if [ "$(gh pr view "$PR" --json isDraft --jq .isDraft)" = "true" ]; then
             echo "PR #$PR is a draft; auto-merge deferred until ready_for_review"; exit 0
           fi
@@ -105,6 +119,9 @@ jobs:
             echo "auto-merge already enabled"; exit 0
           fi
           gh pr merge "$PR" --auto --merge
+          # strict required checks demand the branch be up to date with main;
+          # refresh now so a PR opened before the last merge does not stall.
+          gh api -X PUT "repos/$GH_REPO/pulls/$PR/update-branch" || true
 
   cascade:
     if: >-

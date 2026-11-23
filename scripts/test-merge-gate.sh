@@ -52,9 +52,9 @@ DEPS() { printf '%s' "$1" | bash -c '. '"$ROOT"'/scripts/pr-deps.sh; extract_dep
 state 1 open; state 2 merged; state 50 merged
 
 # --- dependency-gate.sh behaviour ---
-body 100 'plain change, no deps';                                    t 'no deps passes'                 0 GATE 100
-body 101 'Depends on: #1';                                           t 'open dep blocks'                1 GATE 101
-body 102 'Depends on: #2';                                           t 'merged dep passes'              0 GATE 102
+body 100 'coach: expose availability endpoint, no deps';               t 'no deps passes'                 0 GATE 100
+body 101 'booking: reschedule flow — Depends on: #1';                  t 'open dep blocks'                1 GATE 101
+body 102 'chat: pending queue replay — Depends on: #2';                t 'merged dep passes'              0 GATE 102
 body 103 'Depends on: #9';                                           t 'unresolvable dep fails closed'  1 GATE 103
 body 104 'Depends on: #104';                                         t 'self-reference ignored'         0 GATE 104
 body 105 'Depends on: #1, #2';                                       t 'list with open dep blocks'      1 GATE 105
@@ -81,40 +81,50 @@ t 'vanished PR passes vacuously'                                     0 GATE 116
 [ -z "$(DEPS 'fixes #1, closes #2')" ] && { pass=$((pass+1)); echo 'ok    non-dep keywords ignored'; } || { fail=$((fail+1)); echo 'FAIL  non-dep keywords ignored'; }
 
 # --- merge-cascade.sh ---
-# Open PRs; 200/201/204 depend on the just-merged #50, 202/203 do not.
+# Open PRs: 200/201/204/205 depend on just-merged #50; 202 is an unrelated
+# non-draft (still refreshed — strict required checks demand up-to-date heads);
+# 203 is a draft non-dependent (stays out of the train); 205 is a draft DEPENDENT.
 cat > "$FIX/pr-list.tsv" <<EOF
-200	Depends on: #50
-201	Depends on: #51 and #50
-202	an unrelated PR
-203	Depends on: #5
-204	Merge after #50, #52
+200	false	coach profile: approval gate — Depends on: #50
+201	false	booking: session confirm links — Depends on: #51 and #50
+202	false	chat: composer layout fix
+203	true	coach availability editor — Depends on: #5
+204	false	sessions: reschedule slots — Merge after #50, #52
+205	true	analysis history tab — Depends on: #50
 EOF
-body 200 'Depends on: #50';      sha 200 sha-of-200
+body 200 'Depends on: #50';         sha 200 sha-of-200
 body 201 'Depends on: #51 and #50'; sha 201 sha-of-201
 body 204 'Merge after #50, #52';    sha 204 sha-of-204
+body 205 'Depends on: #50';         sha 205 sha-of-205
 state 50 merged; state 51 open; state 52 open; state 5 open
 
-# happy path: update-branch succeeds -> no manual check-run posts needed
+# happy path: update-branch succeeds -> every open non-draft head is refreshed,
+# drafts only when they are dependents; no manual check-run posts needed.
 : > "$FIX/api-calls"; : > "$FIX/check-runs"; rm -f "$FIX/api-fail"
 t 'cascade exits 0'                 0 bash "$ROOT/scripts/merge-cascade.sh" 50
-grep -q 'pulls/200/update-branch' "$FIX/api-calls" && grep -q 'pulls/201/update-branch' "$FIX/api-calls" && grep -q 'pulls/204/update-branch' "$FIX/api-calls" \
-  && ! grep -q 'pulls/202/' "$FIX/api-calls" && ! grep -q 'pulls/203/' "$FIX/api-calls" \
-  && { pass=$((pass+1)); echo 'ok    cascade updates dependent branches only'; } || { fail=$((fail+1)); echo "FAIL  cascade updates dependent branches only: $(cat "$FIX/api-calls")"; }
+for n in 200 201 202 204 205; do grep -q "pulls/$n/update-branch" "$FIX/api-calls" || break; done \
+  && ! grep -q 'pulls/203/' "$FIX/api-calls" \
+  && { pass=$((pass+1)); echo 'ok    cascade refreshes non-draft + dependent heads'; } || { fail=$((fail+1)); echo "FAIL  cascade refreshes non-draft + dependent heads: $(cat "$FIX/api-calls")"; }
 [ ! -s "$FIX/check-runs" ] && { pass=$((pass+1)); echo 'ok    no manual posts when update-branch works'; } || { fail=$((fail+1)); echo 'FAIL  no manual posts when update-branch works'; }
 
 # fallback path: update-branch is a no-op -> gate re-evaluated + posted onto head
 : > "$FIX/api-calls"; : > "$FIX/check-runs"; : > "$FIX/api-fail"
 bash "$ROOT/scripts/merge-cascade.sh" 50 >/dev/null 2>&1
-grep -q 'head_sha=sha-of-200' "$FIX/check-runs" && grep -q 'conclusion=success' "$FIX/check-runs" \
+grep 'head_sha=sha-of-200' "$FIX/check-runs" | grep -q 'conclusion=success' \
   && { pass=$((pass+1)); echo 'ok    fallback posts success for cleared dep'; } || { fail=$((fail+1)); echo "FAIL  fallback posts success for cleared dep: $(cat "$FIX/check-runs")"; }
 grep 'head_sha=sha-of-201' "$FIX/check-runs" | grep -q 'conclusion=failure' \
-  && { pass=$((pass+1)); echo 'ok    fallback posts failure for still-blocked dep'; } || { fail=$((fail+1)); echo "FAIL  fallback posts failure for still-blocked dep: $(cat "$FIX/check-runs")"; }
+  && { pass=$((pass+1)); echo 'ok    fallback posts failure for still-blocked dep'; } || { fail=$((fail+1)); echo "FAIL  fallback posts failure for still-blocked dep"; }
+grep 'head_sha=sha-of-205' "$FIX/check-runs" | grep -q 'conclusion=success' \
+  && { pass=$((pass+1)); echo 'ok    fallback covers draft dependents'; } || { fail=$((fail+1)); echo "FAIL  fallback covers draft dependents"; }
+! grep -q 'sha-of-203' "$FIX/check-runs" && { pass=$((pass+1)); echo 'ok    non-dependent drafts untouched'; } || { fail=$((fail+1)); echo 'FAIL  non-dependent drafts untouched'; }
 rm -f "$FIX/api-fail"
 
-# cascading on a PR nobody depends on is a no-op
+# merging a PR nobody depends on still refreshes non-draft heads (strict mode)
 : > "$FIX/api-calls"; : > "$FIX/check-runs"
 bash "$ROOT/scripts/merge-cascade.sh" 999 >/dev/null 2>&1
-[ ! -s "$FIX/api-calls" ] && [ ! -s "$FIX/check-runs" ] && { pass=$((pass+1)); echo 'ok    no dependents -> nothing posted'; } || { fail=$((fail+1)); echo 'FAIL  no dependents -> nothing posted'; }
+grep -q 'pulls/202/update-branch' "$FIX/api-calls" && ! grep -q 'pulls/203/' "$FIX/api-calls" \
+  && [ ! -s "$FIX/check-runs" ] \
+  && { pass=$((pass+1)); echo 'ok    unrelated merge refreshes non-draft heads only'; } || { fail=$((fail+1)); echo "FAIL  unrelated merge refreshes non-draft heads only: $(cat "$FIX/api-calls" "$FIX/check-runs")"; }
 
 echo "---"
 echo "$pass passed, $fail failed"
