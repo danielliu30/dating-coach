@@ -38,7 +38,7 @@ func main() {
 	expireWait := flag.Duration("expire-wait", 90*time.Second, "max wait for the expiry sweep")
 	flag.Parse()
 
-	tag := fmt.Sprintf("book%d", time.Now().Unix()%100000)
+	tag := harness.Tag("book")
 	ctx := context.Background()
 	m := harness.NewMetrics()
 	defer harness.CleanupTag(tag)

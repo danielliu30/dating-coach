@@ -65,7 +65,7 @@ func main() {
 		}
 	}
 
-	tag := fmt.Sprintf("chat%d", time.Now().Unix()%100000)
+	tag := harness.Tag("chat")
 	ctx := context.Background()
 	m := harness.NewMetrics()
 	defer harness.CleanupTag(tag)
@@ -137,10 +137,14 @@ func main() {
 		pending := sync.Map{} // clientID -> body
 		var rd sync.WaitGroup
 		rd.Add(1)
+		// The reader outlives the stage context so echoes in flight at
+		// stage end still resolve before the socket closes — otherwise a
+		// canceled read is miscounted as a missing echo.
+		readCtx := context.WithoutCancel(ctx)
 		go func() {
 			defer rd.Done()
 			for {
-				ev, err := sock.Read(ctx)
+				ev, err := sock.Read(readCtx)
 				if err != nil {
 					return
 				}
@@ -202,23 +206,8 @@ func main() {
 			}
 			m.Add("messages_sent", int64(len(sent)))
 
-			// Drain echoes.
-			deadline := time.Now().Add(echoWait)
-			for time.Now().Before(deadline) {
-				empty := true
-				pending.Range(func(_, _ any) bool { empty = false; return false })
-				if empty {
-					break
-				}
-				time.Sleep(50 * time.Millisecond)
-			}
-			var lost int64
-			pending.Range(func(k, _ any) bool {
-				lost++
-				pending.Delete(k)
-				return true
-			})
-			m.Add("echo_missing", lost)
+			// Drain echoes: unresolved client_ids are missing echoes.
+			drain(m, &pending)
 
 			// Persistence: page history, every sent body exactly once. A
 			// failed page means unverifiable, not missing.
@@ -255,6 +244,10 @@ func main() {
 				}
 			}
 		}
+		// Stage ended: give in-flight sends one last echo window on the
+		// still-open socket before it goes away.
+		drain(m, &pending)
+		sock.Close()
 		rd.Wait()
 	}, trip)
 
@@ -274,6 +267,27 @@ func main() {
 		log.Fatalf("write report: %v", err)
 	}
 	fmt.Printf("chat report: %s\n", path)
+}
+
+// drain waits up to echoWait for pending client_ids to resolve, then counts
+// whatever remains as missing echoes.
+func drain(m *harness.Metrics, pending *sync.Map) {
+	deadline := time.Now().Add(echoWait)
+	for time.Now().Before(deadline) {
+		empty := true
+		pending.Range(func(_, _ any) bool { empty = false; return false })
+		if empty {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	var lost int64
+	pending.Range(func(k, _ any) bool {
+		lost++
+		pending.Delete(k)
+		return true
+	})
+	m.Add("echo_missing", lost)
 }
 
 // historyPage fetches one 1-based page of thread history.
