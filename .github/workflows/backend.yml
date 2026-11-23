@@ -1,16 +1,13 @@
 name: Backend (Go)
 
+# Runs on every PR (required check) and from release.yml on push to main.
+# `edited`/`ready_for_review` re-run it on stacked-PR base retargets and when a
+# draft is marked ready. Path filters are deliberately absent: required checks
+# must report on every pull request.
 on:
   workflow_call:
-  push:
-    branches: [main]
-    paths:
-      - "backend/**"
-      - ".github/workflows/backend.yml"
   pull_request:
-    paths:
-      - "backend/**"
-      - ".github/workflows/backend.yml"
+    types: [opened, edited, synchronize, reopened, ready_for_review]
 
 defaults:
   run:

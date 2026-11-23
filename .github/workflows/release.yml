@@ -3,6 +3,14 @@ name: Release (build, push, deploy)
 on:
   push:
     branches: [main]
+    # Docs/CI/test-only merges don't change shipped images; skip the redeploy.
+    paths-ignore:
+      - ".agents/**"
+      - ".github/**"
+      - "docs/**"
+      - "e2e/**"
+      - "scripts/**"
+      - "**.md"
   workflow_dispatch:
     inputs:
       image_tag:
