@@ -23,3 +23,30 @@ services:
   worker:
     extra_hosts:
       - "host.docker.internal:host-gateway"
+
+  # api-pay/worker-pay mirror the stack's api/worker with payments enabled and
+  # Stripe pointed at the FakeStripe the lt-payments driver runs on the host.
+  # They share postgres/redis/rabbitmq, so the normal stack must be up first.
+  api-pay:
+    extends:
+      file: docker-compose.yml
+      service: api
+    environment:
+      PAYMENTS_ENABLED: "true"
+      STRIPE_API_BASE_URL: ${STRIPE_API_BASE_URL:-}
+    # !override replaces api's 8080 mapping; without it both bindings merge
+    # and the second container fails to start.
+    ports: !override
+      - '${API_PAY_PORT:-127.0.0.1:8082}:8080'
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  worker-pay:
+    extends:
+      file: docker-compose.yml
+      service: worker
+    environment:
+      PAYMENTS_ENABLED: "true"
+      STRIPE_API_BASE_URL: ${STRIPE_API_BASE_URL:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

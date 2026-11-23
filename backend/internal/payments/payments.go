@@ -156,9 +156,9 @@ func (Disabled) ParseWebhook([]byte, string) (Event, error) { return Event{}, Er
 // false, Stripe when true. NewStripe refusing empty secrets means a
 // misconfigured deployment fails to start rather than silently giving
 // sessions away.
-func New(enabled bool, stripeSecretKey, stripeWebhookSecret string) (Provider, error) {
+func New(enabled bool, stripeSecretKey, stripeWebhookSecret, stripeAPIBaseURL string) (Provider, error) {
 	if !enabled {
 		return Disabled{}, nil
 	}
-	return NewStripe(stripeSecretKey, stripeWebhookSecret)
+	return NewStripe(stripeSecretKey, stripeWebhookSecret, stripeAPIBaseURL)
 }

@@ -13,20 +13,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stripe/stripe-go/v84"
 	"github.com/stripe/stripe-go/v84/webhook"
 )
 
 const testWebhookSecret = "whsec_test_secret"
 
-// newTestStripe returns a provider whose API calls land on the stub server.
+// newTestStripe returns a provider whose API calls land on the stub server,
+// wired the same way STRIPE_API_BASE_URL wires it in production.
 func newTestStripe(t *testing.T, server *httptest.Server) *Stripe {
 	t.Helper()
-	backend := stripe.GetBackendWithConfig(stripe.APIBackend, &stripe.BackendConfig{
-		URL:             stripe.String(server.URL),
-		EnableTelemetry: stripe.Bool(false),
-	})
-	p, err := NewStripe("sk_test_x", testWebhookSecret, stripe.WithBackends(&stripe.Backends{API: backend}))
+	p, err := NewStripe("sk_test_x", testWebhookSecret, server.URL)
 	if err != nil {
 		t.Fatalf("NewStripe: %v", err)
 	}

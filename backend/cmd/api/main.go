@@ -114,7 +114,7 @@ func run() error {
 	authHandler := auth.NewHandler(authSvc, limiter)
 	wsTickets := auth.NewWSTickets(rdb, auth.WSTicketTTL)
 	authHandler.SetWSTickets(wsTickets, auth.NewRateLimiter(rdb, auth.WSTicketsPerMinute, time.Minute))
-	provider, err := payments.New(cfg.PaymentsEnabled, cfg.StripeSecretKey, cfg.StripeWebhookSecret)
+	provider, err := payments.New(cfg.PaymentsEnabled, cfg.StripeSecretKey, cfg.StripeWebhookSecret, cfg.StripeAPIBaseURL)
 	if err != nil {
 		return err
 	}
