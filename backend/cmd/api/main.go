@@ -114,7 +114,7 @@ func run() error {
 	authHandler := auth.NewHandler(authSvc, limiter)
 	wsTickets := auth.NewWSTickets(rdb, auth.WSTicketTTL)
 	authHandler.SetWSTickets(wsTickets, auth.NewRateLimiter(rdb, auth.WSTicketsPerMinute, time.Minute))
-	provider, err := payments.New(cfg.PaymentsEnabled)
+	provider, err := payments.New(cfg.PaymentsEnabled, cfg.StripeSecretKey, cfg.StripeWebhookSecret, cfg.StripeAPIBaseURL)
 	if err != nil {
 		return err
 	}
@@ -138,6 +138,7 @@ func run() error {
 		coaching: coachingHandler,
 		chat:     chatHandler,
 		analysis: analysisHandler,
+		payments: provider,
 	})
 
 	server := &http.Server{
@@ -173,6 +174,7 @@ type handlers struct {
 	coaching *coaching.Handler
 	chat     *chat.Handler
 	analysis *analysis.Handler
+	payments payments.Provider
 }
 
 // newRouter builds the API routing tree: an unauthenticated health check, the
@@ -200,6 +202,9 @@ func newRouter(cfg *config.Config, authenticate func(http.Handler) http.Handler,
 	router.Route("/api/v1", func(v1 chi.Router) {
 		v1.With(httpx.LimitRequestBody(httpx.MaxJSONBodyBytes)).Mount("/auth", h.auth.Routes(authenticate))
 		v1.With(httpx.LimitRequestBody(httpx.MaxJSONBodyBytes)).Mount("/booking", h.coaching.PublicRoutes())
+		if cfg.PaymentsEnabled {
+			v1.With(httpx.LimitRequestBody(httpx.MaxJSONBodyBytes)).Mount("/payments", h.coaching.WebhookRoutes(h.payments))
+		}
 		v1.Group(func(private chi.Router) {
 			private.Use(authenticate, auth.RequireScope(auth.ScopeSession))
 			private.Use(func(next http.Handler) http.Handler {

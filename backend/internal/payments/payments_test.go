@@ -7,7 +7,7 @@ import (
 )
 
 func TestNewReturnsDisabledWhenOff(t *testing.T) {
-	p, err := New(false)
+	p, err := New(false, "", "", "")
 	if err != nil {
 		t.Fatalf("New(false) error = %v", err)
 	}
@@ -19,8 +19,11 @@ func TestNewReturnsDisabledWhenOff(t *testing.T) {
 	}
 }
 
-func TestNewFailsWhenOnWithoutProvider(t *testing.T) {
-	if _, err := New(true); !errors.Is(err, ErrNoProvider) {
-		t.Fatalf("New(true) error = %v, want ErrNoProvider", err)
+func TestNewFailsWhenOnWithoutSecrets(t *testing.T) {
+	if _, err := New(true, "", "", ""); err == nil {
+		t.Fatal("New(true) with no secrets succeeded")
+	}
+	if _, err := New(true, "sk_test_x", "", ""); err == nil {
+		t.Fatal("New(true) with no webhook secret succeeded")
 	}
 }

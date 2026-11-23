@@ -58,7 +58,7 @@ func run() error {
 		ml,
 		notifier,
 	)
-	provider, err := payments.New(cfg.PaymentsEnabled)
+	provider, err := payments.New(cfg.PaymentsEnabled, cfg.StripeSecretKey, cfg.StripeWebhookSecret, cfg.StripeAPIBaseURL)
 	if err != nil {
 		return err
 	}
