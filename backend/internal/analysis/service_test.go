@@ -3,7 +3,9 @@ package analysis
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -82,5 +84,20 @@ func TestLabelStoresAppOutcomeWithEmptySegments(t *testing.T) {
 		if segmentsType != "array" {
 			t.Errorf("segment_labels stored as jsonb %s for %s, want array", segmentsType, body)
 		}
+	}
+}
+
+func TestSubmitRejectsOversizedTranscript(t *testing.T) {
+	// Validation runs before any store access, so a dependency-free Service
+	// exercises the hard cap: 38 x maxMessageLength exceeds maxTranscriptLength
+	// while staying under the message count and per-message limits.
+	s := &Service{}
+	msgs := make([]SubmitMessage, 38)
+	for i := range msgs {
+		msgs[i] = SubmitMessage{Sender: "self", Body: strings.Repeat("x", maxMessageLength)}
+	}
+	_, err := s.Submit(context.Background(), uuid.New(), SubmitInput{Messages: msgs})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("Submit() error = %v, want ErrInvalidInput", err)
 	}
 }

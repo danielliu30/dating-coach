@@ -25,10 +25,13 @@ var (
 )
 
 const (
-	maxMessages       = 500
-	maxMessageLength  = 4000
-	defaultListLimit  = 25
-	analysisQueueKind = "analysis_ready"
+	maxMessages      = 500
+	maxMessageLength = 4000
+	// ~37k tokens: generous for a real conversation, bounded cost/abuse blast
+	// radius. Must match the analyzer's MAX_TRANSCRIPT_CHARS.
+	maxTranscriptLength = 150000
+	defaultListLimit    = 25
+	analysisQueueKind   = "analysis_ready"
 
 	// Budget for undoing a committed pending row when enqueueing it fails,
 	// which has to outlive the request context that failed.
@@ -121,12 +124,17 @@ func (s *Service) Submit(ctx context.Context, userID uuid.UUID, in SubmitInput) 
 	if len(in.Messages) > maxMessages {
 		return Result{}, fmt.Errorf("%w: at most %d messages are supported", ErrInvalidInput, maxMessages)
 	}
+	totalChars := 0
 	for i, m := range in.Messages {
 		if m.Sender != "self" && m.Sender != "match" {
 			return Result{}, fmt.Errorf("%w: messages[%d].sender must be self or match", ErrInvalidInput, i)
 		}
 		if strings.TrimSpace(m.Body) == "" || len(m.Body) > maxMessageLength {
 			return Result{}, fmt.Errorf("%w: messages[%d].body is empty or too long", ErrInvalidInput, i)
+		}
+		totalChars += len(m.Body)
+		if totalChars > maxTranscriptLength {
+			return Result{}, fmt.Errorf("%w: transcript exceeds %d characters", ErrInvalidInput, maxTranscriptLength)
 		}
 	}
 	if in.Platform == "" {
