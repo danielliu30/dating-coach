@@ -91,6 +91,17 @@ required checks pass (`build-test`, `typecheck-export`, `test`, `e2e`,
   fix the declared dependencies; if CI is red, fix the code - the queue resumes
   by itself. A manual re-check is `gh workflow run merge-gate.yml -f pr=<n>`.
 
+## Required secret: MERGE_BOT_TOKEN
+
+Merges are attributed to whoever *armed* auto-merge. GitHub suppresses all
+workflow events caused by `GITHUB_TOKEN` (anti-recursion), so merges armed by
+the workflow itself would fire no `closed` cascade and no `push`-triggered
+release. Set repo secret `MERGE_BOT_TOKEN` to a PAT (or app token) with
+`contents:write` + `pull_requests:write`; `merge-gate.yml` uses it for arming
+auto-merge and update-branch pushes, falling back to `GITHUB_TOKEN` with a
+warning. Same for the cascade's update-branch pushes: under `GITHUB_TOKEN`
+the resulting `synchronize` is suppressed and dependents stall.
+
 ## Forbidden
 
 - One PR that adds a helper, updates its callers, and adds the feature that uses it.
