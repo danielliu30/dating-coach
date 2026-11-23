@@ -1,16 +1,10 @@
 name: App (Expo/TypeScript)
 
+# Runs on every PR (required check) and from release.yml on push to main.
 on:
   workflow_call:
-  push:
-    branches: [main]
-    paths:
-      - "app/**"
-      - ".github/workflows/app.yml"
   pull_request:
-    paths:
-      - "app/**"
-      - ".github/workflows/app.yml"
+    types: [opened, edited, synchronize, reopened, ready_for_review]
 
 defaults:
   run:

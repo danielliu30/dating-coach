@@ -5,6 +5,13 @@ description: How to bring up and end-to-end test the dating-coach monorepo (Go c
 
 # End-to-end testing the dating-coach stack
 
+## CI gate and auto-merge
+Every PR runs `build-test`, `typecheck-export`, `test`, the full Playwright `e2e`,
+and `dependency-gate` as required checks on every pull request (no path filters);
+a green, dependency-unblocked PR auto-merges to `main` as a merge commit, then
+`release.yml` rebuilds and redeploys. The recipes below are for verifying
+behavior CI cannot see — a green PR does not prove UX correctness.
+
 ## Bring up the stack
 Local example secrets require an explicit `APP_ENV=development`, already set in
 `.env.example` and `e2e/.env`. Without `APP_ENV` (or when blank), Compose and Go

@@ -1,0 +1,100 @@
+name: Merge gate
+
+# Fully automated PR lifecycle:
+# - dependency-gate: required check; fails while the PR body declares
+#   "Depends on / Merge after / Blocked by #N" against unmerged PRs.
+# - enable-auto-merge: marks every PR for auto-merge (merge commit) so a green,
+#   unblocked PR merges with no human action.
+# - cascade: when a PR merges, re-runs this gate on every open PR that declared
+#   a dependency on it, and merges main into the dependent branch so its full
+#   check suite re-runs against the new base.
+# Stacked PRs (child branched off the parent's head branch) additionally get
+# their base retargeted to main by GitHub when the parent's branch is deleted
+# after merge; that fires `edited`, which also re-runs everything here.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review, closed]
+  pull_request_target:
+    types: [opened, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: PR number to re-check dependencies for
+        required: true
+
+jobs:
+  dependency-gate:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && github.event.action != 'closed')
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    steps:
+      - name: Check declared dependencies are merged
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ inputs.pr || github.event.pull_request.number }}
+        run: |
+          body=$(gh pr view "$PR" --json body --jq '.body // ""')
+          deps=$(grep -oEi '(depends on|merge after|blocked by)[:[:space:]]*#[0-9]+' <<<"$body" \
+            | grep -oE '[0-9]+$' | sort -u || true)
+          if [ -z "$deps" ]; then
+            echo "No dependencies declared on PR #$PR"; exit 0
+          fi
+          fail=0
+          for d in $deps; do
+            if [ "$d" = "$PR" ]; then echo "Ignoring self-reference #$d"; continue; fi
+            merged=$(gh pr view "$d" --json mergedAt --jq 'if .mergedAt then "merged" else "open" end' 2>/dev/null || echo "unresolvable")
+            echo "dependency #$d: $merged"
+            [ "$merged" = "merged" ] || fail=1
+          done
+          if [ "$fail" != 0 ]; then
+            echo "::error::PR #$PR has unmerged dependencies; auto-merge stays blocked until they land."
+            exit 1
+          fi
+
+  enable-auto-merge:
+    if: github.event_name == 'pull_request_target'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Enable auto-merge (merge commit)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          if [ "$(gh pr view "$PR" --json isDraft --jq .isDraft)" = "true" ]; then
+            echo "PR #$PR is a draft; auto-merge deferred until ready_for_review"; exit 0
+          fi
+          gh pr merge "$PR" --auto --merge
+
+  cascade:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.action == 'closed' &&
+      github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: write
+      pull-requests: read
+    steps:
+      - name: Re-check open PRs that depended on the merged PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MERGED: ${{ github.event.pull_request.number }}
+        run: |
+          deps=$(gh pr list --state open --json number,body --limit 200 \
+            --jq --arg re "(?i)(depends on|merge after|blocked by)[:\\s]*#$MERGED([^0-9]|\$)" \
+            '.[] | select((.body // "") | test($re)) | .number')
+          for n in $deps; do
+            echo "PR #$n declared a dependency on #$MERGED: re-running gate and updating branch"
+            gh workflow run merge-gate.yml -f "pr=$n" || true
+            # Merges the (possibly retargeted) base into the branch so its full
+            # check suite re-runs; a no-op when already up to date or on conflict.
+            gh api -X PUT "repos/$GITHUB_REPOSITORY/pulls/$n/update-branch" || true
+          done
