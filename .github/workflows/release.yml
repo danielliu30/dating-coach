@@ -97,7 +97,7 @@ jobs:
   # (configure required reviewers on it). Otherwise the free starter profile is used.
   load-test:
     needs: [build-push]
-    if: ${{ !cancelled() && vars.SCALE_PROFILE == 'production' && (inputs.image_tag || needs.build-push.result == 'success') }}
+    if: ${{ !cancelled() && vars.DEPLOY_TARGET == 'cloud-run' && vars.SCALE_PROFILE == 'production' && (inputs.image_tag || needs.build-push.result == 'success') }}
     uses: ./.github/workflows/load-test.yml
     with:
       api_url: ${{ vars.API_PUBLIC_URL }}
@@ -111,6 +111,26 @@ jobs:
     steps:
       - run: echo "production scaling approved for ${{ inputs.image_tag || github.sha }}"
 
+  # Local deploy notice. Until the repository variable DEPLOY_TARGET=cloud-run is
+  # set, the release stops here: images are already on Docker Hub tagged with the
+  # git SHA, so a deploy is `IMAGE_TAG=<sha> docker compose --profile gateway
+  # pull` then `up -d` wherever the stack should run.
+  deploy-local:
+    needs: [build-push]
+    if: >-
+      ${{ !cancelled() && github.ref == 'refs/heads/main' && (inputs.image_tag || needs.build-push.result == 'success')
+      && vars.DEPLOY_TARGET != 'cloud-run' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Print local deploy commands
+        run: |
+          echo "Cloud deploy disabled (DEPLOY_TARGET is not 'cloud-run')."
+          echo "Images published: docker.io/$DOCKERHUB_NAMESPACE/dating-coach-{backend,ml-analyzer,web,migrate}:$DEPLOY_TAG"
+          echo "Deploy locally:"
+          echo "  IMAGE_TAG=$DEPLOY_TAG docker compose --profile gateway pull"
+          echo "  IMAGE_TAG=$DEPLOY_TAG docker compose --profile gateway up -d"
+          echo "Set DEPLOY_TARGET=cloud-run (after scripts/gcp-bootstrap.sh) to restore cloud deploys."
+
   # Deploy to Google Cloud Run (one service each for api, worker, ml-analyzer and
   # web; migrations as a Cloud Run job). Images are pulled straight from Docker
   # Hub. The worker is private and scales to zero: Pub/Sub pushes jobs to it and
@@ -122,6 +142,7 @@ jobs:
     needs: [build-push, scale-approval]
     if: >-
       ${{ !cancelled() && github.ref == 'refs/heads/main' && (inputs.image_tag || needs.build-push.result == 'success')
+      && vars.DEPLOY_TARGET == 'cloud-run'
       && (vars.SCALE_PROFILE != 'production' || needs.scale-approval.result == 'success') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
