@@ -1,6 +1,10 @@
 // lt-booking load-tests the coaching-booking surface while asserting slot
 // and lifecycle correctness:
 //
+//  0. churn — staged VUs book+cancel distinct far-future slots at -rps
+//     aggregate; every -race-every iterations each VU targets the shared
+//     rotating slot instead, so same-slot contention fires continuously.
+//     Distinct-slot conflicts are impossible by construction and counted.
 //  1. slot race — every VU books the same coach+time concurrently; exactly
 //     one 201 may win, losers must get a clean 409, and the DB must hold
 //     exactly one session for that slot (exclusion constraint is the last
@@ -33,17 +37,26 @@ import (
 
 func main() {
 	base := flag.String("base", "http://localhost", "gateway base URL")
-	vus := flag.Int("vus", 6, "concurrent bookers")
+	stagesCSV := flag.String("vus", "10,20,50", "comma-separated VU counts per churn stage")
+	rps := flag.Float64("rps", 150, "aggregate booking attempts per second per stage (0 = unpaced)")
+	duration := flag.Duration("duration", 30*time.Second, "duration of each churn stage")
+	raceEvery := flag.Int64("race-every", 100, "each VU's Nth booking targets the shared rotating slot")
 	out := flag.String("out", "out", "report output directory")
 	expireWait := flag.Duration("expire-wait", 90*time.Second, "max wait for the expiry sweep")
 	flag.Parse()
+
+	stages, err := harness.Stages(*stagesCSV, *duration)
+	if err != nil {
+		log.Fatalf("%v", err)
+	}
+	maxVUs := harness.MaxVUs(stages)
 
 	tag := harness.Tag("book")
 	ctx := context.Background()
 	m := harness.NewMetrics()
 	defer harness.CleanupTag(tag)
 
-	emails, err := harness.SeedUsers(tag, 1, *vus, "user")
+	emails, err := harness.SeedUsers(tag, 1, maxVUs, "user")
 	if err != nil {
 		log.Fatalf("seed users: %v", err)
 	}
@@ -53,7 +66,7 @@ func main() {
 	}
 	coachEmail := tag + "-coach@loadtest.local"
 
-	users := make([]*harness.Client, *vus)
+	users := make([]*harness.Client, maxVUs)
 	for i := range users {
 		c := harness.NewClient(*base, m)
 		res, err := c.SignIn(ctx, emails[i], harness.SeedPassword)
@@ -73,6 +86,57 @@ func main() {
 
 	extra := map[string]any{}
 	baseSlot := time.Now().UTC().Add(7 * 24 * time.Hour).Truncate(time.Hour)
+
+	// --- Phase 0: sustained booking churn -------------------------------------
+	// Distinct-slot book+cancel at the aggregate rate; every -race-every
+	// iterations a VU targets the shared rotating slot so same-slot
+	// contention keeps firing through the stage. Distinct-slot conflicts are
+	// impossible by construction — any that appear are a real bug.
+	{
+		soloBase := time.Now().UTC().Add(30 * 24 * time.Hour).Truncate(time.Hour)
+		hotBase := time.Now().UTC().Add(90 * 24 * time.Hour).Truncate(time.Hour)
+		res := harness.RunRate(ctx, m, stages, *rps,
+			func(ctx context.Context, vu int, rate *harness.Rate) {
+				c := users[vu]
+				var seq int64
+				for rate.Wait(ctx) {
+					seq++
+					var slot time.Time
+					shared := seq%*raceEvery == 0
+					if shared {
+						slot = hotBase.Add(time.Duration(seq/(*raceEvery)) * 2 * time.Hour)
+					} else {
+						slot = soloBase.Add(time.Duration(vu)*20000*time.Hour + time.Duration(seq)*2*time.Hour)
+					}
+					s, res, err := c.BookSession(ctx, coachID, slot.Format(time.RFC3339), 60, "lt churn")
+					switch {
+					case err != nil:
+						m.Inc("churn_transport_errors")
+					case res.Status == http.StatusCreated:
+						if shared {
+							m.Inc("shared_booked")
+						} else {
+							m.Inc("solo_booked")
+						}
+						if _, err := c.CancelSession(ctx, s.ID); err != nil {
+							m.Inc("churn_cancel_failed")
+						}
+					case res.Status == http.StatusConflict:
+						if shared {
+							m.Inc("shared_conflict")
+						} else {
+							m.Inc("solo_conflict")
+						}
+					default:
+						m.Inc("churn_unexpected")
+					}
+				}
+			}, harness.ErrorRateTripwire(0.01))
+		extra["churn_stage"] = res
+		if n := m.Count("solo_conflict"); n > 0 {
+			m.Note("churn: %d conflicts on distinct slots — slot allocation overlapped", n)
+		}
+	}
 
 	// --- Phase 1: same-slot race ---------------------------------------------
 	{
@@ -108,7 +172,7 @@ func main() {
 		wg.Wait()
 		n := countSessions(coachID, slot)
 		extra["slot_race"] = map[string]any{
-			"bookers": *vus, "winners": winners, "conflicts": conflicts,
+			"bookers": maxVUs, "winners": winners, "conflicts": conflicts,
 			"unexpected": other, "db_sessions": n,
 		}
 		switch {
@@ -183,7 +247,7 @@ func main() {
 		}
 		wg.Wait()
 		extra["respond_race"] = map[string]any{
-			"sessions": *vus, "decided": won,
+			"sessions": maxVUs, "decided": won,
 			"final_consistent": finalConsistent, "final_inconsistent": finalInconsistent,
 		}
 	}
