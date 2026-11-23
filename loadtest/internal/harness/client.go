@@ -121,7 +121,13 @@ func (c *Client) call(ctx context.Context, method, path, label string, body any)
 	res, err := c.http.Do(req)
 	lat := time.Since(start)
 	if err != nil {
-		c.m.Observe(label, 0, lat)
+		// A stage-end cancellation is shutdown noise, not a real failure:
+		// record it under status -1 so error-rate tripwires ignore it.
+		if ctx.Err() != nil {
+			c.m.Observe(label, -1, lat)
+		} else {
+			c.m.Observe(label, 0, lat)
+		}
 		return nil, err
 	}
 	defer res.Body.Close()
@@ -155,7 +161,11 @@ func (c *Client) Raw(ctx context.Context, method, path, label string, body any, 
 	res, err := c.http.Do(req)
 	lat := time.Since(start)
 	if err != nil {
-		c.m.Observe(label, 0, lat)
+		if ctx.Err() != nil {
+			c.m.Observe(label, -1, lat)
+		} else {
+			c.m.Observe(label, 0, lat)
+		}
 		return nil, err
 	}
 	defer res.Body.Close()
