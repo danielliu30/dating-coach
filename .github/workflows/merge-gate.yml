@@ -42,6 +42,16 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha || github.sha }}
           sparse-checkout: scripts
           sparse-checkout-cone-mode: false
+      # Gate semantics come from the base branch; on the very first PR that
+      # introduces them (or before they exist on main), fall back to the PR head.
+      - name: Bootstrap gate scripts from PR head when absent on base
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if [ ! -f scripts/dependency-gate.sh ]; then
+            git fetch --depth 1 origin "$HEAD_SHA"
+            git checkout FETCH_HEAD -- scripts
+          fi
       - name: Check declared dependencies are merged
         id: gate
         env:
