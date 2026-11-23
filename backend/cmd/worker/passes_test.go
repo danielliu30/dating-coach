@@ -29,7 +29,7 @@ func TestSinglePassTasksRespectCancellation(t *testing.T) {
 	if _, err := notify.NewRelay(q, nil).CheckExhausted(ctx); err == nil {
 		t.Error("email check ignored cancellation")
 	}
-	provider, err := payments.New(false)
+	provider, err := payments.New(false, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
