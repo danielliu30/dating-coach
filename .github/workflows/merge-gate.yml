@@ -102,7 +102,11 @@ jobs:
     steps:
       - name: Enable auto-merge (merge commit)
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # A PAT, not GITHUB_TOKEN: merges armed by github-actions suppress the
+          # `closed`/`push` events (anti-recursion), which would silently stop
+          # the cascade AND release.yml. MERGE_BOT_TOKEN must be a PAT or app
+          # token with contents:write + pull_requests:write.
+          GH_TOKEN: ${{ secrets.MERGE_BOT_TOKEN || secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
         run: |
@@ -124,6 +128,9 @@ jobs:
           # strict required checks demand the branch be up to date with main;
           # refresh now so a PR opened before the last merge does not stall.
           gh api -X PUT "repos/$GH_REPO/pulls/$PR/update-branch" || true
+          if [ -z "${{ secrets.MERGE_BOT_TOKEN }}" ]; then
+            echo "::warning::MERGE_BOT_TOKEN is not set; this merge will be bot-attributed and downstream events (cascade, release) will be suppressed."
+          fi
 
   cascade:
     if: >-
@@ -142,7 +149,9 @@ jobs:
           sparse-checkout-cone-mode: false
       - name: Re-check open PRs that depended on the merged PR
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # update-branch pushes must be attributed to the PAT too, or the
+          # resulting synchronize events are suppressed and dependents stall.
+          GH_TOKEN: ${{ secrets.MERGE_BOT_TOKEN || secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
           MERGED: ${{ github.event.pull_request.number }}
         run: bash scripts/merge-cascade.sh "$MERGED"
