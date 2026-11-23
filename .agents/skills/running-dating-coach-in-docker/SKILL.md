@@ -53,6 +53,7 @@ production is fully automated. Watch a deploy with
 ### GitHub secrets / variables
 | Name | Kind | Purpose |
 |---|---|---|
+| `MERGE_BOT_TOKEN` | secret | PAT (`contents:write` + `pull_requests:write`) so workflow-armed merges fire `closed`/`push` events — without it the merge cascade and `release.yml` never run for auto-merged PRs |
 | `DOCKERHUB_USERNAME` | secret | Hub account + image namespace |
 | `DOCKERHUB_TOKEN` | secret | Hub PAT (Read & Write) |
 | `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_KEY` | secret | SSH target for the deploy job (user must be in the `docker` group) |
