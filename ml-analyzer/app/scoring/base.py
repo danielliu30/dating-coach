@@ -129,8 +129,16 @@ def meta_line(messages: Sequence[TranscriptMessage]) -> Optional[str]:
     )
 
 
-def transcript(messages: Sequence[TranscriptMessage], meta: bool = False) -> str:
-    """One ``[position] sender: body`` line per message; ``meta=True`` prepends ``meta_line`` when it has timestamps."""
-    lines = [f"[{m.position}] {m.sender}: {m.body}" for m in sorted(messages, key=lambda m: m.position)]
+def transcript(messages: Sequence[TranscriptMessage], meta: bool = False, flatten: bool = False) -> str:
+    """One ``[position] sender: body`` line per message; ``meta=True`` prepends ``meta_line`` when it has timestamps.
+
+    ``flatten=True`` collapses each body onto one line so a multi-line chat
+    body cannot forge transcript lines or break the prompt layout. The LLM
+    prompt uses it; the trained scorer keeps the raw form it was trained on.
+    """
+    def body(m: TranscriptMessage) -> str:
+        return " ".join(m.body.split()) if flatten else m.body
+
+    lines = [f"[{m.position}] {m.sender}: {body(m)}" for m in sorted(messages, key=lambda m: m.position)]
     header = meta_line(messages) if meta else None
     return "\n".join([header, *lines] if header else lines)

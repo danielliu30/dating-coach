@@ -183,7 +183,7 @@ class LLMScorer(Scorer):
             f"{focus_area_spec(request.focus_areas)}"
             f"{profile_spec(request.profile)}"
             f"Use exactly these segment boundaries (start-end message positions): {segment_spec}\n\n"
-            f"Transcript (context only, review just the self lines):\n{transcript(request.messages)}\n\n"
+            f"Transcript (context only, review just the self lines):\n{transcript(request.messages, flatten=True)}\n\n"
             f"Customer messages to review, with the reply each one drew:\n{self_message_digest(request.messages)}"
         )
 
