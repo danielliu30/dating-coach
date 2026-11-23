@@ -277,6 +277,15 @@ func (c *Client) Verify(ctx context.Context, email, code string) (*Resp, error) 
 	return res, nil
 }
 
+// ResendVerification posts /auth/resend-verification. It answers 202 even for
+// unknown or already-verified addresses, so only the scraped code proves a
+// resend actually happened.
+func (c *Client) ResendVerification(ctx context.Context, email string) (*Resp, error) {
+	return c.call(ctx, http.MethodPost, "/auth/resend-verification", "POST /auth/resend-verification", map[string]string{
+		"email": email,
+	})
+}
+
 // Me fetches /auth/me.
 func (c *Client) Me(ctx context.Context) (*Resp, error) {
 	return c.call(ctx, http.MethodGet, "/auth/me", "GET /auth/me", nil)
