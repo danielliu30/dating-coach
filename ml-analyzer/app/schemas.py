@@ -7,7 +7,7 @@ so the Go backend never changes when the model behind it does.
 
 from __future__ import annotations
 
-from typing import Any, List, Literal, Optional
+from typing import Any, ClassVar, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -134,6 +134,22 @@ class AnalyzeRequest(BaseModel):
         if not isinstance(value, list) or not all(isinstance(key, str) for key in value):
             return value
         return [p.key for p in pillars_by_keys(value)]
+
+    # Hard bounds: 500 messages x 4000 chars is ~2 MB of prompt input, so the
+    # per-field caps alone leave a huge cost/abuse surface. Total transcript is
+    # capped at ~37k tokens and positions must be distinct so padding via
+    # replayed positions is impossible. Mirrors the backend's
+    # maxTranscriptLength.
+    MAX_TRANSCRIPT_CHARS: ClassVar[int] = 150_000
+
+    @model_validator(mode="after")
+    def _transcript_within_limits(self) -> "AnalyzeRequest":
+        if sum(len(m.body) for m in self.messages) > self.MAX_TRANSCRIPT_CHARS:
+            raise ValueError(f"transcript exceeds {self.MAX_TRANSCRIPT_CHARS} characters")
+        positions = [m.position for m in self.messages]
+        if len(set(positions)) != len(positions):
+            raise ValueError("message positions must be distinct")
+        return self
 
 
 class Segment(BaseModel):

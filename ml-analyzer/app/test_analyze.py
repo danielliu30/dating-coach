@@ -150,6 +150,23 @@ def test_transcript_flatten_blocks_forged_lines() -> None:
     )
 
 
+def test_analyze_request_rejects_oversized_transcript() -> None:
+    """The total transcript is hard-capped even when count and per-message caps hold."""
+    messages = [Message(position=i, sender="self", body="x" * 4000) for i in range(38)]
+    with pytest.raises(ValidationError, match="150000"):
+        AnalyzeRequest(conversation_id="c", messages=messages)
+
+
+def test_analyze_request_rejects_duplicate_positions() -> None:
+    """Replayed positions can't pad the prompt past the distinct-message contract."""
+    messages = [
+        Message(position=0, sender="self", body="a"),
+        Message(position=0, sender="match", body="b"),
+    ]
+    with pytest.raises(ValidationError, match="distinct"):
+        AnalyzeRequest(conversation_id="c", messages=messages)
+
+
 def test_meta_line_without_timestamps_is_omitted() -> None:
     """Old exports and requests without ``sent_at`` keep the plain transcript."""
     messages = [_timed(0, "self", None), _timed(1, "match", None)]
