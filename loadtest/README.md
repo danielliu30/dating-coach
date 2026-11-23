@@ -45,6 +45,25 @@ Reports land in `loadtest/out/<component>-<unix>.json` with per-endpoint
 latency/status histograms, counters, finding notes, and pg_stat_statements
 deltas.
 
+## Standard load profile
+
+Components expose the same ramp flags so a run is comparable across surfaces:
+
+```sh
+-vus 10,20,50   # staged concurrency: 10 clients, then 20, then 50
+-rps 150        # aggregate actions/sec across each stage's clients
+-duration 30s   # per stage
+```
+
+`-rps` is open-loop and **aggregate**: `harness.Rate` ticks 150×/s shared by
+every VU in the stage (15 rps each at 10 VUs, 3 at 50). It gates each
+component's *primary action* — the signup call, signin attempt, message send,
+booking attempt, analysis submit. Consequential calls (`/me`, result polls,
+history reads) stay ungated because real clients issue them anyway; the
+report's endpoint counts show the true request rate. `-rps 0` runs unpaced
+(closed-loop, as fast as VUs can go). Tripwires record the last stage that
+stayed healthy when the stack saturates.
+
 ## Conventions for writing a component
 
 - One binary per surface; keep scenario logic in the cmd package and shared

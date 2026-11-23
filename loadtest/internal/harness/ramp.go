@@ -3,6 +3,8 @@ package harness
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -36,26 +38,62 @@ func ErrorRateTripwire(max float64) Tripwire {
 	}
 }
 
+// Stages parses a comma-separated VU list ("10,20,50") into ramp stages of
+// duration dur — the standard profile every component offers via -vus.
+func Stages(vusCSV string, dur time.Duration) ([]Stage, error) {
+	var out []Stage
+	for _, s := range strings.Split(vusCSV, ",") {
+		n, err := strconv.Atoi(strings.TrimSpace(s))
+		if err != nil || n < 1 {
+			return nil, fmt.Errorf("bad VU list %q", vusCSV)
+		}
+		out = append(out, Stage{Name: fmt.Sprintf("%dvu", n), VUs: n, Duration: dur})
+	}
+	return out, nil
+}
+
+// MaxVUs returns the largest stage's VU count — the number of fixtures a
+// component must seed before the ramp starts.
+func MaxVUs(stages []Stage) int {
+	max := 0
+	for _, s := range stages {
+		if s.VUs > max {
+			max = s.VUs
+		}
+	}
+	return max
+}
+
 // Run executes each stage in order: VUs workers call fn in a loop until the
 // stage duration elapses, then the tripwire is checked. It returns the last
 // stage that stayed healthy, or the stage that tripped.
 func Run(ctx context.Context, m *Metrics, stages []Stage, fn func(ctx context.Context, vu int), trip Tripwire) Result {
+	return RunRate(ctx, m, stages, 0, func(c context.Context, vu int, _ *Rate) { fn(c, vu) }, trip)
+}
+
+// RunRate is Run with open-loop pacing: each stage gets one shared Rate
+// ticking rps times a second (aggregate across all VUs in the stage, not per
+// VU) and hands it to fn, which gates its primary action with rate.Wait.
+// rps <= 0 means unpaced — workers loop as fast as they can.
+func RunRate(ctx context.Context, m *Metrics, stages []Stage, rps float64, fn func(ctx context.Context, vu int, rate *Rate), trip Tripwire) Result {
 	if len(stages) == 0 {
 		return Result{Reason: "no stages configured"}
 	}
 	var lastGood Stage
 	for _, s := range stages {
+		rate := NewRate(rps)
 		stageCtx, cancel := context.WithTimeout(ctx, s.Duration)
 		var wg sync.WaitGroup
 		for i := 0; i < s.VUs; i++ {
 			wg.Add(1)
 			go func(id int) {
 				defer wg.Done()
-				fn(stageCtx, id)
+				fn(stageCtx, id, rate)
 			}(i)
 		}
 		wg.Wait()
 		cancel()
+		rate.Close()
 		if tripped, reason := trip(m); tripped {
 			m.Note("tripwire at stage %s (%d VUs): %s", s.Name, s.VUs, reason)
 			return Result{LastGood: lastGood, Tripped: true, Reason: fmt.Sprintf("stage %s (%d VUs): %s", s.Name, s.VUs, reason)}
