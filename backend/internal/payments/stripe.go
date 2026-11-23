@@ -22,14 +22,23 @@ type Stripe struct {
 
 // NewStripe builds the provider. It refuses to start without both secrets so
 // a deployment cannot enable payments while unable to charge or unable to
-// verify webhook signatures. Extra ClientOptions exist so tests can point the
-// SDK at a stub server via WithBackends.
-func NewStripe(secretKey, webhookSecret string, opts ...stripe.ClientOption) (*Stripe, error) {
+// verify webhook signatures. apiBaseURL overrides the Stripe API base URL —
+// empty uses the SDK default — so tests and local load runs can point the
+// provider at a stub server.
+func NewStripe(secretKey, webhookSecret, apiBaseURL string) (*Stripe, error) {
 	if secretKey == "" {
 		return nil, errors.New("STRIPE_SECRET_KEY is required when PAYMENTS_ENABLED=true")
 	}
 	if webhookSecret == "" {
 		return nil, errors.New("STRIPE_WEBHOOK_SECRET is required when PAYMENTS_ENABLED=true")
+	}
+	opts := []stripe.ClientOption{}
+	if apiBaseURL != "" {
+		backend := stripe.GetBackendWithConfig(stripe.APIBackend, &stripe.BackendConfig{
+			URL:             stripe.String(apiBaseURL),
+			EnableTelemetry: stripe.Bool(false),
+		})
+		opts = append(opts, stripe.WithBackends(&stripe.Backends{API: backend}))
 	}
 	return &Stripe{client: stripe.NewClient(secretKey, opts...), webhookSecret: webhookSecret}, nil
 }
