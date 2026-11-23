@@ -152,17 +152,13 @@ func (Disabled) Refund(context.Context, string, string) error { return ErrDisabl
 // mounted when payments are off.
 func (Disabled) ParseWebhook([]byte, string) (Event, error) { return Event{}, ErrDisabled }
 
-// ErrNoProvider is returned by New when payments are enabled but no concrete
-// provider is compiled in yet.
-var ErrNoProvider = errors.New("payments enabled but no payment provider is configured")
-
 // New returns the Provider for the configured mode: Disabled when enabled is
-// false. Enabling payments fails with ErrNoProvider until a concrete provider
-// exists, so a misconfigured deployment refuses to start rather than
-// silently giving sessions away.
-func New(enabled bool) (Provider, error) {
+// false, Stripe when true. NewStripe refusing empty secrets means a
+// misconfigured deployment fails to start rather than silently giving
+// sessions away.
+func New(enabled bool, stripeSecretKey, stripeWebhookSecret string) (Provider, error) {
 	if !enabled {
 		return Disabled{}, nil
 	}
-	return nil, ErrNoProvider
+	return NewStripe(stripeSecretKey, stripeWebhookSecret)
 }
