@@ -9,7 +9,6 @@ on:
       - ".github/**"
       - "docs/**"
       - "e2e/**"
-      - "loadtest/**"
       - "scripts/**"
       - "**.md"
   workflow_dispatch:
