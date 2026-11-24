@@ -20,6 +20,7 @@ x-backend-env: &backend-env
   ML_SERVICE_URL: http://ml-analyzer:8000
   ML_SERVICE_TIMEOUT: ${ML_SERVICE_TIMEOUT:-60s}
   ANALYSIS_QUEUE: ${ANALYSIS_QUEUE:-conversation.analysis}
+  ANALYSIS_PREFETCH: ${ANALYSIS_PREFETCH:-4}
   ACCOUNT_DELETION_QUEUE: ${ACCOUNT_DELETION_QUEUE:-account.deletion}
   DEAD_LETTER_ALERT_PERIOD: ${DEAD_LETTER_ALERT_PERIOD:-1m}
   PUBLIC_APP_URL: ${PUBLIC_APP_URL:-http://localhost}
@@ -134,6 +135,7 @@ services:
       LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-45}
       ML_SEGMENT_SIZE: ${ML_SEGMENT_SIZE:-6}
       ML_MODEL_DIR: ${ML_MODEL_DIR:-/models/segment-scorer}
+      UVICORN_WORKERS: ${ML_UVICORN_WORKERS:-1}
     ports: ['${ML_ANALYZER_PORT:-127.0.0.1:8000}:8000']
 
   # Static Expo web bundle (`--profile gateway`). Empty EXPO_PUBLIC_API_URL =

@@ -86,6 +86,29 @@ func TestResetResendCooldown(t *testing.T) {
 	}
 }
 
+func TestAnalysisPrefetch(t *testing.T) {
+	setRequired(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AnalysisPrefetch != 4 {
+		t.Fatal(cfg.AnalysisPrefetch)
+	}
+	t.Setenv("ANALYSIS_PREFETCH", "16")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AnalysisPrefetch != 16 {
+		t.Fatal(cfg.AnalysisPrefetch)
+	}
+	t.Setenv("ANALYSIS_PREFETCH", "0")
+	if _, err := Load(); err == nil {
+		t.Fatal("want ANALYSIS_PREFETCH=0 rejected")
+	}
+}
+
 func TestVerifyResendCooldown(t *testing.T) {
 	setRequired(t)
 	t.Setenv("VERIFY_RESEND_COOLDOWN", "")
