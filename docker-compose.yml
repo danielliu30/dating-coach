@@ -1,5 +1,14 @@
 name: dating-coach
 
+# Docker json-file logs are unbounded by default; cap them so long-running
+# services cannot fill the host disk. The app-logs volume has its own
+# rotation via scripts/rotate-logs.sh.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: '10m'
+    max-file: '3'
+
 x-backend-env: &backend-env
   APP_ENV: ${APP_ENV:-production}
   DATABASE_URL: postgres://${POSTGRES_USER:-datingcoach}:${POSTGRES_PASSWORD:-datingcoach}@postgres:5432/${POSTGRES_DB:-datingcoach}?sslmode=disable
@@ -54,6 +63,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    logging: *default-logging
 
   redis:
     # Valkey: the Linux Foundation Redis fork — wire-compatible (RESP), same
@@ -70,6 +80,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    logging: *default-logging
 
   rabbitmq:
     image: rabbitmq:3-management-alpine
@@ -86,6 +97,7 @@ services:
       interval: 10s
       timeout: 10s
       retries: 10
+    logging: *default-logging
 
   # Applies backend/migrations, then exits.
   migrate:
@@ -99,6 +111,7 @@ services:
       - -path=/migrations
       - -database=postgres://${POSTGRES_USER:-datingcoach}:${POSTGRES_PASSWORD:-datingcoach}@postgres:5432/${POSTGRES_DB:-datingcoach}?sslmode=disable
       - up
+    logging: *default-logging
 
   api:
     image: ${DOCKERHUB_NAMESPACE:-danielliu30}/dating-coach-backend:${IMAGE_TAG:-latest}
@@ -114,6 +127,7 @@ services:
     # tooling (Expo dev server, curl) that talks to the API directly.
     ports: ['${API_PORT:-127.0.0.1:8080}:8080']
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -129,6 +143,7 @@ services:
     volumes: ['app-logs:/logs']
     environment: *backend-env
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -158,6 +173,7 @@ services:
       ML_MODEL_DIR: ${ML_MODEL_DIR:-/models/segment-scorer}
       UVICORN_WORKERS: ${ML_UVICORN_WORKERS:-1}
     ports: ['${ML_ANALYZER_PORT:-127.0.0.1:8000}:8000']
+    logging: *default-logging
 
   # Static Expo web bundle (`--profile gateway`). Empty EXPO_PUBLIC_API_URL =
   # same origin as the page, so REST and the chat WebSocket both go through
@@ -173,6 +189,7 @@ services:
     profiles: ['gateway']
     ports: ['${WEB_PORT:-127.0.0.1:3000}:80']
     restart: unless-stopped
+    logging: *default-logging
 
   # Optional public entrypoint (`--profile gateway`): / to web, /api and
   # /healthz to api, /ml/ to ml-analyzer. Skip it when a host nginx fronts the
@@ -183,6 +200,7 @@ services:
     ports: ['${NGINX_PORT:-80}:80']
     volumes: ['./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro']
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       api:
         condition: service_started
@@ -203,6 +221,7 @@ services:
       MP_SMTP_AUTH_ACCEPT_ANY: 1
       MP_SMTP_AUTH_ALLOW_INSECURE: 1
     restart: unless-stopped
+    logging: *default-logging
 
   # Optional Postgres UI (`--profile tools`) on :5050.
   pgadmin:
@@ -218,6 +237,7 @@ services:
       postgres:
         condition: service_healthy
     restart: unless-stopped
+    logging: *default-logging
 
 volumes:
   postgres-data:
