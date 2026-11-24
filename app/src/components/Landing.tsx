@@ -107,25 +107,25 @@ function SectionTitle({
   );
 }
 
+/** The nav destinations the signed-out landing splits into. */
+export type LandingPage = 'product' | 'how' | 'about';
+
 /**
- * Scrolling "Product" and "About" story for the signed-out landing, drawn from
- * the Dating Humane manifesto. Renders inside the auth ScrollView; the caller
- * attaches `productRef`/`aboutRef` to enable anchor scrolling from the nav.
+ * The signed-out landing story, drawn from the Dating Humane manifesto, split
+ * into nav pages so each top-nav link is a destination rather than a scroll
+ * anchor: `product` tells the story, `how` shows the internals, `about` is
+ * the manifesto. Renders inside the auth ScrollView.
  */
-export function Landing({
-  productRef,
-  aboutRef,
-}: {
-  productRef: React.RefObject<View | null>;
-  aboutRef: React.RefObject<View | null>;
-}): React.ReactElement {
+export function Landing({ page }: { page: LandingPage }): React.ReactElement {
   const { width } = useWindowDimensions();
   const twoUp = width >= 760;
 
   return (
     <View style={styles.root}>
+      {page === 'product' ? (
+        <>
       {/* Product */}
-      <View ref={productRef} collapsable={false} style={styles.section}>
+      <View style={styles.section}>
         <SectionTitle
           eyebrow="Dating has a feedback problem"
           title="You try something. You see what happens. Then you're left guessing."
@@ -235,19 +235,24 @@ export function Landing({
           </View>
         </View>
       </View>
+        </>
+      ) : null}
 
-      {/* How it works */}
-      <View style={styles.section}>
-        <SectionTitle
-          eyebrow="How it works"
-          title="Three tools, one job — keeping you in the driver's seat."
-          accent="Live chat, booking and conversation feedback, built to stay out of your way."
-        />
-        <FeatureTabs />
-      </View>
+      {page === 'how' ? (
+        // How it works
+        <View style={styles.section}>
+          <SectionTitle
+            eyebrow="How it works"
+            title="Three tools, one job — keeping you in the driver's seat."
+            accent="Live chat, booking and conversation feedback, built to stay out of your way."
+          />
+          <FeatureTabs />
+        </View>
+      ) : null}
 
-      {/* About */}
-      <View ref={aboutRef} collapsable={false} style={[styles.section, styles.sectionDark]}>
+      {page === 'about' ? (
+        // About
+        <View style={[styles.section, styles.sectionDark]}>
         <LinearGradient colors={gradients.dusk} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.fill} />
         <View style={styles.darkOrb} />
         <SectionTitle
@@ -268,10 +273,12 @@ export function Landing({
           A coach doesn't play the game for you. They help you understand yourself well enough to make better
           decisions on your own — and the wins stay yours.
         </Text>
-      </View>
+        </View>
+      ) : null}
 
-      {/* Patterns */}
-      <View style={styles.section}>
+      {page === 'how' ? (
+        // Patterns
+        <View style={styles.section}>
         <View style={[styles.split, twoUp && styles.splitRow, { alignItems: 'stretch' }]}>
           <View style={[{ gap: 18 }, twoUp && { flex: 1.2 }]}>
             <SectionTitle
@@ -306,10 +313,12 @@ export function Landing({
             <Text style={styles.imageCaption}>Advice that grows from your actual experiences.</Text>
           </View>
         </View>
-      </View>
+        </View>
+      ) : null}
 
-      {/* Closing */}
-      <View style={[styles.section, styles.sectionSunken, { alignItems: 'center' }]}>
+      {page === 'about' ? (
+        // Closing
+        <View style={[styles.section, styles.sectionSunken, { alignItems: 'center' }]}>
         <SectionTitle
           center
           eyebrow="What we're really building"
@@ -328,7 +337,8 @@ export function Landing({
           patterns. But you should be the person driving your dating life — don't let what comes your way define
           what you're allowed to want.
         </Text>
-      </View>
+        </View>
+      ) : null}
 
       <View style={styles.footer}>
         <View style={styles.footerBrand}>
