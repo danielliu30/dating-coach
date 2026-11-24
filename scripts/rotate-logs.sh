@@ -55,7 +55,7 @@ docker run --rm \
     -v "$APP_LOGS_VOLUME":/logs \
     alpine sh -c '
 set -e
-for f in /logs/*.log; do
+for f in /logs/*.log /logs/*.jsonl; do
     [ -f "$f" ] || continue
     [ "$(stat -c %s "$f")" -gt "$MAX_BYTES" ] || continue
     i=$KEEP
@@ -70,12 +70,12 @@ for f in /logs/*.log; do
 done
 # Delete anything beyond the kept generations (e.g. after lowering LOG_KEEP)
 # or older than the retention window.
-find /logs -name "*.log.*" -type f | while read -r old; do
+find /logs \( -name "*.log.*" -o -name "*.jsonl.*" \) -type f | while read -r old; do
     gen="${old##*.}"
     case "$gen" in (*[!0-9]*) continue;; esac
     if [ "$gen" -gt "$KEEP" ]; then
         rm -f "$old"; echo "dropped $old (beyond $KEEP generations)"
     fi
 done
-find /logs -name "*.log.*" -type f -mtime +"$RETENTION_DAYS" -print -delete
+find /logs \( -name "*.log.*" -o -name "*.jsonl.*" \) -type f -mtime +"$RETENTION_DAYS" -print -delete
 '

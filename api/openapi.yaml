@@ -1562,7 +1562,7 @@ components:
 
     MeteringSnapshot:
       type: object
-      description: One scrape of the metering sidecar — everything is gathered externally (docker socket API + nginx edge log + deploy history file); the app carries no metrics endpoints.
+      description: One aggregation pass over the metrics data store — JSONL files a dedicated collector appends to the shared log volume (docker stats, service replicas, edge-request buckets, deploy history); the app carries no metrics endpoints.
       properties:
         ts: { type: string, format: date-time }
         services:
