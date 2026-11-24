@@ -42,9 +42,16 @@ load_env() {
     [ -f "$ENV_FILE" ] || return 0
     local line key value
     while IFS= read -r line || [ -n "$line" ]; do
+        # Export every KEY=VALUE line: docker stack deploy interpolates
+        # deploy/stack.yml from the process environment only — there is no
+        # --env-file support — so stack vars (JWT_SECRET, RABBITMQ_*,
+        # LLM_*, …) must all be present. Environment always wins.
         case "$line" in
-            DEPLOY_*=*|POSTGRES_*=*|DOCKERHUB_*=*|IMAGE_TAG=*|APP_ENV=*) ;;
+            ''|\#*|*=*) ;;
             *) continue ;;
+        esac
+        case "$line" in
+            ''|\#*) continue ;;
         esac
         key="${line%%=*}"
         value="${line#*=}"
@@ -59,23 +66,36 @@ DEPLOY_DIR="${DEPLOY_DIR:-$REPO_DIR}"
 DEPLOY_STACK="${DEPLOY_STACK:-dating-coach}"
 DEPLOY_GIT_REF="${DEPLOY_GIT_REF:-origin/main}"
 DEPLOY_HEALTH_URL="${DEPLOY_HEALTH_URL:-http://localhost/healthz}"
-IMAGE_TAG="${IMAGE_TAG:-latest}"
 POSTGRES_USER="${POSTGRES_USER:-datingcoach}"
 POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-datingcoach}"
 POSTGRES_DB="${POSTGRES_DB:-datingcoach}"
 DOCKERHUB_NAMESPACE="${DOCKERHUB_NAMESPACE:-danielliu30}"
 NET="${DEPLOY_STACK}_appnet"
-MIGRATE_IMAGE="${DOCKERHUB_NAMESPACE}/dating-coach-migrate:${IMAGE_TAG}"
 
 log() { echo "deploy-watch[$(date -u +%Y-%m-%dT%H:%M:%SZ)]: $*"; }
 
 git -C "$DEPLOY_DIR" fetch --quiet
 local_sha="$(git -C "$DEPLOY_DIR" rev-parse HEAD)"
 remote_sha="$(git -C "$DEPLOY_DIR" rev-parse "$DEPLOY_GIT_REF")"
-if [ "$local_sha" = "$remote_sha" ]; then
+
+# Compare against the last SUCCESSFULLY deployed sha, not the checkout's
+# HEAD: if a deploy fails midway (after the ff-merge), HEAD already equals
+# remote and a HEAD check would skip the retry forever. The marker is an
+# untracked file, so it does not trip the dirty-tree guard below.
+MARKER="$DEPLOY_DIR/.deployed-sha"
+deployed_sha="$(cat "$MARKER" 2>/dev/null || true)"
+if [ "$deployed_sha" = "$remote_sha" ]; then
     exit 0
 fi
-log "new revision $remote_sha (was ${local_sha:0:8})"
+log "deploying $remote_sha (checkout at ${local_sha:0:8}, last deployed ${deployed_sha:-none})"
+
+# Immutable per-commit image tags: the build below labels every image with
+# the deploy SHA and stack.yml's ${IMAGE_TAG} refs resolve to it. A mutable
+# :latest tag would make rollback_config redeploy the same tag — rolling
+# "back" to the identical broken image.
+IMAGE_TAG="${IMAGE_TAG:-${remote_sha:0:12}}"
+export IMAGE_TAG
+MIGRATE_IMAGE="${DOCKERHUB_NAMESPACE}/dating-coach-migrate:${IMAGE_TAG}"
 
 # Fail-closed guards: never deploy over uncommitted work or a non-main branch.
 branch="$(git -C "$DEPLOY_DIR" rev-parse --abbrev-ref HEAD)"
@@ -103,7 +123,10 @@ docker network inspect "$NET" >/dev/null 2>&1 \
 # bring infra up first and converge on its own.
 if docker service ls -q -f "name=${DEPLOY_STACK}_postgres" | grep -q .; then
     log "running migrate gate"
-    docker run --rm --network "$NET" "$MIGRATE_IMAGE" \
+    # MSYS2_ARG_CONV_EXCL is scoped to this call only: -path=/migrations must
+    # reach docker verbatim (Git Bash otherwise rewrites it to a Windows
+    # path), while other commands still need /c/ path translation.
+    MSYS2_ARG_CONV_EXCL='*' docker run --rm --network "$NET" "$MIGRATE_IMAGE" \
         -path=/migrations \
         -database="postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable" \
         up
@@ -129,6 +152,7 @@ while :; do
 done
 
 if curl -fsS --max-time 10 "$DEPLOY_HEALTH_URL" >/dev/null; then
+    echo "$remote_sha" > "$MARKER"
     log "deployed ${remote_sha:0:8} — $DEPLOY_HEALTH_URL healthy"
 else
     log "converged but $DEPLOY_HEALTH_URL not healthy" >&2
