@@ -213,6 +213,27 @@ services:
       ml-analyzer:
         condition: service_started
 
+  # Container/service snapshotter: appends docker stats (per task) and service
+  # replica counts to /logs/metrics-{stats,services}.jsonl every
+  # METRICS_INTERVAL seconds. Reads the socket read-only; bounded by the same
+  # rotate-logs.sh rotation as the app logs.
+  metrics:
+    image: docker:cli
+    volumes:
+      - '/var/run/docker.sock:/var/run/docker.sock:ro'
+      - 'app-logs:/logs'
+    command:
+      - 'sh'
+      - '-c'
+      - 'while true; do ts="$$(date -u +%Y-%m-%dT%H:%M:%SZ)"; docker stats --no-stream --format "{{json .}}" | sed "s/^{/{\"ts\":\"$$ts\",/" >> /logs/metrics-stats.jsonl; docker service ls --format "{{json .}}" 2>/dev/null | sed "s/^{/{\"ts\":\"$$ts\",/" >> /logs/metrics-services.jsonl; sleep $${METRICS_INTERVAL:-15}; done'
+    healthcheck:
+      test: ['CMD-SHELL', 'test -f /logs/metrics-stats.jsonl && [ $$(( $$(date +%s) - $$(date -r /logs/metrics-stats.jsonl +%s) )) -lt 60 ]']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+    logging: *default-logging
+
   # Local inbox (`--profile mail`): catches every email the api/worker send so
   # verification codes and booking mails can be read at http://localhost:8025.
   # Point the backend at it with SMTP_HOST=mailpit SMTP_PORT=1025 (no auth);
