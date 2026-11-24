@@ -4,6 +4,7 @@ import React from 'react';
 import { Image, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 
 import { colors, elevation, fonts, gradients, radii, type } from '../theme';
+import { FeatureTabs } from './FeatureTabs';
 import { IconDisc, type Hue } from './kit';
 import type { IconName } from './ui';
 
@@ -233,6 +234,16 @@ export function Landing({
             </Text>
           </View>
         </View>
+      </View>
+
+      {/* How it works */}
+      <View style={styles.section}>
+        <SectionTitle
+          eyebrow="How it works"
+          title="Three tools, one job — keeping you in the driver's seat."
+          accent="Live chat, booking and conversation feedback, built to stay out of your way."
+        />
+        <FeatureTabs />
       </View>
 
       {/* About */}
