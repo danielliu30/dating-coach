@@ -1,6 +1,6 @@
 name: Load test
 
-# Gate for the "production" scaling profile in release.yml. It must pass before
+# Gate reserved for the "production" scaling profile; it must pass before
 # a deploy may use the production settings. Placeholder: replace the step below
 # with the real load test (it receives the API URL and the image tag being
 # released) and keep it failing on an unmet threshold.

@@ -104,7 +104,7 @@ jobs:
         env:
           # A PAT, not GITHUB_TOKEN: merges armed by github-actions suppress the
           # `closed`/`push` events (anti-recursion), which would silently stop
-          # the cascade AND release.yml. MERGE_BOT_TOKEN must be a PAT or app
+          # the cascade AND notify-infra.yml. MERGE_BOT_TOKEN must be a PAT or app
           # token with contents:write + pull_requests:write.
           GH_TOKEN: ${{ secrets.MERGE_BOT_TOKEN || secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}

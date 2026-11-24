@@ -238,7 +238,7 @@ WebSockets and the same-origin model are unaffected: the browser-facing origin s
 
 ## Deployment flow (CI/CD)
 
-`.github/workflows/release.yml` turns a merge to `main` into a production deploy on Google Cloud Run: tests, then images pushed to Docker Hub tagged with the commit SHA (`latest` only for the tip of `main`), then a migrations job and one Cloud Run service each for the API, worker, ML analyzer and web bundle. Postgres is on Neon, Redis on Upstash, and the worker is driven by Pub/Sub push and Cloud Scheduler instead of idling. Setup, required accounts, GitHub variables and rollback: [docs/deploy-cloud-run.md](docs/deploy-cloud-run.md).
+Deployment lives in [danielliu30/dating-coach-infra](https://github.com/danielliu30/dating-coach-infra): merges to `main` dispatch there, and its four path-filtered pipelines (db, backend, ml-analyzer, web) e2e-gate the app SHA, build and push images to Docker Hub, then roll Cloud Run out through a coverage/latency/fault-gated wave staircase with automatic rollback and a release window. Postgres is on Neon, Redis on Upstash, and the worker is driven by Pub/Sub push and Cloud Scheduler instead of idling. Setup and runbooks live in the infra repo.
 
 The nginx and HTTPS sections above still apply to a self-hosted compose stack.
 

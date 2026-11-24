@@ -1,6 +1,7 @@
 name: E2E (Playwright against the full stack)
 
-# Runs on every PR (required check) and from release.yml on push to main.
+# Runs on every PR (required check); the dating-coach-infra repo mirrors this
+# suite as the deploy gate at the exact app SHA being released.
 # No path filters: required checks must report on every pull request.
 on:
   workflow_call:

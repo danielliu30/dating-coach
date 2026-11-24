@@ -1,6 +1,6 @@
 # dating-coach guardrails
 
-Monorepo: `backend/` (Go: `cmd/api` + `cmd/worker`, `internal/*`, `migrations/`, sqlc), `app/` (Expo SDK 57 web + jest), `ml-analyzer/` (FastAPI + heuristic/LLM scorers), `e2e/` (Playwright against the compose gateway), `.github/` + `scripts/` (CI, merge gate, release).
+Monorepo: `backend/` (Go: `cmd/api` + `cmd/worker`, `internal/*`, `migrations/`, sqlc), `app/` (Expo SDK 57 web + jest), `ml-analyzer/` (FastAPI + heuristic/LLM scorers), `e2e/` (Playwright against the compose gateway), `.github/` + `scripts/` (CI, merge gate; deploy pipelines live in dating-coach-infra).
 
 Each service directory has its own `AGENTS.md` — read it before working there.
 
@@ -18,7 +18,7 @@ Each service directory has its own `AGENTS.md` — read it before working there.
 ## Ops skills
 
 - `.agents/skills/testing-dating-coach/` — local stack bring-up, click-through recipes, adversarial scenarios.
-- `.agents/skills/running-dating-coach-in-docker/` — images, release pipeline, `DEPLOY_TARGET` switch, local vs Cloud Run deploys, rollback, backups.
+- `.agents/skills/running-dating-coach-in-docker/` — images, local vs Cloud Run deploys (pipelines live in `danielliu30/dating-coach-infra`), rollback, backups.
 - `.agents/skills/coding-efficiency/` — efficient-change playbook: guardrails first, smallest diff, tests with the code, cheapest sufficient verify.
 - `.agents/skills/dating-coach-verify/` — per-service gate commands, targeted test invocations, change-type → minimum-check guide.
 - `.agents/skills/review/` — severity-ordered review of local diffs or GitHub PRs against the repo non-negotiables.

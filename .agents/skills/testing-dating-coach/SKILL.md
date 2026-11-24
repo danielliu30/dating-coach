@@ -9,8 +9,8 @@ description: How to bring up and end-to-end test the dating-coach monorepo (Go c
 Every PR runs `build-test`, `typecheck-export`, `test`, the full Playwright `e2e`,
 and `dependency-gate` as required checks on every pull request (no path filters);
 a green, dependency-unblocked PR auto-merges to `main` as a merge commit, then
-`release.yml` rebuilds and redeploys (skipped for docs/CI/test-only merges via
-`paths-ignore`). The recipes below are for verifying
+`notify-infra.yml` hands the merge to the `dating-coach-infra` deploy
+pipelines. The recipes below are for verifying
 behavior CI cannot see — a green PR does not prove UX correctness.
 
 ## Bring up the stack
