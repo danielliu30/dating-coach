@@ -329,11 +329,21 @@ func main() {
 					missing += d
 					m.Note("fan-out: thread %d got %d/%d coach replies on its socket", i, got[i], sent[i])
 				}
+				if d := got[i] - int64(sent[i]); d > 0 {
+					m.Add("fanout_dup", d)
+					m.Note("fan-out: thread %d received %d duplicate events (%d delivered for %d sent)", i, d, got[i], sent[i])
+				}
+			}
+			gotPerThread := make([]int64, maxVUs)
+			for i := range got {
+				gotPerThread[i] = got[i]
 			}
 			extra["fanout"] = map[string]any{
 				"threads": maxVUs, "sent_per_thread": *fanMsgs,
 				"delivered": delivered, "missing": missing,
 				"cross_thread": m.Count("fanout_cross_thread"),
+				"dup":          m.Count("fanout_dup"),
+				"sent":         sent, "got": gotPerThread,
 			}
 
 			// Persistence: each fan reply must live in exactly its own thread.
