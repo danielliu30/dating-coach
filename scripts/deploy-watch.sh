@@ -42,9 +42,16 @@ load_env() {
     [ -f "$ENV_FILE" ] || return 0
     local line key value
     while IFS= read -r line || [ -n "$line" ]; do
+        # Export every KEY=VALUE line: docker stack deploy interpolates
+        # deploy/stack.yml from the process environment only — there is no
+        # --env-file support — so stack vars (JWT_SECRET, RABBITMQ_*,
+        # LLM_*, …) must all be present. Environment always wins.
         case "$line" in
-            DEPLOY_*=*|POSTGRES_*=*|DOCKERHUB_*=*|IMAGE_TAG=*|APP_ENV=*) ;;
+            ''|\#*|*=*) ;;
             *) continue ;;
+        esac
+        case "$line" in
+            ''|\#*) continue ;;
         esac
         key="${line%%=*}"
         value="${line#*=}"
@@ -59,13 +66,11 @@ DEPLOY_DIR="${DEPLOY_DIR:-$REPO_DIR}"
 DEPLOY_STACK="${DEPLOY_STACK:-dating-coach}"
 DEPLOY_GIT_REF="${DEPLOY_GIT_REF:-origin/main}"
 DEPLOY_HEALTH_URL="${DEPLOY_HEALTH_URL:-http://localhost/healthz}"
-IMAGE_TAG="${IMAGE_TAG:-latest}"
 POSTGRES_USER="${POSTGRES_USER:-datingcoach}"
 POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-datingcoach}"
 POSTGRES_DB="${POSTGRES_DB:-datingcoach}"
 DOCKERHUB_NAMESPACE="${DOCKERHUB_NAMESPACE:-danielliu30}"
 NET="${DEPLOY_STACK}_appnet"
-MIGRATE_IMAGE="${DOCKERHUB_NAMESPACE}/dating-coach-migrate:${IMAGE_TAG}"
 
 log() { echo "deploy-watch[$(date -u +%Y-%m-%dT%H:%M:%SZ)]: $*"; }
 
@@ -76,6 +81,14 @@ if [ "$local_sha" = "$remote_sha" ]; then
     exit 0
 fi
 log "new revision $remote_sha (was ${local_sha:0:8})"
+
+# Immutable per-commit image tags: the build below labels every image with
+# the deploy SHA and stack.yml's ${IMAGE_TAG} refs resolve to it. A mutable
+# :latest tag would make rollback_config redeploy the same tag — rolling
+# "back" to the identical broken image.
+IMAGE_TAG="${IMAGE_TAG:-${remote_sha:0:12}}"
+export IMAGE_TAG
+MIGRATE_IMAGE="${DOCKERHUB_NAMESPACE}/dating-coach-migrate:${IMAGE_TAG}"
 
 # Fail-closed guards: never deploy over uncommitted work or a non-main branch.
 branch="$(git -C "$DEPLOY_DIR" rev-parse --abbrev-ref HEAD)"
