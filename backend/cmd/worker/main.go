@@ -17,7 +17,6 @@ import (
 	"github.com/danielliu30/dating-coach/backend/internal/auth"
 	"github.com/danielliu30/dating-coach/backend/internal/coaching"
 	"github.com/danielliu30/dating-coach/backend/internal/config"
-	"github.com/danielliu30/dating-coach/backend/internal/httpx"
 	"github.com/danielliu30/dating-coach/backend/internal/notify"
 	"github.com/danielliu30/dating-coach/backend/internal/payments"
 	"github.com/danielliu30/dating-coach/backend/internal/store"
@@ -75,9 +74,8 @@ func run() error {
 	denylist := auth.NewDenylist(rdb, max(cfg.JWTTTL, cfg.VerifyTokenTTL, cfg.RefreshTokenTTL))
 	auth.ReplayRevocationsOnStartup(ctx, cfg.QueueBackend, denylist, pg.Queries)
 	deleter := account.NewWorker(pg.Queries, denylist)
-	stats := httpx.NewStats(nil)
 	if cfg.QueueBackend == "pubsub" {
-		return runHTTP(ctx, cfg, pg.Queries, worker, deleter, denylist, bookings, notifier, provider.Enabled(), stats)
+		return runHTTP(ctx, cfg, pg.Queries, worker, deleter, denylist, bookings, notifier, provider.Enabled())
 	}
 
 	slog.Info("worker started",
@@ -92,7 +90,7 @@ func run() error {
 	// alongside the consumers rather than replacing them.
 	httpErr := make(chan error, 1)
 	go func() {
-		httpErr <- runHTTP(ctx, cfg, pg.Queries, worker, deleter, denylist, bookings, notifier, provider.Enabled(), stats)
+		httpErr <- runHTTP(ctx, cfg, pg.Queries, worker, deleter, denylist, bookings, notifier, provider.Enabled())
 	}()
 
 	var wg sync.WaitGroup

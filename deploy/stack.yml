@@ -222,14 +222,11 @@ services:
     image: nginx:1.27-alpine
     networks: [appnet]
     ports: ['${NGINX_PORT:-80}:80']
-    volumes: ['app-logs:/logs:ro']
+    # rw: nginx writes the metrics access log here for metering to read.
+    volumes: ['app-logs:/logs']
     configs:
       - source: nginx_default_conf
         target: /etc/nginx/conf.d/default.conf
-      - source: metrics_dashboard_html
-        target: /usr/share/nginx/html/metrics/dashboard.html
-      - source: metrics_dashboard_js
-        target: /usr/share/nginx/html/metrics/dashboard.js
     healthcheck:
       test: ['CMD-SHELL', 'nginx -t -q || exit 1']
       interval: 10s
@@ -240,22 +237,20 @@ services:
       <<: *roll-stateless
       placement: *manager-only
 
-  # Container/service snapshotter feeding the metrics dashboard: appends
-  # docker stats (per task) and service replica counts to
-  # /logs/metrics-{stats,services}.jsonl every METRICS_INTERVAL seconds.
-  # Socket is mounted read-only; rotation bounds the files.
-  metrics:
-    image: docker:cli
+  # Ops metering sidecar: scrapes the docker socket (services/tasks/container
+  # stats) and the nginx edge log into /api/snapshot, serves the dashboard
+  # nginx proxies at /metrics/. Socket and log volume are read-only; all
+  # metrics work stays outside the app services.
+  metering:
+    image: ${DOCKERHUB_NAMESPACE:-danielliu30}/dating-coach-metering:${IMAGE_TAG:-latest}
     networks: [appnet]
+    environment:
+      STACK_NAME: ${STACK_NAME:-dating-coach}
     volumes:
       - '/var/run/docker.sock:/var/run/docker.sock:ro'
-      - 'app-logs:/logs'
-    command:
-      - 'sh'
-      - '-c'
-      - 'while true; do ts="$$(date -u +%Y-%m-%dT%H:%M:%SZ)"; docker stats --no-stream --format "{{json .}}" | sed "s/^{/{\"ts\":\"$$ts\",/" >> /logs/metrics-stats.jsonl; docker service ls --format "{{json .}}" 2>/dev/null | sed "s/^{/{\"ts\":\"$$ts\",/" >> /logs/metrics-services.jsonl; sleep $${METRICS_INTERVAL:-15}; done'
+      - 'app-logs:/logs:ro'
     healthcheck:
-      test: ['CMD-SHELL', 'test -f /logs/metrics-stats.jsonl && [ $$(( $$(date +%s) - $$(date -r /logs/metrics-stats.jsonl +%s) )) -lt 60 ]']
+      test: ['CMD-SHELL', 'wget -q -O /dev/null http://localhost:9090/healthz || exit 1']
       interval: 30s
       timeout: 5s
       retries: 3
@@ -272,12 +267,6 @@ configs:
   nginx_default_conf:
     name: nginx_default_conf-${NGINX_CONF_VERSION:-v1}
     file: ../nginx/default.conf
-  metrics_dashboard_html:
-    name: metrics_dashboard_html-${NGINX_CONF_VERSION:-v1}
-    file: ../nginx/metrics-dashboard.html
-  metrics_dashboard_js:
-    name: metrics_dashboard_js-${NGINX_CONF_VERSION:-v1}
-    file: ../nginx/metrics-dashboard.js
 
 # attachable so the migrate gate in deploy-watch.sh can `docker run` on it
 # before rolling the app. External so the script can create it on first boot

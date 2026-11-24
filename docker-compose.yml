@@ -200,9 +200,7 @@ services:
     ports: ['${NGINX_PORT:-80}:80']
     volumes:
       - './nginx/default.conf:/etc/nginx/conf.d/default.conf:ro'
-      - './nginx/metrics-dashboard.html:/usr/share/nginx/html/metrics/dashboard.html:ro'
-      - './nginx/metrics-dashboard.js:/usr/share/nginx/html/metrics/dashboard.js:ro'
-      - 'app-logs:/logs:ro'
+      - 'app-logs:/logs'
     restart: unless-stopped
     logging: *default-logging
     depends_on:
@@ -213,21 +211,22 @@ services:
       ml-analyzer:
         condition: service_started
 
-  # Container/service snapshotter: appends docker stats (per task) and service
-  # replica counts to /logs/metrics-{stats,services}.jsonl every
-  # METRICS_INTERVAL seconds. Reads the socket read-only; bounded by the same
-  # rotate-logs.sh rotation as the app logs.
-  metrics:
-    image: docker:cli
+  # Ops metering sidecar: collects swarm service/task state, container stats
+  # (docker socket, read-only) and the nginx edge log into /api/snapshot, and
+  # serves the admin-gated dashboard nginx proxies at /metrics/. Keeps all
+  # metrics work outside the app services.
+  metering:
+    build:
+      context: ./backend
+      target: metering
+    image: ${DOCKERHUB_NAMESPACE:-danielliu30}/dating-coach-metering:${IMAGE_TAG:-latest}
     volumes:
       - '/var/run/docker.sock:/var/run/docker.sock:ro'
-      - 'app-logs:/logs'
-    command:
-      - 'sh'
-      - '-c'
-      - 'while true; do ts="$$(date -u +%Y-%m-%dT%H:%M:%SZ)"; docker stats --no-stream --format "{{json .}}" | sed "s/^{/{\"ts\":\"$$ts\",/" >> /logs/metrics-stats.jsonl; docker service ls --format "{{json .}}" 2>/dev/null | sed "s/^{/{\"ts\":\"$$ts\",/" >> /logs/metrics-services.jsonl; sleep $${METRICS_INTERVAL:-15}; done'
+      - 'app-logs:/logs:ro'
+    environment:
+      STACK_NAME: ${STACK_NAME:-dating-coach}
     healthcheck:
-      test: ['CMD-SHELL', 'test -f /logs/metrics-stats.jsonl && [ $$(( $$(date +%s) - $$(date -r /logs/metrics-stats.jsonl +%s) )) -lt 60 ]']
+      test: ['CMD-SHELL', 'wget -q -O /dev/null http://localhost:9090/healthz || exit 1']
       interval: 30s
       timeout: 5s
       retries: 3
