@@ -1,0 +1,24 @@
+name: Notify infra repo of merges
+
+# Deployment lives in danielliu30/dating-coach-infra. Every merge to main
+# dispatches app-merge there; its four deploy pipelines path-filter on the
+# diff between before/after and decide what to build + deploy.
+#
+# Requires a token that can write the infra repo: INFRA_DISPATCH_TOKEN, or
+# MERGE_BOT_TOKEN when that PAT isn't scoped to this repo only.
+on:
+  push:
+    branches: [main]
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch app-merge to dating-coach-infra
+        env:
+          GH_TOKEN: ${{ secrets.INFRA_DISPATCH_TOKEN || secrets.MERGE_BOT_TOKEN }}
+        run: |
+          gh api repos/danielliu30/dating-coach-infra/dispatches \
+            -f event_type=app-merge \
+            -F "client_payload[sha]=$GITHUB_SHA" \
+            -F "client_payload[before]=${{ github.event.before }}"
