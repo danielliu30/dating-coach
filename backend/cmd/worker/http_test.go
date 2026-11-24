@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/danielliu30/dating-coach/backend/internal/analysis"
+	"github.com/danielliu30/dating-coach/backend/internal/httpx"
 )
 
 func TestPushHandler(t *testing.T) {
@@ -59,7 +60,7 @@ func TestWorkerTasks(t *testing.T) {
 		tasks[name] = func(ctx context.Context) (any, error) { calls = append(calls, name); return 1, nil }
 	}
 	tasks["fail"] = func(context.Context) (any, error) { return nil, errors.New("failed") }
-	router := workerRouter(nil, nil, 5, tasks)
+	router := workerRouter(nil, nil, 5, tasks, httpx.NewStats(nil))
 	for _, tt := range []struct {
 		method, path string
 		status       int
@@ -133,7 +134,7 @@ func TestWorkerBatchReportsEveryTask(t *testing.T) {
 			}
 			w := httptest.NewRecorder()
 			path := "/tasks/batch?task=" + strings.Join(tt.names, "&task=")
-			workerRouter(nil, nil, 5, tasks).ServeHTTP(w, httptest.NewRequest("POST", path, nil))
+			workerRouter(nil, nil, 5, tasks, httpx.NewStats(nil)).ServeHTTP(w, httptest.NewRequest("POST", path, nil))
 			if w.Code != tt.status || !reflect.DeepEqual(calls, tt.names) {
 				t.Fatalf("status=%d calls=%v", w.Code, calls)
 			}

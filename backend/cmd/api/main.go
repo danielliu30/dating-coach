@@ -134,7 +134,8 @@ func run() error {
 	chatHandler.SetRevocations(denylist)
 	analysisHandler := analysis.NewHandler(analysis.NewService(pg.Pool, pg.Queries, queue), cfg.ProfileScoreEnabled)
 
-	router := newRouter(cfg, auth.Middleware(issuer, wsTickets, denylist), handlers{
+	stats := httpx.NewStats(hub.SocketCount)
+	router := newRouter(cfg, auth.Middleware(issuer, wsTickets, denylist), stats, handlers{
 		auth:     authHandler,
 		coaching: coachingHandler,
 		chat:     chatHandler,
@@ -184,10 +185,10 @@ type handlers struct {
 // under, which authenticates the caller and then demands a session-scoped
 // token. authenticate only verifies the token's signature and expiry, so no
 // route costs a database round trip before reaching its handler.
-func newRouter(cfg *config.Config, authenticate func(http.Handler) http.Handler, h handlers) http.Handler {
+func newRouter(cfg *config.Config, authenticate func(http.Handler) http.Handler, stats *httpx.Stats, h handlers) http.Handler {
 	router := chi.NewRouter()
 	router.Use(httpx.SecurityHeaders)
-	router.Use(middleware.RequestID, auth.TrustedProxyMiddleware(cfg.TrustedProxyCIDRs, cfg.TrustedProxyHops), middleware.Recoverer, middleware.Logger)
+	router.Use(middleware.RequestID, auth.TrustedProxyMiddleware(cfg.TrustedProxyCIDRs, cfg.TrustedProxyHops), middleware.Recoverer, middleware.Logger, stats.Middleware)
 	router.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   cfg.CORSOrigins,
 		AllowedMethods:   []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodOptions},
@@ -199,6 +200,9 @@ func newRouter(cfg *config.Config, authenticate func(http.Handler) http.Handler,
 	router.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		httpx.JSON(w, http.StatusOK, map[string]string{"status": "ok", "env": cfg.Env})
 	})
+	// In-process counters for the self-hosted metrics dashboard; stays
+	// dependency-free like /healthz. The gateway gates it behind admin auth.
+	router.Get("/stats", stats.Handler)
 
 	router.Route("/api/v1", func(v1 chi.Router) {
 		v1.With(httpx.LimitRequestBody(httpx.MaxJSONBodyBytes)).Mount("/auth", h.auth.Routes(authenticate))
