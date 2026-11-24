@@ -6,77 +6,93 @@
 <style>
   :root { color-scheme: dark; }
   body { margin: 0; background: #0d1117; color: #c9d1d9;
-         font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+         font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
   .bar { position: sticky; top: 0; z-index: 2; background: #161b22;
          padding: 8px 18px; border-bottom: 1px solid #21262d; font-size: 12px; }
   .bar a { color: #58a6ff; text-decoration: none; }
-  .bar .nav { color: #8b949e; margin-bottom: 6px; }
+  .bar .nav { color: #8b949e; margin-bottom: 6px; display: flex; gap: 14px; align-items: center; }
+  #grep { background: #0d1117; color: #c9d1d9; border: 1px solid #30363d;
+          border-radius: 4px; padding: 3px 8px; font: inherit; width: 340px; }
+  #grep::placeholder { color: #484f58; }
   #now { display: flex; gap: 18px; align-items: baseline; flex-wrap: wrap; }
   #now .comp { font-size: 15px; font-weight: 700; color: #e6edf3; }
   #now .stat { color: #8b949e; }
   #now .stat b { color: #a5d6ff; font-weight: 600; }
   #now .fl { color: #f85149; font-weight: 600; }
   #now .idle { color: #8b949e; }
-  #term { padding: 8px 0 60vh; }
-  .ln { padding: 0 18px; white-space: pre-wrap; word-break: break-all; }
-  .caller { display: inline-block; min-width: 92px; font-weight: 700; color: #e6edf3; }
-  .op { color: #d29922; font-weight: 600; }
-  .banner { margin-top: 14px; padding: 7px 18px; background: #1c2333;
-            border-left: 3px solid #58a6ff; color: #e6edf3; font-weight: 600; }
-  .flags { color: #f85149; font-weight: 600; }
+  #term { padding: 8px 18px 60vh; white-space: pre-wrap; word-break: break-all; }
+  .ln { min-height: 1.55em; }
+  .banner { color: #79c0ff; font-weight: 600; }
+  .caller { color: #e6edf3; font-weight: 700; }
+  .errtok, .flags, .err { color: #f85149; font-weight: 600; }
   .done { color: #3fb950; }
   .info { color: #d29922; }
-  .err { color: #f85149; }
   .dim { color: #6e7681; }
-  .skip { color: #484f58; font-size: 11px; padding-left: 110px; }
+  .skip { color: #484f58; }
+  mark { background: #9e6a03; color: #fff; }
 </style>
 </head>
 <body>
 <div class="bar">
-  <div class="nav"><a href="/">⟵ components table</a> · live tail of <code>out/run.log</code></div>
+  <div class="nav"><a href="/">⟵ components</a>
+    <input id="grep" placeholder="grep: text or /regex/i — e.g. ERR|FLAG, vus=50, journey_book">
+    <span id="grepinfo" class="dim"></span>
+  </div>
   <div id="now"><span class="idle">waiting…</span></div>
 </div>
 <div id="term">connecting…</div>
 <script>
 const term = document.getElementById("term");
 const now = document.getElementById("now");
+const grep = document.getElementById("grep");
+const grepinfo = document.getElementById("grepinfo");
 const esc = s => String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 const num = n => Number(n).toLocaleString("en-US");
 let suite = null;
 fetch("/api/suite", {cache: "no-store"}).then(r => r.json()).then(j => { suite = j.components ? j : null; }).catch(() => {});
 
-// Parse a progress tick: [caller] vus=NN s=i/t | phase=name | t=…
-// Returns {caller, ctx} or null. ctx identifies the stage/phase so repeated
-// ticks of the same group can be pruned to just the latest.
+// A progress tick: [caller] vus=NN s=i/t | phase=name | t=…
 function progOf(line) {
   const m = line.match(/^\[(\S+)\](?:\s+vus=(\d+)\s+s=(\d+\/\d+)|\s+phase=(\S+))?\s+t=/);
   if (!m) return null;
   return { caller: m[1], ctx: m[2] ? `vus${m[2]}@${m[3]}` : (m[4] || "") };
 }
 
-function renderProg(line) {
-  // Natural line, caller in its own column, operation (vus/stage/phase) colored.
-  let m = line.match(/^(\[\S+\])(.*)$/);
-  const caller = esc(m[1].slice(1, -1));
-  let rest = esc(m[2]);
-  rest = rest.replace(/\b(vus=\d+ s=\d+\/\d+|phase=\S+)/, '<span class="op">$1</span>');
-  rest = rest.replace(/\bobs=(\d+)/, 'obs=<b>$1</b>');
-  rest = rest.replace(/\bflags=(\S+)/, '<span class="flags">⚠ $1</span>');
-  return `<div class="ln"><span class="caller">${caller}</span>${rest}</div>`;
+// Light-touch styling on otherwise-raw lines: caller tag, ERR/FLAG tokens,
+// banner color, failure keywords. Text itself is untouched for greppability.
+function render(line) {
+  let cls = "ln", h = esc(line);
+  if (progOf(line)) {
+    h = h.replace(/^\[(\S+)\]/, '<span class="caller">[$1]</span>')
+         .replace(/\bflags=(\S+)/, '<span class="flags">flags=$1</span>')
+         .replace(/\b(ERR|FLAG)\b/, '<span class="errtok">$1</span>');
+  } else if (/^==\s+lt-/.test(line)) {
+    cls = "ln banner";
+  } else if (/\bERR\b|\bFLAG\b|flags=/.test(line)) {
+    h = h.replace(/\b(ERR|FLAG)\b/, '<span class="errtok">$1</span>');
+    cls = "ln err";
+  } else if (/report:|OK —|passed|clean/i.test(line)) {
+    cls = "ln done";
+  } else if (/fail|error|trip|warn/i.test(line)) {
+    cls = "ln info";
+  } else {
+    cls = "ln dim";
+  }
+  return `<div class="${cls}">${h}</div>`;
 }
 
-function row(line) {
-  if (progOf(line)) return renderProg(line);
-  let m;
-  if (m = line.match(/^==\s+(lt-\S+)\s+(.*?)==\s*$/))
-    return `<div class="banner">▸ ${esc(m[1])} <span class="dim">${esc(m[2])}</span></div>`;
-  if (/report:|OK|passed|clean/i.test(line))
-    return `<div class="ln done">${esc(line)}</div>`;
-  if (/dashboard|terminal|healthz/.test(line))
-    return `<div class="ln info">${esc(line)}</div>`;
-  if (/fail|error|trip|warn/i.test(line))
-    return `<div class="ln err">${esc(line)}</div>`;
-  return `<div class="ln dim">${esc(line)}</div>`;
+let filter = "";
+grep.addEventListener("input", () => { filter = grep.value.trim(); tickLog(); });
+
+function matcher() {
+  if (!filter) return null;
+  if (filter.length > 2 && filter[0] === "/" && filter.lastIndexOf("/") > 0) {
+    const i = filter.lastIndexOf("/");
+    try { return new RegExp(filter.slice(1, i), filter.slice(i + 1) || "i"); }
+    catch (e) { grepinfo.textContent = "bad regex"; }
+  }
+  const f = filter.toLowerCase();
+  return { test: l => l.toLowerCase().includes(f) };
 }
 
 async function tickLog() {
@@ -85,10 +101,20 @@ async function tickLog() {
     if (!r.ok) { term.textContent = "log unavailable"; return; }
     const atBottom = window.innerHeight + window.scrollY >= document.body.scrollHeight - 80;
     const lines = (await r.text()).split("\n").filter(l => l.trim());
+    const re = matcher();
 
-    // Prune: per caller+operation group keep only the last tick; collapsed
-    // runs show a small "·· n ticks" marker where they were.
-    const groups = {}; // caller|ctx -> {first, last, n}
+    if (re) {
+      // Grep mode: raw matching lines only, no pruning.
+      const hits = lines.filter(l => re.test(l));
+      grepinfo.textContent = `${hits.length}/${lines.length}`;
+      term.innerHTML = hits.map(l => `<div class="ln">${esc(l)}</div>`).join("");
+      return;
+    }
+    grepinfo.textContent = "";
+
+    // Default view: raw lines; repeated progress ticks per caller+stage
+    // collapse to the latest plus a "·· n earlier ticks" marker.
+    const groups = {};
     lines.forEach((l, i) => {
       const p = progOf(l);
       if (!p) return;
@@ -97,21 +123,19 @@ async function tickLog() {
       g.last = i; g.n++;
       groups[k] = g;
     });
-
     const out = [];
     lines.forEach((l, i) => {
       const p = progOf(l);
       if (p) {
         const g = groups[p.caller + "|" + p.ctx];
         if (i === g.last) {
-          if (g.n > 1) out.push(`<div class="ln skip">·· ${g.n - 1} earlier ${p.caller} tick${g.n > 2 ? "s" : ""} at ${esc(p.ctx)}</div>`);
-          out.push(renderProg(l));
+          if (g.n > 1) out.push(`<div class="ln skip">·· ${g.n - 1} earlier ${esc(p.caller)} tick${g.n > 2 ? "s" : ""} at ${esc(p.ctx)}</div>`);
+          out.push(render(l));
         }
-        return; // mid-group ticks dropped
+        return;
       }
-      out.push(row(l));
+      out.push(render(l));
     });
-
     term.innerHTML = out.join("");
     if (atBottom) window.scrollTo(0, document.body.scrollHeight);
   } catch (e) {}
@@ -128,18 +152,20 @@ async function tickNow() {
       .map(([k, v]) => `<span class="fl">⚠ ${esc(k)}=${v}</span>`).join(" ");
     const ctx = s.vus
       ? `<span class="stat">stage <b>${s.stage_idx}/${s.stage_total} · ${esc(s.stage)}</b>` +
-        ` · <b>${s.vus}</b> concurrent clients` +
+        ` · <b>${s.vus}</b> concurrent` +
         (s.stage_duration_s ? ` · <b>${Number(s.stage_elapsed_s).toFixed(0)}/${Number(s.stage_duration_s).toFixed(0)}s</b>` : "") +
         `</span>`
       : (s.stage ? `<span class="stat">phase: <b>${esc(s.stage)}</b></span>` : "");
     const pos = suite && suite.components.includes(s.component)
       ? `<span class="stat">component <b>${suite.components.indexOf(s.component) + 1}/${suite.components.length}</b></span>`
       : "";
+    const errs = (s.errors || []).length
+      ? `<span class="fl">${s.errors.length} recent err</span>` : "";
     now.innerHTML =
       `<span class="comp">▶ ${esc(s.component)}</span>` + pos + ctx +
       `<span class="stat"><b>${num(s.obs_total)}</b> calls</span>` +
       `<span class="stat"><b>${Number(s.obs_rate).toFixed(1)}</b>/s</span>` +
-      (flags || '<span class="stat">flags: none</span>');
+      (flags || '<span class="stat">flags: none</span>') + errs;
   } catch (e) {}
 }
 

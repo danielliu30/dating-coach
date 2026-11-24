@@ -120,16 +120,16 @@ func main() {
 							m.Inc("solo_booked")
 						}
 						if _, err := c.CancelSession(ctx, s.ID); err != nil {
-							m.Inc("churn_cancel_failed")
+							m.Failf("churn_cancel_failed", "vu=%d session=%s: %v", vu, s.ID, err)
 						}
 					case res.Status == http.StatusConflict:
 						if shared {
 							m.Inc("shared_conflict")
 						} else {
-							m.Inc("solo_conflict")
+							m.Failf("solo_conflict", "vu=%d distinct slot %s got 409", vu, slot.Format(time.RFC3339))
 						}
 					default:
-						m.Inc("churn_unexpected")
+						m.Failf("churn_unexpected", "vu=%d book → %d", vu, res.Status)
 					}
 				}
 			}, harness.ErrorRateTripwire(0.01))
@@ -200,7 +200,7 @@ func main() {
 			slot := baseSlot.Add(time.Duration(2+i) * 2 * time.Hour).Format(time.RFC3339)
 			s, res, err := u.BookSession(ctx, coachID, slot, 60, "lt respond")
 			if err != nil || res.Status != http.StatusCreated {
-				m.Inc("respond_setup_book_failed")
+				m.Failf("respond_setup_book_failed", "slot %s: err=%v status=%d", slot, err, harness.Status(res))
 				continue
 			}
 			wg.Add(1)
@@ -226,15 +226,14 @@ func main() {
 				var winningAction string
 				switch {
 				case st["confirm"] == http.StatusOK && st["decline"] == http.StatusOK:
-					m.Note("respond race: both confirm and decline returned 200 for one session")
-					m.Inc("respond_double_win")
+					m.Failf("respond_double_win", "session %s: confirm+decline both 200", s.ID)
 					return
 				case st["confirm"] == http.StatusOK:
 					winningAction = "confirm"
 				case st["decline"] == http.StatusOK:
 					winningAction = "decline"
 				default:
-					m.Inc("respond_no_winner")
+					m.Failf("respond_no_winner", "session %s: confirm=%d decline=%d", s.ID, st["confirm"], st["decline"])
 					return
 				}
 				atomic.AddInt64(&won, 1)
@@ -339,8 +338,7 @@ func main() {
 						m.Inc("rebook_after_expiry_ok")
 						cancelSessionQuiet(ctx, u, s2.ID)
 					default:
-						m.Inc("rebook_after_expiry_failed")
-						m.Note("rebook after expiry got %d: %s", res2.Status, res2.ErrBody())
+						m.Failf("rebook_after_expiry_failed", "rebook slot %s → %d: %s", slot, res2.Status, res2.ErrBody())
 					}
 				}
 				extra["expiry"] = map[string]any{"final": final}

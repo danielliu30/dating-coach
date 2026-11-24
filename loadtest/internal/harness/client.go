@@ -75,6 +75,15 @@ type Resp struct {
 	Body    []byte
 }
 
+// Status returns r.Status, or -2 for a nil response (the transport-error
+// path) so failure details can print a status unconditionally.
+func Status(r *Resp) int {
+	if r == nil {
+		return -2
+	}
+	return r.Status
+}
+
 // Decode unmarshals the JSON body into v.
 func (r *Resp) Decode(v any) error {
 	if len(r.Body) == 0 {
@@ -127,6 +136,7 @@ func (c *Client) call(ctx context.Context, method, path, label string, body any)
 			c.m.Observe(label, -1, lat)
 		} else {
 			c.m.Observe(label, 0, lat)
+			c.m.ErrOnce("tx:"+label, "%s transport error: %v", label, err)
 		}
 		return nil, err
 	}
@@ -165,6 +175,7 @@ func (c *Client) Raw(ctx context.Context, method, path, label string, body any, 
 			c.m.Observe(label, -1, lat)
 		} else {
 			c.m.Observe(label, 0, lat)
+			c.m.ErrOnce("tx:"+label, "%s transport error: %v", label, err)
 		}
 		return nil, err
 	}

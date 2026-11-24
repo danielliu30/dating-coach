@@ -86,10 +86,11 @@ func main() {
 						m.Inc("signup_ok")
 						var s harness.Session
 						if err := res.Decode(&s); err != nil || s.Token == "" || s.User.Email != email {
-							m.Inc("signup_bad_session")
+							m.Failf("signup_bad_session", "%s: decode=%v token_set=%v email=%q",
+								email, err, s.Token != "", s.User.Email)
 						}
 					default:
-						m.Inc("signup_unexpected_status")
+						m.Failf("signup_unexpected_status", "%s signup → %d", email, res.Status)
 					}
 					// One in four iterations races the shared email.
 					if atomic.AddInt64(&signupSeq, 1)%4 == 0 {
@@ -138,26 +139,30 @@ func main() {
 						continue
 					case res.Status != http.StatusOK:
 						m.Inc("signin_rejected")
+						m.ErrOnce("signin", "%s signin → %d", email, res.Status)
 						continue
 					}
 					var s harness.Session
 					if err := res.Decode(&s); err != nil || s.User.Email != email || s.Token == "" {
-						m.Inc("signin_bad_session")
+						m.Failf("signin_bad_session", "%s: decode=%v email=%q token_set=%v",
+							email, err, s.User.Email, s.Token != "")
 						continue
 					}
 					me, err := c.Me(ctx)
 					if err != nil || me.Status != http.StatusOK {
 						m.Inc("me_failed")
+						m.ErrOnce("me", "%s /me: err=%v status=%d", email, err, harness.Status(me))
 						continue
 					}
 					var u harness.User
 					if err := me.Decode(&u); err != nil || u.Email != email || u.ID != s.User.ID {
-						m.Inc("identity_crossed")
+						m.Failf("identity_crossed", "%s session owned by %s/%s", email, u.Email, u.ID)
 						continue
 					}
 					out, err := c.SignOut(ctx)
 					if err != nil || out.Status != http.StatusOK {
 						m.Inc("signout_failed")
+						m.ErrOnce("signout", "%s signout: err=%v status=%d", email, err, harness.Status(out))
 					}
 					m.Inc("churn_round_trips")
 				}
@@ -346,13 +351,14 @@ func main() {
 				atomic.AddInt64(&crossAccepted, 1)
 				var s harness.Session
 				if r.Decode(&s) == nil && s.Token != "" && s.User.Email != accts[1].email {
-					m.Inc("verify_wrong_account")
+					m.Failf("verify_wrong_account", "code for %s verified %s",
+						accts[0].email, s.User.Email)
 				}
 				m.Note("verify desync: another account's code was accepted")
 			case r.Status == http.StatusBadRequest || r.Status == http.StatusUnauthorized:
 				m.Inc("code_cross_rejected")
 			default:
-				m.Inc("code_cross_unexpected")
+				m.Failf("code_cross_unexpected", "cross-code verify → %d", r.Status)
 			}
 		}
 
@@ -369,18 +375,18 @@ func main() {
 				defer verifyWG.Done()
 				res, err := a.client.Verify(ctx, a.email, a.code)
 				if err != nil || res.Status != http.StatusOK {
-					m.Inc("verify_failed")
+					m.Failf("verify_failed", "%s verify → err=%v status=%d", a.email, err, harness.Status(res))
 					return
 				}
 				var s harness.Session
 				if err := res.Decode(&s); err == nil && s.Token != "" && s.User.Email != a.email {
-					m.Inc("verify_wrong_account")
+					m.Failf("verify_wrong_account", "own-code verify of %s produced session for %s", a.email, s.User.Email)
 					return
 				}
 				me, err := a.client.Me(ctx)
 				var u harness.User
 				if err != nil || me.Status != http.StatusOK || me.Decode(&u) != nil || u.Email != a.email {
-					m.Inc("verify_desync")
+					m.Failf("verify_desync", "%s: /me → err=%v status=%d email=%q", a.email, err, harness.Status(me), u.Email)
 					return
 				}
 				atomic.AddInt64(&verifyOK, 1)
@@ -399,7 +405,7 @@ func main() {
 				if oldCode, err := harness.VerificationCode(a.email, 15*time.Second); err == nil {
 					time.Sleep(1100 * time.Millisecond) // VERIFY_RESEND_COOLDOWN=1s in loadtest/.env
 					if r, err := a.client.ResendVerification(ctx, a.email); err != nil || r.Status != http.StatusAccepted {
-						m.Inc("resend_failed")
+						m.Failf("resend_failed", "%s resend → err=%v status=%d", a.email, err, harness.Status(r))
 					} else {
 						// Wait for the new code email — the scraper returns
 						// the latest logged code, which is still oldCode until
@@ -426,10 +432,10 @@ func main() {
 								if r2.Decode(&s) == nil && (s.Token == "" || s.User.Email == a.email) {
 									atomic.AddInt64(&resendNewOK, 1)
 								} else {
-									m.Inc("resend_verify_desync")
+									m.Failf("resend_verify_desync", "%s new-code session → %s", a.email, s.User.Email)
 								}
 							} else {
-								m.Inc("resend_verify_failed")
+								m.Failf("resend_verify_failed", "%s new code verify → status=%d", a.email, harness.Status(r2))
 							}
 						}
 					}

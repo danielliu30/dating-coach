@@ -147,9 +147,9 @@ func main() {
 				case err != nil:
 					m.Inc("submit_transport_errors")
 				case r.Status != http.StatusAccepted:
-					m.Inc("submit_rejected")
+					m.Failf("submit_rejected", "vu=%d submit → %d", vu, r.Status)
 				case a.ID == "":
-					m.Inc("submit_bad_response")
+					m.Failf("submit_bad_response", "vu=%d submit 202 but empty id", vu)
 				default:
 					m.Inc("submit_ok")
 					pending = append(pending, struct {
@@ -171,6 +171,7 @@ func main() {
 					}
 					if rr.Status != http.StatusOK {
 						m.Inc("poll_rejected")
+						m.ErrOnce("poll", "vu=%d poll %s → %d", vu, p.id, rr.Status)
 						continue
 					}
 					m.Inc("poll_requests")
@@ -181,12 +182,13 @@ func main() {
 						checkResult(m, got, p.convID)
 						p.checked = true
 					case "failed":
-						m.Inc("terminal_failed")
+						m.Failf("terminal_failed", "analysis %s terminal=failed", p.id)
 						m.Observe("ANALYSIS terminal latency", 200, time.Since(p.sentAt))
 						p.checked = true
 					default:
 						if time.Since(p.sentAt) > *terminalTimeout {
 							m.Inc("terminal_timeouts")
+							m.ErrOnce("timeout", "analysis %s pending %s", p.id, time.Since(p.sentAt).Round(time.Second))
 							p.checked = true
 						}
 					}
@@ -209,7 +211,7 @@ func main() {
 							case rr.Status == http.StatusForbidden || rr.Status == http.StatusNotFound:
 								m.Inc("ownership_denied")
 							default:
-								m.Inc("ownership_leak")
+								m.Failf("ownership_leak", "vu=%d read neighbor analysis %s → %d", vu, id, harness.Status(rr))
 							}
 						}
 					}
@@ -246,18 +248,18 @@ func main() {
 // correct conversation, model version, and non-empty segments/overall.
 func checkResult(m *harness.Metrics, r harness.AnalysisResult, wantConv string) {
 	if r.ConversationID != wantConv {
-		m.Inc("result_wrong_conversation")
+		m.Failf("result_wrong_conversation", "analysis %s conv=%s want %s", r.ID, r.ConversationID, wantConv)
 		return
 	}
 	if r.ModelVersion == "" {
-		m.Inc("result_no_model_version")
+		m.Failf("result_no_model_version", "analysis %s succeeded with empty model_version", r.ID)
 	}
 	var segs []json.RawMessage
 	if err := json.Unmarshal(r.Segments, &segs); err != nil || len(segs) == 0 {
-		m.Inc("result_empty_segments")
+		m.Failf("result_empty_segments", "analysis %s segments unmarshal/empty", r.ID)
 	}
 	var overall map[string]json.RawMessage
 	if err := json.Unmarshal(r.Overall, &overall); err != nil || len(overall) == 0 {
-		m.Inc("result_empty_overall")
+		m.Failf("result_empty_overall", "analysis %s overall unmarshal/empty", r.ID)
 	}
 }
