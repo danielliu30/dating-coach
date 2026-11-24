@@ -47,4 +47,18 @@ describe('AuthLayout landing nav', () => {
     expect(screen.getByRole('button', { name: 'Product' }).props.accessibilityState.selected).toBe(false);
     expect(screen.getByRole('button', { name: 'Product' }).props['aria-current']).toBeUndefined();
   });
+
+  it('shows a back-to-top button once scrolled past the hero and hides it at the top', () => {
+    renderLanding();
+    expect(screen.queryByRole('button', { name: 'Back to top' })).toBeNull();
+
+    const scroll = screen.getByTestId('landing-scroll');
+    fireEvent.scroll(scroll, { nativeEvent: { contentOffset: { y: 2000 } } });
+    const toTop = screen.getByRole('button', { name: 'Back to top' });
+    expect(toTop).toBeTruthy();
+    fireEvent.press(toTop); // scrollTo is a native method — guarded no-op under jest
+
+    fireEvent.scroll(scroll, { nativeEvent: { contentOffset: { y: 0 } } });
+    expect(screen.queryByRole('button', { name: 'Back to top' })).toBeNull();
+  });
 });
