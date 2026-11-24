@@ -1,0 +1,42 @@
+name: Loadtest verify
+
+# A PR labeled "loadtest-fix" — typically one fixing a loadtest-finding issue
+# from danielliu30/dating-coach-loadtest — dispatches the full suite against
+# its head SHA in addition to the normal required checks, because app tests
+# alone don't clear a load finding.
+#
+# Cross-repo dispatch needs the repo secret LOADTEST_DISPATCH_PAT (a token
+# with actions:write on danielliu30/dating-coach-loadtest). Until it exists
+# the job comments the manual dispatch command on the PR instead of failing.
+on:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  pull-requests: write # comment only; no repo content access needed
+
+jobs:
+  dispatch:
+    if: github.event.label.name == 'loadtest-fix'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch the suite against the PR head SHA
+        env:
+          PAT: ${{ secrets.LOADTEST_DISPATCH_PAT }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -e
+          dispatch="gh workflow run load-test.yml --repo danielliu30/dating-coach-loadtest -f app_sha=$SHA"
+          if [ -z "$PAT" ]; then
+            gh pr comment "$PR" --body "Labeled \`loadtest-fix\`, but \`LOADTEST_DISPATCH_PAT\` isn't configured — dispatch the suite manually before merge:
+
+            \`\`\`sh
+            $dispatch
+            \`\`\`
+            Watch https://github.com/danielliu30/dating-coach-loadtest/actions/workflows/load-test.yml"
+            exit 0
+          fi
+          GH_TOKEN="$PAT" $dispatch
+          gh pr comment "$PR" --body "Dispatched the load-test suite against \`$SHA\`: https://github.com/danielliu30/dating-coach-loadtest/actions/workflows/load-test.yml — do not merge until it clears; the suite re-checks the finding under load."
