@@ -48,6 +48,7 @@ func main() {
 	tag := harness.Tag("pay")
 	ctx := context.Background()
 	m := harness.NewMetrics()
+	m.Progress(ctx, "payments", harness.ProgressEvery, *out)
 	defer harness.CleanupTag(tag)
 	dbBefore, _ := harness.DBStats()
 

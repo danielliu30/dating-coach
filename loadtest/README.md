@@ -15,10 +15,14 @@ client, seeding, metrics, `pg_stat_statements` diffs, staged ramp, fake Stripe.
 | `lt-analysis` | analysis | queue throughput, terminal correctness, poll cost |
 | `lt-booking` | coaching | slot mutual exclusion, confirm/expire races |
 | `lt-payments` | payments | authorize/capture/release via fake Stripe + signed webhooks |
-| `lt-e2e` | journey | each VU walks the whole product flow concurrently |
+| `lt-e2e` | journey | `-journey all|book|chat|analyze` customer journeys under the ramp |
 | `lt-mixed` | interference | thin cross-service run (optional) |
 
 Each lands as its own PR; only `lt-sanity` ships with the skeleton.
+
+`run.sh` health-checks the gateway, then runs every component at the
+standard profile (`LT_*` env vars override `LT_VUS`/`LT_RPS`/`LT_DURATION`/
+`LT_COMPONENTS`) and prints a per-component summary of the newest report.
 
 ## Setup
 
@@ -44,6 +48,25 @@ go run ./cmd/lt-auth -vus 10 -duration 30s  # each component owns its flags
 Reports land in `loadtest/out/<component>-<unix>.json` with per-endpoint
 latency/status histograms, counters, finding notes, and pg_stat_statements
 deltas.
+
+## Standard load profile
+
+Components expose the same ramp flags so a run is comparable across surfaces:
+
+```sh
+-vus 10,20,50   # staged concurrency: 10 clients, then 20, then 50
+-rps 150        # aggregate actions/sec across each stage's clients
+-duration 30s   # per stage
+```
+
+`-rps` is open-loop and **aggregate**: `harness.Rate` ticks 150×/s shared by
+every VU in the stage (15 rps each at 10 VUs, 3 at 50). It gates each
+component's *primary action* — the signup call, signin attempt, message send,
+booking attempt, analysis submit. Consequential calls (`/me`, result polls,
+history reads) stay ungated because real clients issue them anyway; the
+report's endpoint counts show the true request rate. `-rps 0` runs unpaced
+(closed-loop, as fast as VUs can go). Tripwires record the last stage that
+stayed healthy when the stack saturates.
 
 ## Conventions for writing a component
 
