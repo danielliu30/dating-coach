@@ -16,6 +16,8 @@
 #   LT_COMPONENTS="sanity auth chat booking analysis e2e"
 set -euo pipefail
 cd "$(dirname "$0")"
+mkdir -p out
+exec > >(tee out/run.log) 2>&1
 
 BASE="${LT_BASE:-http://localhost}"
 VUS="${LT_VUS:-10,20,50}"
@@ -31,8 +33,8 @@ go build ./...
 # Live dashboard over out/live-*.json; already-running copies just fail to
 # bind and the first instance keeps serving.
 if [ "${LT_DASH:-1}" != "0" ]; then
-	(go run ./cmd/lt-dash -out out ${LT_DASH_ADDR:+-addr "$LT_DASH_ADDR"} >/dev/null 2>&1 &)
-	echo "live dashboard: http://localhost${LT_DASH_ADDR:-:8099}"
+	(go run ./cmd/lt-dash -out out -log out/run.log ${LT_DASH_ADDR:+-addr "$LT_DASH_ADDR"} >/dev/null 2>&1 &)
+	echo "live dashboard: http://localhost${LT_DASH_ADDR:-:8099}  terminal: http://localhost${LT_DASH_ADDR:-:8099}/log"
 fi
 
 run() {
