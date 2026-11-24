@@ -9,7 +9,8 @@ RUN CGO_ENABLED=0 go build -trimpath -o /out/api ./cmd/api \
     && CGO_ENABLED=0 go build -trimpath -o /out/worker ./cmd/worker
 
 FROM alpine:3.20
-RUN apk add --no-cache ca-certificates tzdata && adduser -D -u 10001 app
+RUN apk add --no-cache ca-certificates tzdata && adduser -D -u 10001 app \
+    && mkdir -p /logs && chown app:app /logs
 COPY --from=build /out/api /usr/local/bin/api
 COPY --from=build /out/worker /usr/local/bin/worker
 USER app

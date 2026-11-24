@@ -101,7 +101,10 @@ services:
   api:
     image: ${DOCKERHUB_NAMESPACE:-danielliu30}/dating-coach-backend:${IMAGE_TAG:-latest}
     build: ./backend
-    command: ['api']
+    # tee keeps stdout visible to `docker compose logs` while also persisting
+    # to the app-logs volume so logs survive down/recreate.
+    command: ['sh', '-c', 'api 2>&1 | tee -a /logs/api.log']
+    volumes: ['app-logs:/logs']
     environment:
       <<: *backend-env
       HTTP_ADDR: ':8080'
@@ -120,7 +123,8 @@ services:
   worker:
     image: ${DOCKERHUB_NAMESPACE:-danielliu30}/dating-coach-backend:${IMAGE_TAG:-latest}
     build: ./backend
-    command: ['worker']
+    command: ['sh', '-c', 'worker 2>&1 | tee -a /logs/worker.log']
+    volumes: ['app-logs:/logs']
     environment: *backend-env
     restart: unless-stopped
     depends_on:
@@ -136,6 +140,8 @@ services:
   ml-analyzer:
     image: ${DOCKERHUB_NAMESPACE:-danielliu30}/dating-coach-ml-analyzer:${IMAGE_TAG:-latest}
     build: ./ml-analyzer
+    command: ['sh', '-c', 'uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers ${UVICORN_WORKERS:-1} 2>&1 | tee -a /logs/ml-analyzer.log']
+    volumes: ['app-logs:/logs']
     environment:
       ML_BACKEND: ${ML_BACKEND:-llm}
       ML_PROFILE_EVIDENCE_ENABLED: ${ML_PROFILE_EVIDENCE_ENABLED:-false}
@@ -214,3 +220,4 @@ volumes:
   redis-data:
   rabbitmq-data:
   pgadmin-data:
+  app-logs:

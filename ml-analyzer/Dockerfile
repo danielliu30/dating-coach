@@ -22,6 +22,11 @@ COPY train.py ./
 # Ship both eval sets so containerized training can exclude them.
 COPY data/eval_holdout.jsonl data/eval_extended.jsonl ./data/
 
+# Same ownership as the backend image's /logs (uid 10001) so a fresh named
+# volume seeds with a directory the non-root backend can also write to,
+# whichever service mounts it first. uvicorn runs as root, so chown is enough.
+RUN mkdir -p /logs && chown 10001:10001 /logs
+
 EXPOSE 8000
 
 # UVICORN_WORKERS forks that many serving processes; the heuristic backend is
