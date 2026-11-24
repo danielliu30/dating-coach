@@ -291,7 +291,8 @@ func (c *collector) collect(ctx context.Context) snapshot {
 	}
 	for _, ctr := range containers {
 		name := strings.TrimPrefix(ctr.Names[0], "/")
-		if c.stackName != "" && !strings.HasPrefix(name, c.stackName+"_") {
+		// swarm tasks are "<stack>_<svc>.<slot>.<id>", compose "…-<svc>-N".
+		if c.stackName != "" && !strings.HasPrefix(name, c.stackName+"_") && !strings.HasPrefix(name, c.stackName+"-") {
 			continue
 		}
 		var st statsJSON
