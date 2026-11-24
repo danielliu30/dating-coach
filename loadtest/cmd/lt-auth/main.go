@@ -55,6 +55,7 @@ func main() {
 	tag := harness.Tag("auth")
 	ctx := context.Background()
 	m := harness.NewMetrics()
+	m.Progress(ctx, "auth", harness.ProgressEvery, *out)
 	defer harness.CleanupTag(tag)
 
 	emails, err := harness.SeedUsers(tag, 1, maxVUs+*racers+2, "user")

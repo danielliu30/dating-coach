@@ -32,6 +32,7 @@ func main() {
 	tag := harness.Tag("mix")
 	ctx := context.Background()
 	m := harness.NewMetrics()
+	m.Progress(ctx, "mixed", harness.ProgressEvery, *out)
 	defer harness.CleanupTag(tag)
 	dbBefore, _ := harness.DBStats()
 
