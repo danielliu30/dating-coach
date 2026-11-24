@@ -41,6 +41,7 @@
          letter-spacing: .05em; margin: 6px 0 2px; }
   .counts { font-size: 11px; color: #8b949e; line-height: 1.7; word-break: break-all; }
   .counts b { color: #c9d1d9; font-weight: 400; }
+  .errs { font-size: 11px; color: #f85149; line-height: 1.6; word-break: break-all; }
   .empty { color: #8b949e; padding: 24px 10px; }
 </style>
 </head>
@@ -123,6 +124,8 @@ function card(s, age) {
         <span><b>${num(s.obs_total)}</b> calls · <b>${fmt(s.obs_rate, 1)}/s</b>${target}</span>
       </div>
       <div class="flags">${flags || '<span class="okline">no flagged counters</span>'}</div>
+      ${(s.errors || []).length ? `<div class="cap">recent errors</div>
+        <div class="errs">${s.errors.map(e => `<div>${esc(e)}</div>`).join("")}</div>` : ""}
       ${eps ? `<div class="cap">operations — calls · success · fail · transport-err · ok% · latency</div>
       <table><thead><tr>
         <th>operation</th><th>calls</th><th>ok</th><th>fail</th><th>err</th><th>ok%</th>

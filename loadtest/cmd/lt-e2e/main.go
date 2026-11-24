@@ -126,13 +126,13 @@ func (e *env) signIn(ctx context.Context, email string) (*harness.Client, bool) 
 	c := harness.NewClient(e.base, e.m)
 	res, err := c.SignIn(ctx, email, harness.SeedPassword)
 	if err != nil || res.Status != http.StatusOK {
-		e.m.Inc("failed_at_signin")
+		e.m.Failf("failed_at_signin", "%s: err=%v status=%d", email, err, harness.Status(res))
 		return nil, false
 	}
 	me, err := c.Me(ctx)
 	var u harness.User
 	if err != nil || me.Status != http.StatusOK || me.Decode(&u) != nil || u.Email != email {
-		e.m.Inc("identity_mismatch")
+		e.m.Failf("identity_mismatch", "want %s got %q (err=%v status=%d)", email, u.Email, err, harness.Status(me))
 		return nil, false
 	}
 	return c, true
@@ -147,16 +147,16 @@ func (e *env) refreshProbe(ctx context.Context, c *harness.Client, email string)
 	oldRefresh := c.RefreshToken()
 	res, err := c.Refresh(ctx)
 	if err != nil || res.Status != http.StatusOK {
-		e.m.Inc("failed_at_refresh")
+		e.m.Failf("failed_at_refresh", "%s: err=%v status=%d", email, err, harness.Status(res))
 		return false
 	}
 	if r2, err := c.Refresh(ctx, oldRefresh); err == nil && r2.Status == http.StatusOK {
-		e.m.Inc("stale_refresh_accepted")
+		e.m.Failf("stale_refresh_accepted", "%s: replayed refresh got 200", email)
 	}
 	if res, err := c.Me(ctx); err != nil || res.Status != http.StatusOK {
 		e.m.Inc("stale_replay_killed_session")
 		if res, err := c.SignIn(ctx, email, harness.SeedPassword); err != nil || res.Status != http.StatusOK {
-			e.m.Inc("failed_at_resignin")
+			e.m.Failf("failed_at_resignin", "%s: err=%v status=%d", email, err, harness.Status(res))
 			return false
 		}
 	}
@@ -169,10 +169,11 @@ func (e *env) signOutDead(ctx context.Context, c *harness.Client) bool {
 	res, err := c.SignOut(ctx)
 	if err != nil || res.Status != http.StatusOK && res.Status != http.StatusNoContent {
 		e.m.Inc("failed_at_signout")
+		e.m.ErrOnce("signout", "signout: err=%v status=%d", err, harness.Status(res))
 		return false
 	}
 	if res, err := c.Me(ctx); err == nil && res.Status == http.StatusOK {
-		e.m.Inc("session_alive_after_signout")
+		e.m.Failf("session_alive_after_signout", "/me still 200 after signout")
 		return false
 	}
 	return true
@@ -194,7 +195,7 @@ func (e *env) journeyBook(ctx context.Context, vu int, rate *harness.Rate, email
 		seq++
 		coaches, res, err := c.ListCoaches(ctx)
 		if err != nil || res.Status != http.StatusOK {
-			e.m.Inc("journey_browse_failed")
+			e.m.Failf("journey_browse_failed", "vu=%d: err=%v status=%d", vu, err, harness.Status(res))
 			continue
 		}
 		found := false
@@ -204,21 +205,21 @@ func (e *env) journeyBook(ctx context.Context, vu int, rate *harness.Rate, email
 			}
 		}
 		if !found {
-			e.m.Inc("seeded_coach_invisible")
+			e.m.Failf("seeded_coach_invisible", "vu=%d: coach absent from %d listed", vu, len(coaches))
 		}
 		if _, res, err := c.CoachSlots(ctx, e.coachID, 60); err != nil || res.Status != http.StatusOK {
-			e.m.Inc("journey_slots_failed")
+			e.m.Failf("journey_slots_failed", "vu=%d: err=%v status=%d", vu, err, harness.Status(res))
 			continue
 		}
 		slot := e.slotBase.Add(time.Duration(vu)*2000*time.Hour + time.Duration(seq)*2*time.Hour)
 		s, res, err := c.BookSession(ctx, e.coachID, slot.Format(time.RFC3339), 60, "lt e2e book")
 		if err != nil || res.Status != http.StatusCreated {
-			e.m.Inc("journey_book_failed")
+			e.m.Failf("journey_book_failed", "vu=%d slot=%s: err=%v status=%d", vu, slot.Format(time.RFC3339), err, harness.Status(res))
 			continue
 		}
 		e.m.Inc("journey_booked")
 		if r, err := c.CancelSession(ctx, s.ID); err != nil || r.Status != http.StatusOK {
-			e.m.Inc("journey_cancel_failed")
+			e.m.Failf("journey_cancel_failed", "vu=%d session=%s: err=%v status=%d", vu, s.ID, err, harness.Status(r))
 		}
 	}
 	if e.signOutDead(ctx, c) {
@@ -240,12 +241,12 @@ func (e *env) journeyChat(ctx context.Context, vu int, rate *harness.Rate, email
 	}
 	thread, res, err := c.StartThread(ctx, e.coachID)
 	if err != nil || res.Status != http.StatusCreated && res.Status != http.StatusOK {
-		e.m.Inc("failed_at_thread")
+		e.m.Failf("failed_at_thread", "vu=%d: err=%v status=%d", vu, err, harness.Status(res))
 		return
 	}
 	sock, err := c.OpenChat(ctx, thread.ID)
 	if err != nil {
-		e.m.Inc("failed_at_ws_open")
+		e.m.Failf("failed_at_ws_open", "vu=%d thread=%s: %v", vu, thread.ID, err)
 		return
 	}
 	defer sock.Close()
@@ -269,11 +270,11 @@ func (e *env) journeyChat(ctx context.Context, vu int, rate *harness.Rate, email
 				if body.(string) == ev.Body {
 					e.m.Inc("journey_echo_ok")
 				} else {
-					e.m.Inc("journey_echo_mismatch")
+					e.m.Failf("journey_echo_mismatch", "vu=%d client_id=%s got %q", vu, ev.ClientID, ev.Body)
 				}
 				pending.Delete(ev.ClientID)
 			} else if strings.HasPrefix(ev.Body, "lt-e2e-") {
-				e.m.Inc("journey_foreign_body")
+				e.m.Failf("journey_foreign_body", "vu=%d saw %q", vu, ev.Body)
 			}
 		}
 	}()
@@ -287,6 +288,7 @@ func (e *env) journeyChat(ctx context.Context, vu int, rate *harness.Rate, email
 		if err := sock.Send(ctx, body, cid); err != nil {
 			pending.Delete(cid)
 			e.m.Inc("ws_send_failed")
+			e.m.ErrOnce("ws_send", "vu=%d ws send: %v", vu, err)
 		}
 	}
 
@@ -330,7 +332,7 @@ func (e *env) journeyAnalyze(ctx context.Context, vu int, rate *harness.Rate, em
 		seq++
 		ar, res, err := c.SubmitConversation(ctx, fmt.Sprintf("lt e2e %d-%d", vu, seq), "Match", transcript(e.messages))
 		if err != nil || res.Status != http.StatusAccepted && res.Status != http.StatusCreated {
-			e.m.Inc("journey_analysis_submit_failed")
+			e.m.Failf("journey_analysis_submit_failed", "vu=%d: err=%v status=%d", vu, err, harness.Status(res))
 			continue
 		}
 		wantConv := ar.ConversationID
@@ -350,16 +352,18 @@ func (e *env) journeyAnalyze(ctx context.Context, vu int, rate *harness.Rate, em
 		}
 		if !terminal {
 			e.m.Inc("journey_analysis_terminal_fail")
+			e.m.ErrOnce("an_terminal", "vu=%d analysis %s not terminal after %s", vu, ar.ID, e.analysisTimeout)
 			continue
 		}
 		if ar.Status != "succeeded" || ar.ModelVersion == "" || ar.ConversationID != wantConv {
-			e.m.Inc("journey_analysis_bad_result")
+			e.m.Failf("journey_analysis_bad_result", "vu=%d analysis=%s status=%q model=%q conv=%s want %s",
+				vu, ar.ID, ar.Status, ar.ModelVersion, ar.ConversationID, wantConv)
 			continue
 		}
 		e.m.Inc("journey_analysis_ok")
 		if res, err := c.LabelConversation(ctx, wantConv, "date_set"); err != nil ||
 			res.Status != http.StatusOK && res.Status != http.StatusCreated && res.Status != http.StatusNoContent {
-			e.m.Inc("label_failed")
+			e.m.Failf("label_failed", "vu=%d conv=%s: err=%v status=%d", vu, wantConv, err, harness.Status(res))
 		}
 	}
 	if e.signOutDead(ctx, c) {
@@ -375,7 +379,7 @@ func (e *env) runAll(ctx context.Context, i int) bool {
 	email := fmt.Sprintf("%s-%d-%d@loadtest.local", e.tag, i, n)
 	pw := harness.SeedPassword
 	fail := func(step string) bool {
-		m.Inc("failed_at_" + step)
+		m.Failf("failed_at_"+step, "journey-all vu=%d failed at %s", i, step)
 		return false
 	}
 
@@ -479,12 +483,13 @@ func (e *env) runAll(ctx context.Context, i int) bool {
 	for i := 0; i < e.messages; i++ {
 		if err := sock.Send(ctx, fmt.Sprintf("lt-e2e-%d-%d", i, n), fmt.Sprintf("cid-%d-%d", i, n)); err != nil {
 			m.Inc("ws_send_failed")
+			m.ErrOnce("ws_send", "journey-all vu=%d ws send: %v", i, err)
 		}
 	}
 	<-readDone
 	sock.Close()
 	if len(echoes) != e.messages {
-		m.Inc("ws_echo_incomplete")
+		m.Failf("ws_echo_incomplete", "journey-all vu=%d: %d/%d echoes", i, len(echoes), e.messages)
 	}
 	msgs, res, err := c.ThreadHistory(ctx, thread.ID, 50)
 	if err != nil || res.Status != http.StatusOK {
@@ -497,7 +502,7 @@ func (e *env) runAll(ctx context.Context, i int) bool {
 		}
 	}
 	if persisted != e.messages {
-		m.Inc("chat_persist_incomplete")
+		m.Failf("chat_persist_incomplete", "journey-all vu=%d: %d/%d persisted", i, persisted, e.messages)
 	}
 
 	// Analysis: submit -> 2s poll -> terminal -> label.
@@ -523,11 +528,11 @@ func (e *env) runAll(ctx context.Context, i int) bool {
 		return fail("analysis_terminal")
 	}
 	if ar.Status != "succeeded" || ar.ModelVersion == "" {
-		m.Inc("analysis_bad_result")
+		m.Failf("analysis_bad_result", "journey-all vu=%d analysis=%s status=%q model=%q", i, ar.ID, ar.Status, ar.ModelVersion)
 		return fail("analysis_terminal")
 	}
 	if res, err := c.LabelConversation(ctx, ar.ConversationID, "date_set"); err != nil || res.Status != http.StatusOK && res.Status != http.StatusCreated && res.Status != http.StatusNoContent {
-		m.Inc("label_failed")
+		m.Failf("label_failed", "journey-all vu=%d conv=%s: err=%v status=%d", i, ar.ConversationID, err, harness.Status(res))
 	}
 
 	// Sign-out kills the session; /me must 401 afterwards.
@@ -535,7 +540,7 @@ func (e *env) runAll(ctx context.Context, i int) bool {
 		return fail("signout")
 	}
 	if res, err := c.Me(ctx); err == nil && res.Status == http.StatusOK {
-		m.Inc("session_alive_after_signout")
+		m.Failf("session_alive_after_signout", "journey-all vu=%d: /me still 200 after signout", i)
 		return fail("signout")
 	}
 	m.Inc("journey_ok")

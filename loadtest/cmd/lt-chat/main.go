@@ -145,14 +145,14 @@ func main() {
 						if body.(string) == ev.Body {
 							m.Inc("echo_ok")
 						} else {
-							m.Inc("echo_body_mismatch")
+							m.Failf("echo_body_mismatch", "client_id=%s got %q", ev.ClientID, ev.Body)
 						}
 						pending.Delete(ev.ClientID)
 					} else if ev.ClientID != "" {
-						m.Inc("echo_unknown_client_id")
+						m.Failf("echo_unknown_client_id", "client_id=%s body=%q", ev.ClientID, ev.Body)
 					}
 				case "error":
-					m.Inc("send_rejected")
+					m.Failf("send_rejected", "client_id=%s", ev.ClientID)
 					pending.Delete(ev.ClientID)
 				case "history", "typing", "presence":
 					m.Inc("event_" + ev.Type)
@@ -186,7 +186,7 @@ func main() {
 					pending.Store(cid, body)
 					if err := sock.Send(ctx, body, cid); err != nil {
 						pending.Delete(cid)
-						m.Inc("ws_send_failed")
+						m.Failf("ws_send_failed", "client_id=%s: %v", cid, err)
 					}
 				}
 				if i%5 == 0 {
@@ -211,6 +211,7 @@ func main() {
 			for page := 0; page < historyMaxI; page++ {
 				msgs, r, err := historyPage(ctx, c, threadID, page)
 				if err != nil || r.Status != http.StatusOK {
+					m.ErrOnce("history", "history page %d: err=%v status=%d", page, err, r.Status)
 					m.Inc("history_failed")
 					verified = false
 					break
@@ -233,9 +234,9 @@ func main() {
 				case 1:
 					m.Inc("persist_ok")
 				case 0:
-					m.Inc("persist_missing")
+					m.Failf("persist_missing", "body=%s absent from history", body)
 				default:
-					m.Inc("persist_dup")
+					m.Failf("persist_dup", "body=%s seen %dx in history", body, seen[body])
 				}
 			}
 		}
@@ -286,9 +287,9 @@ func main() {
 						case strings.HasPrefix(ev.Body, own):
 							atomic.AddInt64(&got[vu], 1)
 						case strings.HasPrefix(ev.Body, "lt-fan-t"):
-							m.Inc("fanout_cross_thread")
+							m.Failf("fanout_cross_thread", "vu=%d saw foreign %q", vu, ev.Body)
 						default:
-							m.Inc("fanout_unexpected_body")
+							m.Failf("fanout_unexpected_body", "vu=%d saw %q", vu, ev.Body)
 						}
 					}
 				}(i, sock)
@@ -308,7 +309,7 @@ func main() {
 						"POST /chat/threads/{id}/messages", map[string]string{"body": body},
 						map[string]string{"Authorization": "Bearer " + coach.Token()})
 					if err != nil || (r.Status != http.StatusCreated && r.Status != http.StatusOK) {
-						m.Inc("fan_send_failed")
+						m.Failf("fan_send_failed", "thread=%d: err=%v status=%d", i, err, r.Status)
 						continue
 					}
 					sent[i]++

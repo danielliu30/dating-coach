@@ -23,6 +23,17 @@ var flagWords = []string{
 
 // Flagged returns the counters whose names carry a correctness signal and
 // whose value is nonzero.
+// flagCounter reports whether a counter name is a correctness/finding
+// counter — used by Add to emit FLAG lines the moment it increments.
+func flagCounter(name string) bool {
+	for _, w := range flagWords {
+		if strings.Contains(name, w) {
+			return true
+		}
+	}
+	return false
+}
+
 func Flagged(counts map[string]int64) map[string]int64 {
 	out := map[string]int64{}
 	for k, v := range counts {
@@ -71,6 +82,7 @@ type LiveState struct {
 	ObsTotal       int              `json:"obs_total"`
 	ObsRate        float64          `json:"obs_rate"`
 	Endpoints      []LiveEndpoint   `json:"endpoints"`
+	Errors         []string         `json:"errors"`
 	Counters       map[string]int64 `json:"counters"`
 	Flags          map[string]int64 `json:"flags"`
 	UpdatedAt      string           `json:"updated_at"`
@@ -102,6 +114,7 @@ func (m *Metrics) live(name string, obsTotal int, obsRate float64) LiveState {
 		ObsTotal:       obsTotal,
 		ObsRate:        obsRate,
 		Endpoints:      eps,
+		Errors:         m.LiveErrors(),
 		Counters:       counts,
 		Flags:          Flagged(counts),
 		UpdatedAt:      time.Now().UTC().Format(time.RFC3339),
@@ -113,6 +126,7 @@ func (m *Metrics) live(name string, obsTotal int, obsRate float64) LiveState {
 // flagged counters. When liveDir is non-empty it also atomically rewrites
 // <liveDir>/live-<name>.json each tick for lt-dash to serve.
 func (m *Metrics) Progress(ctx context.Context, name string, every time.Duration, liveDir string) {
+	m.SetName(name)
 	go func() {
 		ticker := time.NewTicker(every)
 		defer ticker.Stop()
