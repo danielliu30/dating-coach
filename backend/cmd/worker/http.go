@@ -63,17 +63,34 @@ func pushHandler[T any](handle func(context.Context, T, bool) error, maxAttempts
 	}
 }
 
+// workerRoute is one registered pattern; workerRoutes is the single route
+// table — the router registers it and the contract test walks it so the
+// OpenAPI spec cannot drift from the routes actually served.
+type workerRoute struct {
+	pattern string
+	handler http.HandlerFunc
+}
+
 // Cloud Run IAM (--no-allow-unauthenticated) authenticates push and scheduler calls.
 func workerRouter(a analysis.JobHandler, d account.JobHandler, maxAttempts int, tasks map[string]task, stats *httpx.Stats) http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
-	mux.HandleFunc("GET /stats", stats.Handler)
-	mux.HandleFunc("POST /pubsub/analysis", pushHandler(a, maxAttempts, false))
-	mux.HandleFunc("POST /pubsub/account-deletion", pushHandler(d, maxAttempts, true))
-	mux.HandleFunc("POST /pubsub/email-outbox", pushHandler(func(ctx context.Context, _ json.RawMessage, _ bool) error {
-		_, err := tasks["relay-emails"](ctx)
-		return err
-	}, maxAttempts, false))
+	for _, route := range workerRoutes(a, d, maxAttempts, tasks, stats) {
+		mux.HandleFunc(route.pattern, route.handler)
+	}
+	return mux
+}
+
+func workerRoutes(a analysis.JobHandler, d account.JobHandler, maxAttempts int, tasks map[string]task, stats *httpx.Stats) []workerRoute {
+	routes := []workerRoute{
+		{"GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) }},
+		{"GET /stats", stats.Handler},
+		{"POST /pubsub/analysis", pushHandler(a, maxAttempts, false)},
+		{"POST /pubsub/account-deletion", pushHandler(d, maxAttempts, true)},
+		{"POST /pubsub/email-outbox", pushHandler(func(ctx context.Context, _ json.RawMessage, _ bool) error {
+			_, err := tasks["relay-emails"](ctx)
+			return err
+		}, maxAttempts, false)},
+	}
 	run := func(w http.ResponseWriter, r *http.Request, names []string) {
 		if len(names) == 0 {
 			http.Error(w, "task required", 400)
@@ -101,9 +118,10 @@ func workerRouter(a analysis.JobHandler, d account.JobHandler, maxAttempts int, 
 		w.WriteHeader(status)
 		_ = json.NewEncoder(w).Encode(results)
 	}
-	mux.HandleFunc("POST /tasks/batch", func(w http.ResponseWriter, r *http.Request) { run(w, r, r.URL.Query()["task"]) })
-	mux.HandleFunc("POST /tasks/{name}", func(w http.ResponseWriter, r *http.Request) { run(w, r, []string{r.PathValue("name")}) })
-	return mux
+	return append(routes,
+		workerRoute{"POST /tasks/batch", func(w http.ResponseWriter, r *http.Request) { run(w, r, r.URL.Query()["task"]) }},
+		workerRoute{"POST /tasks/{name}", func(w http.ResponseWriter, r *http.Request) { run(w, r, []string{r.PathValue("name")}) }},
+	)
 }
 
 // closeablePublisher is the account deletion publisher plus the Close both
