@@ -51,5 +51,4 @@ for c in $COMPONENTS; do
 	esac
 done
 
-(python summarize.py || python3 summarize.py) 2>/dev/null ||
-	echo "(no python — reports are in out/)"
+go run ./cmd/lt-summarize -out out || echo "(reports are in out/)"
