@@ -1,0 +1,1620 @@
+openapi: 3.0.3
+info:
+  title: dating-coach API
+  version: "1.0.0"
+  description: |
+    Contract for everything served behind the nginx edge on a single origin.
+
+    Surfaces:
+    - **api** (`/api/v1/*`, `/healthz`, `/stats`) — the Go `cmd/api` service the
+      web app talks to. App calls live in `app/src/api/client.ts`.
+    - **ops** (`/metrics/*`) — nginx-served, admin-gated ops dashboard. Every
+      location runs `auth_request` against the api's admin check, so a caller
+      needs a session-scoped JWT for an `admin`-role account.
+    - **internal** (`/pubsub/*`, `/tasks/*`) — the Go `cmd/worker` HTTP server.
+      Reachable only inside the docker network; listed so the contract is
+      complete and the worker router is covered by the contract test.
+
+    Contract tests keep this file honest:
+    `backend/cmd/api/contract_test.go` fails if the chi router and this spec
+    disagree in either direction, and `app/src/api/contract.test.ts` fails if
+    the app calls a route that is not documented here.
+
+    Auth: bearer JWT. Session endpoints require scope `session`; `/auth/*`
+    also accepts scope `verify` for a fresh sign-up. `/coach/*` requires role
+    `coach`, `/admin/*` role `admin`, on top of session scope.
+
+servers:
+  - url: /
+
+tags:
+  - name: auth
+  - name: coaching
+    description: Client-facing booking surface (session scope).
+  - name: coach
+    description: Coach-only surface (session scope + coach role).
+  - name: admin
+    description: Admin-only surface (session scope + admin role).
+  - name: chat
+  - name: analysis
+  - name: ops
+    description: Nginx-served ops dashboard; every location is auth_request-gated.
+  - name: internal
+    description: Worker HTTP surface inside the docker network; not exposed at the edge.
+
+paths:
+  /healthz:
+    get:
+      tags: [ops]
+      summary: Dependency-free liveness probe used by deploy gates.
+      operationId: healthz
+      security: []
+      responses:
+        '200':
+          description: Service is up.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+                  env: { type: string, example: development }
+
+  /stats:
+    get:
+      tags: [ops]
+      summary: In-process request/liveness counters for the metrics dashboard.
+      operationId: apiStats
+      security: []
+      responses:
+        '200':
+          description: Stats snapshot.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Stats' }
+
+  /api/v1/auth/signup:
+    post:
+      tags: [auth]
+      summary: Create an account; returns a verify-scoped token, not a full session.
+      operationId: signUp
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, display_name]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+                display_name: { type: string }
+                role: { type: string, enum: [user, coach], default: user }
+      responses:
+        '200': { $ref: '#/components/responses/AuthSession' }
+        '400': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+
+  /api/v1/auth/signin:
+    post:
+      tags: [auth]
+      summary: Password sign-in; returns a session-scoped token + refresh token.
+      operationId: signIn
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+      responses:
+        '200': { $ref: '#/components/responses/AuthSession' }
+        '401': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/Error' }
+
+  /api/v1/auth/google:
+    post:
+      tags: [auth]
+      summary: Google ID-token sign-in; creates the account on first use.
+      operationId: signInWithGoogle
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id_token]
+              properties:
+                id_token: { type: string }
+                role: { type: string, enum: [user, coach], default: user }
+      responses:
+        '200': { $ref: '#/components/responses/AuthSession' }
+        '401': { $ref: '#/components/responses/Error' }
+        '501': { $ref: '#/components/responses/Error' }
+
+  /api/v1/auth/refresh:
+    post:
+      tags: [auth]
+      summary: Exchange a refresh token for a fresh session.
+      operationId: refreshSession
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties:
+                refresh_token: { type: string }
+      responses:
+        '200': { $ref: '#/components/responses/AuthSession' }
+        '401': { $ref: '#/components/responses/Error' }
+
+  /api/v1/auth/verify:
+    post:
+      tags: [auth]
+      summary: Confirm an email with the emailed code; upgrades to a full session.
+      operationId: verifyEmail
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, code]
+              properties:
+                email: { type: string, format: email }
+                code: { type: string }
+      responses:
+        '200': { $ref: '#/components/responses/AuthSession' }
+        '400': { $ref: '#/components/responses/Error' }
+
+  /api/v1/auth/resend-verification:
+    post:
+      tags: [auth]
+      summary: Resend the email verification code.
+      operationId: resendVerification
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        '200':
+          description: Accepted.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: sent }
+                  resend_after_seconds: { type: integer }
+
+  /api/v1/auth/forgot-password:
+    post:
+      tags: [auth]
+      summary: Start a password reset; emails a code.
+      operationId: forgotPassword
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        '200':
+          description: Always accepted (does not reveal whether the email exists).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: sent }
+                  resend_after_seconds: { type: integer }
+
+  /api/v1/auth/reset-password:
+    post:
+      tags: [auth]
+      summary: Complete a password reset with the emailed code.
+      operationId: resetPassword
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, code, password]
+              properties:
+                email: { type: string, format: email }
+                code: { type: string }
+                password: { type: string }
+      responses:
+        '200':
+          description: Password reset.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+        '400': { $ref: '#/components/responses/Error' }
+
+  /api/v1/auth/me:
+    get:
+      tags: [auth]
+      summary: The caller's profile.
+      operationId: getMe
+      responses:
+        '200':
+          description: Profile.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Profile' }
+        '401': { $ref: '#/components/responses/Error' }
+    patch:
+      tags: [auth]
+      summary: Update the caller's dating profile fields.
+      operationId: updateMe
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DatingProfileInput' }
+      responses:
+        '200':
+          description: Updated profile.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Profile' }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+    delete:
+      tags: [auth]
+      summary: Schedule the caller's account for deletion.
+      operationId: deleteMe
+      responses:
+        '200':
+          description: Deletion accepted.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+        '401': { $ref: '#/components/responses/Error' }
+
+  /api/v1/auth/signout:
+    post:
+      tags: [auth]
+      summary: Revoke the session (and refresh token when supplied).
+      operationId: signOut
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                refresh_token: { type: string }
+                token_age_ms:
+                  type: integer
+                  description: How long the client had held the access token; negative if obtained after sign-out.
+      responses:
+        '200':
+          description: Signed out.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+        '401': { $ref: '#/components/responses/Error' }
+
+  /api/v1/auth/ws-ticket:
+    post:
+      tags: [auth]
+      summary: Mint a short-lived ticket authorizing a chat WebSocket upgrade.
+      operationId: wsTicket
+      responses:
+        '200':
+          description: One-use WS ticket.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ticket: { type: string }
+        '401': { $ref: '#/components/responses/Error' }
+
+  /api/v1/booking/respond:
+    post:
+      tags: [coaching]
+      summary: Confirm/decline link target from the coach's email — token, not bearer auth.
+      operationId: respondWithToken
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [session_id, token, action]
+              properties:
+                session_id: { type: string, format: uuid }
+                token: { type: string }
+                action: { type: string, enum: [confirm, decline] }
+      responses:
+        '200':
+          description: Decision recorded.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CoachingSession' }
+        '400': { $ref: '#/components/responses/Error' }
+        '410': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/Error' }
+
+  /api/v1/payments/webhook:
+    post:
+      tags: [internal]
+      summary: Payment provider webhook (Stripe); mounted only when payments are enabled.
+      operationId: paymentWebhook
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200': { description: Event applied or safely ignored. }
+        '400': { description: Bad provider signature. }
+
+  /api/v1/coaching/config:
+    get:
+      tags: [coaching]
+      summary: Server-side booking feature switches the app must follow.
+      operationId: coachingConfig
+      responses:
+        '200':
+          description: Config.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CoachingConfig' }
+
+  /api/v1/coaching/coaches:
+    get:
+      tags: [coaching]
+      summary: Approved coaches, ranked by rating.
+      operationId: listCoaches
+      parameters:
+        - name: accepting_only
+          in: query
+          schema: { type: boolean, default: true }
+      responses:
+        '200':
+          description: Coach list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Coach' }
+
+  /api/v1/coaching/coaches/{coachID}:
+    get:
+      tags: [coaching]
+      summary: One coach's public profile.
+      operationId: getCoach
+      parameters:
+        - $ref: '#/components/parameters/CoachID'
+      responses:
+        '200':
+          description: Coach.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Coach' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /api/v1/coaching/coaches/{coachID}/availability:
+    get:
+      tags: [coaching]
+      summary: The coach's recurring weekly availability windows.
+      operationId: coachAvailability
+      parameters:
+        - $ref: '#/components/parameters/CoachID'
+      responses:
+        '200':
+          description: Availability windows.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  availability:
+                    type: array
+                    items: { $ref: '#/components/schemas/AvailabilityWindow' }
+
+  /api/v1/coaching/coaches/{coachID}/slots:
+    get:
+      tags: [coaching]
+      summary: Concrete bookable slots in a window.
+      operationId: coachSlots
+      parameters:
+        - $ref: '#/components/parameters/CoachID'
+        - name: from
+          in: query
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          schema: { type: string, format: date-time }
+        - name: duration_minutes
+          in: query
+          schema: { type: integer }
+        - name: exclude_session_id
+          in: query
+          description: A session being rescheduled — its current slot stays bookable.
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Slots.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  slots:
+                    type: array
+                    items: { $ref: '#/components/schemas/Slot' }
+
+  /api/v1/coaching/coaches/{coachID}/reviews:
+    get:
+      tags: [coaching]
+      summary: Public reviews for a coach.
+      operationId: listReviews
+      parameters:
+        - $ref: '#/components/parameters/CoachID'
+      responses:
+        '200':
+          description: Reviews.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/CoachReview' }
+    post:
+      tags: [coaching]
+      summary: Review a coach; requires a completed session with them.
+      operationId: createReview
+      parameters:
+        - $ref: '#/components/parameters/CoachID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [rating]
+              properties:
+                session_id: { type: string, format: uuid }
+                rating: { type: integer, minimum: 1, maximum: 5 }
+                comment: { type: string }
+      responses:
+        '201':
+          description: Review created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CoachReview' }
+        '400': { $ref: '#/components/responses/Error' }
+
+  /api/v1/coaching/coaches/{coachID}/reviews/summary:
+    get:
+      tags: [coaching]
+      summary: Recommendation counts + LLM summary shown instead of stars.
+      operationId: reviewSummary
+      parameters:
+        - $ref: '#/components/parameters/CoachID'
+      responses:
+        '200':
+          description: Summary.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReviewSummary' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /api/v1/coaching/sessions:
+    post:
+      tags: [coaching]
+      summary: Request a session; may return a checkout_url when payment is required.
+      operationId: bookSession
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [coach_id, scheduled_time, duration_minutes]
+              properties:
+                coach_id: { type: string, format: uuid }
+                scheduled_time: { type: string, format: date-time }
+                duration_minutes: { type: integer }
+                topic: { type: string }
+      responses:
+        '201':
+          description: Session created (pending or pending_payment).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CoachingSession' }
+        '400': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+    get:
+      tags: [coaching]
+      summary: The caller's sessions.
+      operationId: listMySessions
+      parameters:
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/SessionStatus' }
+      responses:
+        '200':
+          description: Sessions.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/CoachingSession' }
+
+  /api/v1/coaching/sessions/{sessionID}/cancel:
+    post:
+      tags: [coaching]
+      summary: Cancel a session.
+      operationId: cancelSession
+      parameters:
+        - $ref: '#/components/parameters/SessionID'
+      responses:
+        '200':
+          description: Cancelled session.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CoachingSession' }
+        '400': { $ref: '#/components/responses/Error' }
+
+  /api/v1/coaching/sessions/{sessionID}/reschedule:
+    post:
+      tags: [coaching]
+      summary: Move a session to a new start time.
+      operationId: rescheduleSession
+      parameters:
+        - $ref: '#/components/parameters/SessionID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [scheduled_time]
+              properties:
+                scheduled_time: { type: string, format: date-time }
+      responses:
+        '200':
+          description: Rescheduled session.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CoachingSession' }
+        '400': { $ref: '#/components/responses/Error' }
+
+  /api/v1/coach/profile:
+    put:
+      tags: [coach]
+      summary: Create or update the caller's coach profile.
+      operationId: upsertCoachProfile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                headline: { type: string, maxLength: 200 }
+                bio: { type: string }
+                specialties: { type: array, items: { type: string } }
+                phases: { type: array, items: { $ref: '#/components/schemas/DatingPhase' } }
+                hourly_rate_cents: { type: integer }
+                timezone: { type: string }
+                years_experience: { type: integer }
+                accepting_clients: { type: boolean }
+      responses:
+        '200':
+          description: Coach profile.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Coach' }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+
+  /api/v1/coach/availability:
+    put:
+      tags: [coach]
+      summary: Replace the caller's weekly availability.
+      operationId: setAvailability
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [availability]
+              properties:
+                availability:
+                  type: array
+                  items: { $ref: '#/components/schemas/AvailabilityWindow' }
+      responses:
+        '200':
+          description: Stored windows.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  availability:
+                    type: array
+                    items: { $ref: '#/components/schemas/AvailabilityWindow' }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+
+  /api/v1/coach/sessions:
+    get:
+      tags: [coach]
+      summary: Sessions booked with the caller as coach.
+      operationId: listCoachSessions
+      parameters:
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/SessionStatus' }
+      responses:
+        '200':
+          description: Sessions.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/CoachingSession' }
+        '403': { $ref: '#/components/responses/Error' }
+
+  /api/v1/coach/sessions/{sessionID}/respond:
+    post:
+      tags: [coach]
+      summary: Confirm or decline a pending session.
+      operationId: respondAsCoach
+      parameters:
+        - $ref: '#/components/parameters/SessionID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action: { type: string, enum: [confirm, decline] }
+      responses:
+        '200':
+          description: Updated session.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CoachingSession' }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+
+  /api/v1/coach/sessions/{sessionID}/status:
+    post:
+      tags: [coach]
+      summary: Set lifecycle status (completed, no_show, …).
+      operationId: setSessionStatus
+      parameters:
+        - $ref: '#/components/parameters/SessionID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { $ref: '#/components/schemas/SessionStatus' }
+      responses:
+        '200':
+          description: Updated session.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CoachingSession' }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+
+  /api/v1/coach/sessions/{sessionID}/notes:
+    post:
+      tags: [coach]
+      summary: Attach private coach notes to a session.
+      operationId: setSessionNotes
+      parameters:
+        - $ref: '#/components/parameters/SessionID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                coach_notes: { type: string }
+      responses:
+        '200':
+          description: Updated session.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CoachingSession' }
+        '403': { $ref: '#/components/responses/Error' }
+
+  /api/v1/coach/sessions/{sessionID}/meeting-url:
+    post:
+      tags: [coach]
+      summary: Set the join link for a session.
+      operationId: setSessionMeetingURL
+      parameters:
+        - $ref: '#/components/parameters/SessionID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [meeting_url]
+              properties:
+                meeting_url: { type: string, format: uri }
+      responses:
+        '200':
+          description: Updated session.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CoachingSession' }
+        '400': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+
+  /api/v1/admin/coaches:
+    get:
+      tags: [admin]
+      summary: Coaches filtered by approval status (default all).
+      operationId: listCoachesByApproval
+      parameters:
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/CoachApprovalStatus' }
+      responses:
+        '200':
+          description: Coaches.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Coach' }
+        '403': { $ref: '#/components/responses/Error' }
+
+  /api/v1/admin/coaches/{coachID}/approve:
+    post:
+      tags: [admin]
+      summary: Approve a coach — they become listed and bookable.
+      operationId: approveCoach
+      parameters:
+        - $ref: '#/components/parameters/CoachID'
+      responses:
+        '200':
+          description: Updated coach.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Coach' }
+        '403': { $ref: '#/components/responses/Error' }
+
+  /api/v1/admin/coaches/{coachID}/reject:
+    post:
+      tags: [admin]
+      summary: Reject a coach.
+      operationId: rejectCoach
+      parameters:
+        - $ref: '#/components/parameters/CoachID'
+      responses:
+        '200':
+          description: Updated coach.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Coach' }
+        '403': { $ref: '#/components/responses/Error' }
+
+  /api/v1/chat/threads:
+    post:
+      tags: [chat]
+      summary: Start (or reuse the active) thread with a coach.
+      operationId: startThread
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [coach_id]
+              properties:
+                coach_id: { type: string, format: uuid }
+                session_id: { type: string, format: uuid }
+      responses:
+        '201':
+          description: Thread.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChatThread' }
+        '400': { $ref: '#/components/responses/Error' }
+    get:
+      tags: [chat]
+      summary: The caller's threads.
+      operationId: listThreads
+      responses:
+        '200':
+          description: Threads.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  threads:
+                    type: array
+                    items: { $ref: '#/components/schemas/ChatThread' }
+
+  /api/v1/chat/threads/{threadID}/messages:
+    get:
+      tags: [chat]
+      summary: Message history for a thread.
+      operationId: threadHistory
+      parameters:
+        - $ref: '#/components/parameters/ThreadID'
+        - name: limit
+          in: query
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Messages.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  messages:
+                    type: array
+                    items: { $ref: '#/components/schemas/ChatMessage' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+    post:
+      tags: [chat]
+      summary: Send a message over REST (the WS path is preferred for live chat).
+      operationId: postMessage
+      parameters:
+        - $ref: '#/components/parameters/ThreadID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              properties:
+                body: { type: string }
+      responses:
+        '201':
+          description: Stored message.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChatMessage' }
+        '403': { $ref: '#/components/responses/Error' }
+
+  /api/v1/chat/threads/{threadID}/close:
+    post:
+      tags: [chat]
+      summary: Close a thread.
+      operationId: closeThread
+      parameters:
+        - $ref: '#/components/parameters/ThreadID'
+      responses:
+        '200':
+          description: Closed thread.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChatThread' }
+        '403': { $ref: '#/components/responses/Error' }
+
+  /api/v1/chat/threads/{threadID}/ws:
+    get:
+      tags: [chat]
+      summary: WebSocket upgrade; authorized by the ws-ticket query param.
+      operationId: chatWebsocket
+      parameters:
+        - $ref: '#/components/parameters/ThreadID'
+        - name: ticket
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '101': { description: Switching protocols — socket speaks the ChatEvent protocol. }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+
+  /api/v1/chat/coach/threads:
+    get:
+      tags: [chat, coach]
+      summary: Threads where the caller is the coach.
+      operationId: listCoachThreads
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string, enum: [active, closed] }
+      responses:
+        '200':
+          description: Threads.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  threads:
+                    type: array
+                    items: { $ref: '#/components/schemas/ChatThread' }
+        '403': { $ref: '#/components/responses/Error' }
+
+  /api/v1/analysis/conversations:
+    post:
+      tags: [analysis]
+      summary: Submit a transcript; kicks off async scoring and returns the pending result.
+      operationId: submitConversation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [messages]
+              properties:
+                title: { type: string }
+                platform: { type: string }
+                match_name: { type: string }
+                messages:
+                  type: array
+                  items: { $ref: '#/components/schemas/SubmitMessage' }
+      responses:
+        '202':
+          description: Analysis accepted; poll the result endpoint.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnalysisResult' }
+        '400': { $ref: '#/components/responses/Error' }
+    get:
+      tags: [analysis]
+      summary: The caller's submitted conversations.
+      operationId: listConversations
+      responses:
+        '200':
+          description: Conversations.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Conversation' }
+
+  /api/v1/analysis/conversations/{conversationID}/result:
+    get:
+      tags: [analysis]
+      summary: Latest analysis result for a conversation.
+      operationId: latestResult
+      parameters:
+        - $ref: '#/components/parameters/ConversationID'
+      responses:
+        '200':
+          description: Result (status may still be pending/running).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnalysisResult' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /api/v1/analysis/conversations/{conversationID}/reanalyze:
+    post:
+      tags: [analysis]
+      summary: Re-run the analyzer on a conversation.
+      operationId: reanalyze
+      parameters:
+        - $ref: '#/components/parameters/ConversationID'
+      responses:
+        '202':
+          description: Re-analysis accepted.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnalysisResult' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /api/v1/analysis/conversations/{conversationID}/label:
+    post:
+      tags: [analysis]
+      summary: Record an outcome label — these rows are the scorer's training set.
+      operationId: labelConversation
+      parameters:
+        - $ref: '#/components/parameters/ConversationID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LabelInput' }
+      responses:
+        '200':
+          description: Label recorded.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+        '400': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /api/v1/analysis/results/{analysisID}:
+    get:
+      tags: [analysis]
+      summary: A single analysis result by id.
+      operationId: getResult
+      parameters:
+        - name: analysisID
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Result.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnalysisResult' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /api/v1/analysis/profile-score:
+    get:
+      tags: [analysis]
+      summary: Aggregate dating-profile score across the caller's analyzed conversations.
+      operationId: profileScore
+      responses:
+        '200':
+          description: Score.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProfileScore' }
+
+  /metrics:
+    get:
+      tags: [ops]
+      summary: Redirects to the dashboard page.
+      operationId: metricsRedirect
+      security: []
+      responses:
+        '308': { description: Permanent redirect to /metrics/dashboard.html. }
+
+  /metrics/dashboard.html:
+    get:
+      tags: [ops]
+      summary: The ops dashboard page (static). Requires an admin session token.
+      operationId: metricsDashboard
+      responses:
+        '200': { description: Dashboard HTML. }
+        '401': { description: No or non-admin token (auth_request to /api/v1/admin/coaches failed). }
+
+  /metrics/dashboard.js:
+    get:
+      tags: [ops]
+      summary: Dashboard script; served same-origin so CSP script-src 'self' holds.
+      operationId: metricsDashboardJS
+      responses:
+        '200': { description: Dashboard JavaScript. }
+        '401': { $ref: '#/components/responses/Error' }
+
+  /metrics/data/{file}:
+    get:
+      tags: [ops]
+      summary: Collector JSONL off the shared app-logs volume (metrics-stats.jsonl, metrics-services.jsonl, deploy-history.jsonl).
+      operationId: metricsData
+      parameters:
+        - name: file
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Newline-delimited JSON records.
+          content:
+            application/x-ndjson:
+              schema: { type: string }
+        '401': { $ref: '#/components/responses/Error' }
+        '404': { description: Unknown file. }
+
+  /metrics/proxy/api:
+    get:
+      tags: [ops]
+      summary: Proxied GET /stats from the api service.
+      operationId: metricsProxyAPI
+      responses:
+        '200':
+          description: Api stats snapshot.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Stats' }
+        '401': { $ref: '#/components/responses/Error' }
+
+  /metrics/proxy/worker:
+    get:
+      tags: [ops]
+      summary: Proxied GET /stats from the worker service.
+      operationId: metricsProxyWorker
+      responses:
+        '200':
+          description: Worker stats snapshot.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Stats' }
+        '401': { $ref: '#/components/responses/Error' }
+
+  /pubsub/analysis:
+    post:
+      tags: [internal]
+      summary: Pub/Sub push for an analysis job (Cloud Run backend only; RabbitMQ mode consumes instead).
+      operationId: pubsubAnalysis
+      security: []
+      servers:
+        - url: http://worker:8080
+      responses:
+        '204': { description: Job handled. }
+        '500': { description: Failure — the push retries up to max attempts. }
+
+  /pubsub/account-deletion:
+    post:
+      tags: [internal]
+      summary: Pub/Sub push for an account-deletion job.
+      operationId: pubsubAccountDeletion
+      security: []
+      servers:
+        - url: http://worker:8080
+      responses:
+        '204': { description: Job handled. }
+        '500': { description: Failure — the push retries. }
+
+  /pubsub/email-outbox:
+    post:
+      tags: [internal]
+      summary: Pub/Sub push that relays the email outbox.
+      operationId: pubsubEmailOutbox
+      security: []
+      servers:
+        - url: http://worker:8080
+      responses:
+        '204': { description: Relayed. }
+        '500': { description: Failure — the push retries. }
+
+  /tasks/{name}:
+    post:
+      tags: [internal]
+      summary: Run a named worker task once (scheduler hooks).
+      operationId: runTask
+      security: []
+      servers:
+        - url: http://worker:8080
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '204': { description: Task ran. }
+        '400': { description: Unknown task name. }
+        '500': { description: Task failed. }
+
+  /tasks/batch:
+    post:
+      tags: [internal]
+      summary: Run several named tasks via repeated ?task= params.
+      operationId: runTaskBatch
+      security: []
+      servers:
+        - url: http://worker:8080
+      parameters:
+        - name: task
+          in: query
+          required: true
+          schema:
+            type: array
+            items: { type: string }
+          style: form
+          explode: true
+      responses:
+        '204': { description: All tasks ran. }
+        '400': { description: No task named. }
+        '500': { description: A task failed. }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Access token from /api/v1/auth/signin (scope session).
+
+  parameters:
+    CoachID:
+      name: coachID
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    SessionID:
+      name: sessionID
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    ThreadID:
+      name: threadID
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    ConversationID:
+      name: conversationID
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+
+  responses:
+    Error:
+      description: 'Error envelope `{ "error": "..." }`.'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    AuthSession:
+      description: Session token + the caller's profile.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/AuthSession' }
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+
+    Role:
+      type: string
+      enum: [user, coach, admin]
+
+    DatingStyle:
+      type: string
+      enum: [in_person, tinder, hinge, bumble, coffee_meets_bagel, match, okcupid, feeld, speed_dating, friends_intro]
+
+    DatingPhase:
+      type: string
+      enum: [opening, first_messages, building_rapport, flirting, asking_out, first_date, follow_up, defining_relationship]
+
+    CoachingGoal:
+      type: string
+      enum: [agency, feedback, support]
+
+    Profile:
+      type: object
+      required: [id, email, display_name, role, email_verified]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        display_name: { type: string }
+        role: { $ref: '#/components/schemas/Role' }
+        email_verified: { type: boolean }
+        dating_styles:
+          type: array
+          items: { $ref: '#/components/schemas/DatingStyle' }
+        phases_strong:
+          type: array
+          items: { $ref: '#/components/schemas/DatingPhase' }
+        phases_working_on:
+          type: array
+          items: { $ref: '#/components/schemas/DatingPhase' }
+        dating_preferences: { type: string, maxLength: 2000 }
+        coaching_goals:
+          type: array
+          items: { $ref: '#/components/schemas/CoachingGoal' }
+
+    DatingProfileInput:
+      type: object
+      properties:
+        dating_styles:
+          type: array
+          items: { $ref: '#/components/schemas/DatingStyle' }
+        phases_strong:
+          type: array
+          items: { $ref: '#/components/schemas/DatingPhase' }
+        phases_working_on:
+          type: array
+          items: { $ref: '#/components/schemas/DatingPhase' }
+        dating_preferences: { type: string, maxLength: 2000 }
+        coaching_goals:
+          type: array
+          items: { $ref: '#/components/schemas/CoachingGoal' }
+
+    AuthSession:
+      type: object
+      required: [token, expires_at, user]
+      properties:
+        token: { type: string, description: Access JWT. }
+        refresh_token:
+          type: string
+          description: Absent on responses that do not open a full session (e.g. sign-up).
+        expires_at: { type: string, format: date-time }
+        user: { $ref: '#/components/schemas/Profile' }
+
+    CoachApprovalStatus:
+      type: string
+      enum: [pending, approved, rejected]
+
+    Coach:
+      type: object
+      required: [id, display_name, approval_status, accepting_clients]
+      properties:
+        id: { type: string, format: uuid }
+        display_name: { type: string }
+        headline: { type: string }
+        bio: { type: string }
+        specialties: { type: array, items: { type: string } }
+        phases:
+          type: array
+          items: { $ref: '#/components/schemas/DatingPhase' }
+        hourly_rate_cents: { type: integer }
+        timezone: { type: string }
+        years_experience: { type: integer }
+        accepting_clients: { type: boolean }
+        avg_rating: { type: number, description: Mean 1-5; 0 when review_count is 0. }
+        review_count: { type: integer }
+        recommend_count: { type: integer }
+        approval_status: { $ref: '#/components/schemas/CoachApprovalStatus' }
+
+    CoachReview:
+      type: object
+      required: [id, coach_id, user_id, reviewer_name, rating, recommended]
+      properties:
+        id: { type: string, format: uuid }
+        coach_id: { type: string, format: uuid }
+        user_id: { type: string, format: uuid }
+        reviewer_name: { type: string }
+        session_id: { type: string, format: uuid }
+        rating: { type: integer, minimum: 1, maximum: 5 }
+        recommended: { type: boolean }
+        comment: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    ReviewSummary:
+      type: object
+      properties:
+        model_version: { type: string }
+        recommended: { type: integer }
+        total: { type: integer }
+        summary: { type: string }
+        strengths: { type: array, items: { type: string } }
+
+    AvailabilityWindow:
+      type: object
+      required: [weekday, start_minute, end_minute]
+      properties:
+        weekday: { type: integer, minimum: 0, maximum: 6 }
+        start_minute: { type: integer }
+        end_minute: { type: integer }
+
+    Slot:
+      type: object
+      required: [start, duration_minutes]
+      properties:
+        start: { type: string, format: date-time }
+        duration_minutes: { type: integer }
+
+    CoachingConfig:
+      type: object
+      required: [payments_enabled]
+      properties:
+        payments_enabled: { type: boolean }
+
+    SessionStatus:
+      type: string
+      enum: [pending_payment, pending, scheduled, declined, expired, completed, cancelled, no_show]
+
+    PaymentStatus:
+      type: string
+      enum: [not_required, pending, expiring, authorized, paid, releasing, released, refund_due, refunded, failed]
+
+    CoachingSession:
+      type: object
+      required: [id, user_id, coach_id, scheduled_time, duration_minutes, status, payment_status]
+      properties:
+        id: { type: string, format: uuid }
+        user_id: { type: string, format: uuid }
+        coach_id: { type: string, format: uuid }
+        counterpart_name: { type: string }
+        scheduled_time: { type: string, format: date-time }
+        duration_minutes: { type: integer }
+        status: { $ref: '#/components/schemas/SessionStatus' }
+        topic: { type: string }
+        coach_notes: { type: string }
+        meeting_url: { type: string, format: uri }
+        payment_status: { $ref: '#/components/schemas/PaymentStatus' }
+        amount_cents: { type: integer }
+        currency: { type: string }
+        hold_expires_at: { type: string, format: date-time }
+        checkout_url:
+          type: string
+          format: uri
+          description: Only present on a booking response that must be paid for.
+
+    ChatThread:
+      type: object
+      required: [id, user_id, coach_id, status]
+      properties:
+        id: { type: string, format: uuid }
+        user_id: { type: string, format: uuid }
+        coach_id: { type: string, format: uuid }
+        session_id: { type: string, format: uuid }
+        counterpart_name: { type: string }
+        status: { type: string, enum: [active, closed] }
+        last_message_at: { type: string, format: date-time }
+        counterpart_online: { type: boolean }
+
+    ChatMessage:
+      type: object
+      required: [id, thread_id, sender_id, body, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        thread_id: { type: string, format: uuid }
+        sender_id: { type: string, format: uuid }
+        body: { type: string }
+        created_at: { type: string, format: date-time }
+
+    Conversation:
+      type: object
+      required: [id, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        platform: { type: string }
+        match_name: { type: string }
+        created_at: { type: string, format: date-time }
+
+    SubmitMessage:
+      type: object
+      required: [sender, body]
+      properties:
+        sender: { type: string, enum: [self, match] }
+        body: { type: string }
+        sent_at: { type: string, format: date-time }
+
+    SegmentLabel:
+      type: string
+      enum: [engaging, neutral, flat]
+
+    AnalysisSegment:
+      type: object
+      properties:
+        start_position: { type: integer }
+        end_position: { type: integer }
+        engagement_score: { type: number }
+        label: { $ref: '#/components/schemas/SegmentLabel' }
+        comment: { type: string }
+
+    GoalScore:
+      type: object
+      properties:
+        goal: { $ref: '#/components/schemas/CoachingGoal' }
+        score: { type: number }
+        comment: { type: string }
+
+    AnalysisOverall:
+      type: object
+      properties:
+        engagement_score: { type: number }
+        summary: { type: string }
+        strengths: { type: array, items: { type: string } }
+        improvements: { type: array, items: { type: string } }
+        reflection_questions:
+          type: array
+          items: { type: string }
+          nullable: true
+        patterns:
+          type: array
+          items: { type: string }
+          nullable: true
+        goal_scores:
+          type: array
+          items: { $ref: '#/components/schemas/GoalScore' }
+          nullable: true
+
+    AnalysisStatus:
+      type: string
+      enum: [pending, running, succeeded, failed]
+
+    AnalysisResult:
+      type: object
+      required: [id, conversation_id, status]
+      properties:
+        id: { type: string, format: uuid }
+        conversation_id: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/AnalysisStatus' }
+        model_version: { type: string }
+        segments:
+          type: array
+          items: { $ref: '#/components/schemas/AnalysisSegment' }
+          nullable: true
+        overall: { $ref: '#/components/schemas/AnalysisOverall', nullable: true }
+        error: { type: string }
+        created_at: { type: string, format: date-time }
+        completed_at: { type: string, format: date-time }
+
+    ProfileScoreSource:
+      type: object
+      properties:
+        analysis_id: { type: string, format: uuid }
+        conversation_id: { type: string, format: uuid }
+        submitted_at: { type: string, format: date-time }
+
+    ProfileScore:
+      type: object
+      required: [band, rubric_version]
+      properties:
+        band:
+          type: string
+          enum: [collecting_evidence, strong, developing, needs_more_coaching]
+        rubric_version: { type: string, enum: [profile-v1] }
+        conversations_counted: { type: integer }
+        minimum_conversations: { type: integer }
+        evidence:
+          type: array
+          items: { $ref: '#/components/schemas/ProfileScoreSource' }
+
+    LabelInput:
+      type: object
+      properties:
+        outcome:
+          type: string
+          enum: [ghosted, kept_talking, number_exchanged, date_set]
+          nullable: true
+        reply_received: { type: boolean, nullable: true }
+        engagement_score: { type: number, nullable: true }
+        segment_labels:
+          description: Free-form segment label corrections.
+          type: object
+        notes: { type: string }
+        consented: { type: boolean }
+        label_source: { type: string }
+
+    Stats:
+      type: object
+      properties:
+        uptime_seconds: { type: integer }
+        goroutines: { type: integer }
+        mem_alloc_mb: { type: integer }
+        requests_total: { type: integer }
+        responses_2xx: { type: integer }
+        responses_4xx: { type: integer }
+        responses_5xx: { type: integer }
+        ws_connections: { type: integer, description: Api only — live chat sockets. }
+
+security:
+  - bearerAuth: []
