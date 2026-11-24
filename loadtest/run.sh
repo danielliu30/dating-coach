@@ -37,6 +37,16 @@ if [ "${LT_DASH:-1}" != "0" ]; then
 	echo "live dashboard: http://localhost${LT_DASH_ADDR:-:8099}  terminal: http://localhost${LT_DASH_ADDR:-:8099}/log"
 fi
 
+# Ordered component list for the dashboard's suite progress ("3 of 8").
+suite=()
+for c in $COMPONENTS; do
+	if [ "$c" = "e2e" ]; then suite+=(e2e-book e2e-chat e2e-analyze); else suite+=("$c"); fi
+done
+{ printf '{"components":['
+	for i in "${!suite[@]}"; do printf '%s"%s"' "$([ "$i" -gt 0 ] && echo ,)" "${suite[$i]}"; done
+	printf '],"vus":"%s","rps":"%s","duration":"%s"}' "$VUS" "$RPS" "$DUR"
+} > out/suite.json
+
 run() {
 	local c="$1"
 	shift

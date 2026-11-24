@@ -166,6 +166,7 @@ func main() {
 	}
 
 	// --- Phase 3: refresh race (desync probe) ---------------------------------
+	m.SetPhase("refresh race")
 	// One account, -racers concurrent refreshes of the same token. Rotation is
 	// serialized by the account lock, so exactly one should get 200; each loser
 	// counts as token reuse and revokes the family — including the winner's
@@ -235,6 +236,7 @@ func main() {
 	}
 
 	// --- Phase 4: sequential refresh chains ------------------------------------
+	m.SetPhase("refresh chains")
 	// Each VU rotates serially; the newest session must keep working. Then one
 	// deliberate stale-token replay must 401 and kill the family — the
 	// anti-theft property.
@@ -293,6 +295,7 @@ func main() {
 	}
 
 	// --- Phase 5: verification-code desync --------------------------------------
+	m.SetPhase("verify-code desync")
 	// -verifyUsers accounts sign up at once; each scrapes the six-digit code
 	// the api logged for its own address. Every code must verify only the
 	// account it was issued to — a session that resolves to a different email

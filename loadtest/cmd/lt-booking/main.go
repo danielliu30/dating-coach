@@ -140,6 +140,7 @@ func main() {
 	}
 
 	// --- Phase 1: same-slot race ---------------------------------------------
+	m.SetPhase("same-slot race")
 	{
 		slot := baseSlot.Format(time.RFC3339)
 		var winners, conflicts, other int64
@@ -188,6 +189,7 @@ func main() {
 	}
 
 	// --- Phase 2: respond race -------------------------------------------------
+	m.SetPhase("respond race")
 	// Each VU books a distinct pending slot; coach confirm and decline are
 	// fired concurrently. Exactly one may succeed; the stored status must
 	// match the winning action.
@@ -254,6 +256,7 @@ func main() {
 	}
 
 	// --- Phase 3: cancel-vs-confirm race ---------------------------------------
+	m.SetPhase("cancel race")
 	{
 		u := users[0]
 		slot := baseSlot.Add(48 * time.Hour).Format(time.RFC3339)
@@ -305,6 +308,7 @@ func main() {
 	}
 
 	// --- Phase 4: expiry sweep + slot release ----------------------------------
+	m.SetPhase("expiry sweep")
 	{
 		u := users[1]
 		slot := baseSlot.Add(56 * time.Hour).Format(time.RFC3339)
@@ -345,6 +349,7 @@ func main() {
 	}
 
 	// --- Phase 5: overlap invariant --------------------------------------------
+	m.SetPhase("overlap check")
 	if n := countOverlaps(coachID); n != 0 {
 		m.Note("overlap invariant: %d overlapping active sessions remain", n)
 		extra["overlap_violations"] = n

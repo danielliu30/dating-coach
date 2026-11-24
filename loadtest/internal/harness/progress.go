@@ -48,26 +48,63 @@ func (m *Metrics) Counters() map[string]int64 {
 
 // LiveState is the per-tick view written to live-<component>.json for the
 // dashboard and printed to the console.
+// LiveEndpoint is a live view of one endpoint: call count, per-status
+// breakdown (success vs failure rates derive from it), and tail latencies.
+type LiveEndpoint struct {
+	Name     string         `json:"name"`
+	Count    int            `json:"count"`
+	Statuses map[int]int    `json:"statuses"`
+	P50ms    float64        `json:"p50_ms"`
+	P95ms    float64        `json:"p95_ms"`
+	P99ms    float64        `json:"p99_ms"`
+}
+
 type LiveState struct {
-	Component string           `json:"component"`
-	ElapsedS  float64          `json:"elapsed_s"`
-	ObsTotal  int              `json:"obs_total"`
-	ObsRate   float64          `json:"obs_rate"`
-	Counters  map[string]int64 `json:"counters"`
-	Flags     map[string]int64 `json:"flags"`
-	UpdatedAt string           `json:"updated_at"`
+	Component      string           `json:"component"`
+	ElapsedS       float64          `json:"elapsed_s"`
+	Stage          string           `json:"stage"`
+	StageIdx       int              `json:"stage_idx"`
+	StageTotal     int              `json:"stage_total"`
+	StageElapsedS  float64          `json:"stage_elapsed_s"`
+	StageDurationS float64          `json:"stage_duration_s"`
+	VUs            int              `json:"vus"`
+	ObsTotal       int              `json:"obs_total"`
+	ObsRate        float64          `json:"obs_rate"`
+	Endpoints      []LiveEndpoint   `json:"endpoints"`
+	Counters       map[string]int64 `json:"counters"`
+	Flags          map[string]int64 `json:"flags"`
+	UpdatedAt      string           `json:"updated_at"`
 }
 
 func (m *Metrics) live(name string, obsTotal int, obsRate float64) LiveState {
 	counts := m.Counters()
+	stage, idx, total, vus, stageEl, stageDur := m.StageInfo()
+
+	snap := m.Snapshot()
+	eps := make([]LiveEndpoint, 0, len(snap))
+	for label, e := range snap {
+		eps = append(eps, LiveEndpoint{
+			Name: label, Count: e.Count, Statuses: e.Statuses,
+			P50ms: e.P50, P95ms: e.P95, P99ms: e.P99,
+		})
+	}
+	sort.Slice(eps, func(i, j int) bool { return eps[i].Count > eps[j].Count })
+
 	return LiveState{
-		Component: name,
-		ElapsedS:  time.Since(m.start).Seconds(),
-		ObsTotal:  obsTotal,
-		ObsRate:   obsRate,
-		Counters:  counts,
-		Flags:     Flagged(counts),
-		UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+		Component:      name,
+		ElapsedS:       time.Since(m.start).Seconds(),
+		Stage:          stage,
+		StageIdx:       idx,
+		StageTotal:     total,
+		StageElapsedS:  stageEl,
+		StageDurationS: stageDur,
+		VUs:            vus,
+		ObsTotal:       obsTotal,
+		ObsRate:        obsRate,
+		Endpoints:      eps,
+		Counters:       counts,
+		Flags:          Flagged(counts),
+		UpdatedAt:      time.Now().UTC().Format(time.RFC3339),
 	}
 }
 
@@ -111,8 +148,15 @@ func (m *Metrics) Progress(ctx context.Context, name string, every time.Duration
 					}
 					flags = " flags=" + strings.Join(parts, ",")
 				}
-				fmt.Fprintf(os.Stderr, "[%s] t=%5.1fs obs=%-7d rate=%6.1f/s%s\n",
-					name, st.ElapsedS, obs, rate, flags)
+				meta := ""
+				switch {
+				case st.VUs > 0:
+					meta = fmt.Sprintf(" vus=%-2d s=%d/%d", st.VUs, st.StageIdx, st.StageTotal)
+				case st.Stage != "":
+					meta = " phase=" + strings.ReplaceAll(st.Stage, " ", "-")
+				}
+				fmt.Fprintf(os.Stderr, "[%s]%s t=%5.1fs obs=%-7d rate=%6.1f/s%s\n",
+					name, meta, st.ElapsedS, obs, rate, flags)
 
 				if liveDir != "" {
 					if data, err := json.Marshal(st); err == nil {
