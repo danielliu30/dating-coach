@@ -46,6 +46,7 @@ export function AuthLayout({
   const formRef = useRef<View>(null);
   const landingRef = useRef<View>(null);
   const [page, setPage] = useState<LandingPage>('product');
+  const [showTop, setShowTop] = useState(false);
 
   const scrollTo = useCallback((target: React.RefObject<View | null>) => {
     const scroll = scrollRef.current;
@@ -64,15 +65,24 @@ export function AuthLayout({
     [scrollTo],
   );
 
+  const scrollToTop = useCallback(() => {
+    const scroll = scrollRef.current;
+    if (!scroll || typeof scroll.scrollTo !== 'function') return;
+    scroll.scrollTo({ y: 0, animated: true });
+  }, []);
+
   return (
     <View style={styles.screen}>
       <StatusBar style="light" />
       <ScrollView
         ref={scrollRef}
+        testID="landing-scroll"
         style={{ flex: 1 }}
         contentContainerStyle={styles.scroll}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
+        scrollEventThrottle={64}
+        onScroll={(e) => setShowTop(e.nativeEvent.contentOffset.y > height)}
       >
         <View style={[styles.hero, { minHeight: landing ? Math.max(height, 640) : height }]}>
           <Image source={{ uri: HERO_IMAGE_URL }} style={styles.fill} resizeMode="cover" />
@@ -153,6 +163,18 @@ export function AuthLayout({
           </View>
         ) : null}
       </ScrollView>
+
+      {landing && showTop ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Back to top"
+          onPress={scrollToTop}
+          style={({ pressed }) => [styles.toTop, pressed && { opacity: 0.8 }]}
+        >
+          <Ionicons name="arrow-up" size={16} color={colors.primaryText} />
+          <Text style={styles.toTopText}>Top</Text>
+        </Pressable>
+      ) : null}
     </View>
   );
 }
@@ -279,4 +301,18 @@ const styles = StyleSheet.create({
   scrollHint: { alignSelf: 'center', alignItems: 'center', gap: 2, paddingBottom: 26, opacity: 0.9 },
   scrollHintText: { fontFamily: fonts.sansSemi, fontSize: 13, color: colors.primaryText },
   landing: { paddingHorizontal: 16, paddingTop: 8, paddingBottom: 32 },
+  toTop: {
+    position: 'absolute',
+    right: 20,
+    bottom: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: radii.pill,
+    backgroundColor: colors.primary,
+    ...elevation.high,
+  },
+  toTopText: { fontFamily: fonts.sansBold, fontSize: 13, color: colors.primaryText },
 });
