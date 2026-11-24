@@ -77,10 +77,17 @@ log() { echo "deploy-watch[$(date -u +%Y-%m-%dT%H:%M:%SZ)]: $*"; }
 git -C "$DEPLOY_DIR" fetch --quiet
 local_sha="$(git -C "$DEPLOY_DIR" rev-parse HEAD)"
 remote_sha="$(git -C "$DEPLOY_DIR" rev-parse "$DEPLOY_GIT_REF")"
-if [ "$local_sha" = "$remote_sha" ]; then
+
+# Compare against the last SUCCESSFULLY deployed sha, not the checkout's
+# HEAD: if a deploy fails midway (after the ff-merge), HEAD already equals
+# remote and a HEAD check would skip the retry forever. The marker is an
+# untracked file, so it does not trip the dirty-tree guard below.
+MARKER="$DEPLOY_DIR/.deployed-sha"
+deployed_sha="$(cat "$MARKER" 2>/dev/null || true)"
+if [ "$deployed_sha" = "$remote_sha" ]; then
     exit 0
 fi
-log "new revision $remote_sha (was ${local_sha:0:8})"
+log "deploying $remote_sha (checkout at ${local_sha:0:8}, last deployed ${deployed_sha:-none})"
 
 # Immutable per-commit image tags: the build below labels every image with
 # the deploy SHA and stack.yml's ${IMAGE_TAG} refs resolve to it. A mutable
@@ -145,6 +152,7 @@ while :; do
 done
 
 if curl -fsS --max-time 10 "$DEPLOY_HEALTH_URL" >/dev/null; then
+    echo "$remote_sha" > "$MARKER"
     log "deployed ${remote_sha:0:8} — $DEPLOY_HEALTH_URL healthy"
 else
     log "converged but $DEPLOY_HEALTH_URL not healthy" >&2
