@@ -106,6 +106,7 @@ func run() error {
 
 	authSvc := auth.NewService(pg.Pool, pg.Queries, issuer, notifier, cfg.BcryptCost, cfg.PublicAppURL, verificationCodes, auth.NewResetCache(rdb, cfg.ResetCodeTTL, cfg.ResetResendCooldown), denylist, deletions, cfg.JWTTTL, cfg.VerifyTokenTTL, cfg.RefreshTokenTTL)
 	authSvc.SetLoginThrottle(auth.NewLoginThrottle(rdb, cfg.LoginFailureLimit, cfg.LoginFailureWindow))
+	authSvc.SetRefreshReuseGrace(cfg.RefreshReuseGrace)
 	if cfg.GoogleClientID != "" {
 		authSvc.SetGoogleVerifier(auth.NewGoogleVerifier(cfg.GoogleClientID, auth.GoogleJWKSURL, nil))
 	} else {

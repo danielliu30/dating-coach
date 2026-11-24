@@ -87,6 +87,15 @@ func (s *Service) issueRefreshToken(ctx context.Context, q *db.Queries, user db.
 // access tokens already minted are denylisted as well, which also closes the
 // account's open sockets on every replica.
 //
+// A replay inside s.reuseGrace of the spend is not theft evidence though: a
+// client refreshing from parallel tabs or retried requests can only repeat
+// the token it holds — the rotation's winner alone got the replacement — so
+// concurrent presentations land within moments of each other. Those are
+// answered with a plain invalid, because revoking the family would kill the
+// winner's brand-new session along with the loser's (the desync the load
+// suite reproduces). A replay older than the window is theft: a legitimate
+// client would long since have presented the replacement instead.
+//
 // Spending the presented token and storing its replacement share a
 // transaction, so a failure half way through cannot leave the caller holding a
 // token that is spent but was never exchanged for another.
@@ -115,6 +124,10 @@ func (s *Service) Refresh(ctx context.Context, raw string) (Session, error) {
 		return Session{}, ErrInvalidRefreshToken
 	}
 	if row.UsedAt != nil {
+		if time.Since(*row.UsedAt) < s.reuseGrace {
+			slog.Warn("refresh token replayed inside grace window", "user_id", row.UserID)
+			return Session{}, ErrInvalidRefreshToken
+		}
 		slog.Warn("refresh token reused", "user_id", row.UserID)
 		// Whoever holds the stolen pair may already hold access tokens and open
 		// sockets too: denylist them all now rather than letting them run out
