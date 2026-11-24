@@ -19,3 +19,6 @@ Each service directory has its own `AGENTS.md` — read it before working there.
 
 - `.agents/skills/testing-dating-coach/` — local stack bring-up, click-through recipes, adversarial scenarios.
 - `.agents/skills/running-dating-coach-in-docker/` — images, release pipeline, `DEPLOY_TARGET` switch, local vs Cloud Run deploys, rollback, backups.
+- `.agents/skills/coding-efficiency/` — efficient-change playbook: guardrails first, smallest diff, tests with the code, cheapest sufficient verify.
+- `.agents/skills/dating-coach-verify/` — per-service gate commands, targeted test invocations, change-type → minimum-check guide.
+- `.agents/skills/review/` — severity-ordered review of local diffs or GitHub PRs against the repo non-negotiables.
