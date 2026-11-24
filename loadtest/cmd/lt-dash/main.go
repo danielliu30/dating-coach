@@ -23,7 +23,7 @@ const maxLogBytes = 512 << 10 // serve the tail beyond this
 func main() {
 	out := flag.String("out", "out", "report directory holding live-*.json")
 	logPath := flag.String("log", "", "run log file to serve at /log (e.g. out/run.log)")
-	addr := flag.String("addr", ":8099", "listen address")
+	addr := flag.String("addr", "127.0.0.1:8099", "listen address")
 	flag.Parse()
 
 	http.HandleFunc("/api/live", func(w http.ResponseWriter, r *http.Request) {

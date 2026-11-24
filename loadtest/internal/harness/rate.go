@@ -28,10 +28,12 @@ func NewRate(rps float64) *Rate {
 }
 
 // Wait blocks until the next tick or ctx ends; the bool reports which. A nil
-// *Rate always returns true immediately so callers can use it unconditionally.
+// *Rate returns true immediately while ctx is live so callers can use it
+// unconditionally; once ctx is done it returns false so unpaced loops still
+// terminate at stage expiry.
 func (r *Rate) Wait(ctx context.Context) bool {
 	if r == nil {
-		return true
+		return ctx.Err() == nil
 	}
 	select {
 	case <-ctx.Done():
