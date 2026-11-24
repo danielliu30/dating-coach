@@ -33,6 +33,3 @@ ml-analyzer/data/*
 .deploy.lock
 
 
-# Load test reports
-/loadtest/out/
-!/loadtest/.env
