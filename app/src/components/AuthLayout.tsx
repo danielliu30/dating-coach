@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { StatusBar } from 'expo-status-bar';
-import React, { useCallback, useRef } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import {
   Image,
   Pressable,
@@ -14,7 +14,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { colors, elevation, fonts, radii, type } from '../theme';
-import { Landing } from './Landing';
+import { Landing, type LandingPage } from './Landing';
 
 // A couple embracing at sunset, hills behind them.
 const HERO_IMAGE_URL =
@@ -29,8 +29,9 @@ const PROOF: { icon: React.ComponentProps<typeof Ionicons>['name']; text: string
 
 /**
  * Signed-out shell: a full-bleed hero photo with the form floating in the
- * middle. With `landing`, the Product/About story scrolls beneath the hero and
- * the top nav anchors to it; without it (sign-up, verify) only the hero shows.
+ * middle. With `landing`, the story beneath the hero is split into nav pages
+ * (Product / How it works / About) switched from the top nav; without it
+ * (sign-up, verify) only the hero shows.
  */
 export function AuthLayout({
   children,
@@ -43,17 +44,25 @@ export function AuthLayout({
   const wide = width >= 900;
   const scrollRef = useRef<ScrollView>(null);
   const formRef = useRef<View>(null);
-  const productRef = useRef<View>(null);
-  const aboutRef = useRef<View>(null);
+  const landingRef = useRef<View>(null);
+  const [page, setPage] = useState<LandingPage>('product');
 
   const scrollTo = useCallback((target: React.RefObject<View | null>) => {
     const scroll = scrollRef.current;
     const node = target.current;
-    if (!scroll || !node) return;
+    if (!scroll || !node || typeof node.measureLayout !== 'function') return;
     const container = scroll.getInnerViewNode();
     if (!container) return;
     node.measureLayout(container, (_x, y) => scroll.scrollTo({ y: Math.max(0, y - 16), animated: true }));
   }, []);
+
+  const openPage = useCallback(
+    (next: LandingPage) => {
+      setPage(next);
+      scrollTo(landingRef);
+    },
+    [scrollTo],
+  );
 
   return (
     <View style={styles.screen}>
@@ -88,8 +97,9 @@ export function AuthLayout({
               </View>
               {landing ? (
                 <View style={styles.navLinks}>
-                  <NavLink label="Product" onPress={() => scrollTo(productRef)} />
-                  <NavLink label="About" onPress={() => scrollTo(aboutRef)} />
+                  <NavLink label="Product" active={page === 'product'} onPress={() => openPage('product')} />
+                  <NavLink label="How it works" active={page === 'how'} onPress={() => openPage('how')} />
+                  <NavLink label="About" active={page === 'about'} onPress={() => openPage('about')} />
                   <NavLink label="Sign in" onPress={() => scrollTo(formRef)} filled />
                 </View>
               ) : null}
@@ -127,7 +137,7 @@ export function AuthLayout({
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel="Scroll to learn more"
-                onPress={() => scrollTo(productRef)}
+                onPress={() => scrollTo(landingRef)}
                 style={styles.scrollHint}
               >
                 <Text style={styles.scrollHintText}>Why Dating Humane</Text>
@@ -138,8 +148,8 @@ export function AuthLayout({
         </View>
 
         {landing ? (
-          <View style={styles.landing}>
-            <Landing productRef={productRef} aboutRef={aboutRef} />
+          <View ref={landingRef} collapsable={false} style={styles.landing}>
+            <Landing page={page} />
           </View>
         ) : null}
       </ScrollView>
@@ -147,21 +157,30 @@ export function AuthLayout({
   );
 }
 
-/** Translucent pill link used in the landing top nav. */
+/** Translucent pill link used in the landing top nav; `active` marks the current page. */
 function NavLink({
   label,
   onPress,
   filled,
+  active,
 }: {
   label: string;
   onPress: () => void;
   filled?: boolean;
+  active?: boolean;
 }): React.ReactElement {
   return (
     <Pressable
       accessibilityRole="button"
+      accessibilityState={{ selected: active }}
+      aria-current={active ? 'page' : undefined}
       onPress={onPress}
-      style={({ pressed }) => [styles.navLink, filled && styles.navLinkFilled, pressed && { opacity: 0.8 }]}
+      style={({ pressed }) => [
+        styles.navLink,
+        filled && styles.navLinkFilled,
+        active && styles.navLinkActive,
+        pressed && { opacity: 0.8 },
+      ]}
     >
       <Text style={[styles.navLinkText, filled && { color: colors.primaryDeep }]}>{label}</Text>
     </Pressable>
@@ -203,6 +222,7 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255,255,255,0.28)',
   },
   navLinkFilled: { backgroundColor: colors.surface, borderColor: colors.surface },
+  navLinkActive: { backgroundColor: 'rgba(255,255,255,0.28)', borderColor: 'rgba(255,255,255,0.55)' },
   navLinkText: { fontFamily: fonts.sansBold, fontSize: 13, color: colors.primaryText },
   heroBody: {
     flex: 1,
