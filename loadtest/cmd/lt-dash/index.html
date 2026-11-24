@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>dating-coach load test — live</title>
+<style>
+  :root { color-scheme: dark; }
+  body { font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+         margin: 0; padding: 18px; background: #0d1117; color: #c9d1d9; }
+  h1 { font-size: 16px; margin: 0 0 4px; }
+  .sub { color: #8b949e; font-size: 12px; margin-bottom: 14px; }
+  #suite { color: #58a6ff; font-size: 12px; margin-bottom: 14px; }
+
+  .card { border: 1px solid #21262d; border-radius: 6px; margin-bottom: 14px;
+          background: #161b22; overflow: hidden; }
+  .card.stale { opacity: .55; }
+  .chead { display: flex; gap: 14px; align-items: baseline; flex-wrap: wrap;
+           padding: 8px 14px; background: #1c2333; border-bottom: 1px solid #21262d; }
+  .cname { font-size: 15px; font-weight: 700; color: #e6edf3; }
+  .ctype { color: #8b949e; font-size: 12px; }
+  .cstat { margin-left: auto; font-weight: 600; font-size: 11px;
+           text-transform: uppercase; letter-spacing: .04em; }
+  .cstat.run { color: #3fb950; } .cstat.done { color: #8b949e; }
+  .cbody { padding: 8px 14px; }
+  .load { display: flex; gap: 18px; flex-wrap: wrap; margin-bottom: 6px;
+          color: #8b949e; font-size: 12px; }
+  .load b { color: #a5d6ff; font-weight: 600; }
+  .load .phase { color: #d29922; font-weight: 600; }
+  .flags { margin-bottom: 6px; }
+  .flag { color: #f85149; font-weight: 600; }
+  .okline { color: #3fb950; }
+
+  table { border-collapse: collapse; width: 100%; margin: 4px 0 8px; }
+  th, td { padding: 3px 10px 3px 0; text-align: left; white-space: nowrap;
+           border-bottom: 1px solid #21262d; font-size: 12px; }
+  th { color: #6e7681; font-weight: 600; font-size: 10px; text-transform: uppercase; }
+  td.op { color: #e6edf3; }
+  td.okv { color: #3fb950; } td.failv { color: #f85149; } td.errv { color: #d29922; }
+  td.codes { color: #8b949e; font-size: 11px; }
+  .cap { color: #6e7681; font-size: 10px; text-transform: uppercase;
+         letter-spacing: .05em; margin: 6px 0 2px; }
+  .counts { font-size: 11px; color: #8b949e; line-height: 1.7; word-break: break-all; }
+  .counts b { color: #c9d1d9; font-weight: 400; }
+  .errs { font-size: 11px; color: #f85149; line-height: 1.6; word-break: break-all; }
+  .empty { color: #8b949e; padding: 24px 10px; }
+</style>
+</head>
+<body>
+<h1>dating-coach load test — live</h1>
+<div class="sub">live state per component · refreshed every second · stale cards grey out</div>
+<div id="suite"></div>
+<div id="cards"><div class="empty">waiting for components…</div></div>
+<script>
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmt = (n, d=0) => n === undefined || n === null ? "–" : Number(n).toFixed(d);
+const num = n => Number(n).toLocaleString("en-US");
+
+// What each test type is — the scenario under load.
+const KIND = {
+  "sanity":      "stack smoke — health checks + signin round-trip",
+  "auth":        "credential correctness — signup race, verify-code desync, refresh race + chains",
+  "chat":        "WS delivery — echo matching, exactly-once persist, coach fan-out routing",
+  "booking":     "booking integrity — same-slot race, lifecycle races, overlap invariant",
+  "analysis":    "analyzer pipeline — submit→queue→result match, ownership isolation",
+  "e2e-book":    "journey — signup→book→confirm→cancel→signout",
+  "e2e-chat":    "journey — signup→thread→chat→signout",
+  "e2e-analyze": "journey — signup→chat→analysis→signout",
+  "payments":    "checkout + webhook idempotency",
+  "mixed":       "combined components running together (interference)",
+};
+
+let suite = null;
+fetch("/api/suite", {cache: "no-store"}).then(r => r.json())
+  .then(j => { suite = j.components ? j : null; }).catch(() => {});
+
+function epRow(e) {
+  const codes = e.statuses || {};
+  let ok = 0, fail = 0, err = 0;
+  const parts = [];
+  for (const [code, n] of Object.entries(codes).sort((a, b) => +a[0] - +b[0])) {
+    const c = +code;
+    if (c >= 200 && c < 300) ok += n;
+    else if (c === 0 || c === -1) err += n;
+    else fail += n;
+    parts.push(`${c === 0 ? "err" : c === -1 ? "ctx" : code}×${n}`);
+  }
+  const good = ok + fail;
+  const okPct = good ? (100 * ok / good) : 0;
+  return `<tr>
+    <td class="op">${esc(e.name)}</td>
+    <td>${num(e.count)}</td>
+    <td class="okv">${num(ok)}</td>
+    <td class="${fail ? "failv" : "okv"}">${num(fail)}</td>
+    <td class="${err ? "errv" : "okv"}">${num(err)}</td>
+    <td>${good ? fmt(okPct, 1) + "%" : "–"}</td>
+    <td>${fmt(e.p50_ms)}ms</td><td>${fmt(e.p95_ms)}ms</td><td>${fmt(e.p99_ms)}ms</td>
+    <td class="codes">${esc(parts.join(" "))}</td>
+  </tr>`;
+}
+
+function card(s, age) {
+  const stale = age > 5;
+  const flags = Object.entries(s.flags || {})
+    .map(([k, v]) => `<span class="flag">⚠ ${esc(k)}=${v}</span>`).join("  ");
+  const load = s.vus
+    ? `stage <b>${s.stage_idx}/${s.stage_total} · ${esc(s.stage)}</b>` +
+      ` · <b>${s.vus}</b> concurrent clients` +
+      (s.stage_duration_s ? ` · <b>${fmt(s.stage_elapsed_s)}/${fmt(s.stage_duration_s)}s</b>` : "")
+    : (s.stage ? `<span class="phase">phase: ${esc(s.stage)}</span>` : "setup / teardown");
+  const target = suite && suite.rps ? ` · target <b>${suite.rps}/s</b>` : "";
+  const counters = Object.entries(s.counters || {})
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([k, v]) => `${esc(k)}=<b>${num(v)}</b>`).join("  ") || "–";
+  const eps = (s.endpoints || []).map(epRow).join("");
+  return `<div class="card ${stale ? "stale" : ""}">
+    <div class="chead">
+      <span class="cname">${esc(s.component)}</span>
+      <span class="ctype">${esc(KIND[s.component] || "load component")}</span>
+      <span class="cstat ${stale ? "done" : "run"}">${stale ? "finished" : "running"}</span>
+    </div>
+    <div class="cbody">
+      <div class="load">${load}
+        <span>elapsed <b>${fmt(s.elapsed_s)}s</b></span>
+        <span><b>${num(s.obs_total)}</b> calls · <b>${fmt(s.obs_rate, 1)}/s</b>${target}</span>
+      </div>
+      <div class="flags">${flags || '<span class="okline">no flagged counters</span>'}</div>
+      ${(s.errors || []).length ? `<div class="cap">recent errors</div>
+        <div class="errs">${s.errors.map(e => `<div>${esc(e)}</div>`).join("")}</div>` : ""}
+      ${eps ? `<div class="cap">operations — calls · success · fail · transport-err · ok% · latency</div>
+      <table><thead><tr>
+        <th>operation</th><th>calls</th><th>ok</th><th>fail</th><th>err</th><th>ok%</th>
+        <th>p50</th><th>p95</th><th>p99</th><th>status breakdown</th>
+      </tr></thead><tbody>${eps}</tbody></table>` : ""}
+      <div class="cap">all counters</div>
+      <div class="counts">${counters}</div>
+    </div>
+  </div>`;
+}
+
+function render(states) {
+  const el = document.getElementById("cards");
+  if (!states.length) { el.innerHTML = '<div class="empty">waiting for components…</div>'; return; }
+  const now = Date.now();
+  states.sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at));
+  const fresh = states.filter(s => (now - Date.parse(s.updated_at)) / 1000 <= 5);
+
+  if (suite) {
+    const su = document.getElementById("suite");
+    if (fresh.length) {
+      const cur = fresh[0].component;
+      const idx = suite.components.indexOf(cur);
+      su.textContent = (idx >= 0 ? `suite ${idx + 1}/${suite.components.length} — ` : "suite — ") +
+        suite.components.map(c => c === cur ? "▶" + c : c).join("  ") +
+        `   (vus ${suite.vus} · rps ${suite.rps} · ${suite.duration}/stage)`;
+    } else su.textContent = `suite: ${suite.components.length} components — idle`;
+  }
+  el.innerHTML = states.map(s => card(s, (now - Date.parse(s.updated_at)) / 1000)).join("");
+}
+
+async function tick() {
+  try { const r = await fetch("/api/live", {cache: "no-store"}); render(await r.json()); }
+  catch (e) {}
+}
+setInterval(tick, 1000); tick();
+</script>
+</body>
+</html>
