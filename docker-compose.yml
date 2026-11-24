@@ -211,20 +211,33 @@ services:
       ml-analyzer:
         condition: service_started
 
-  # Ops metering sidecar: collects swarm service/task state, container stats
-  # (docker socket, read-only) and the nginx edge log into /api/snapshot, and
-  # serves the admin-gated dashboard nginx proxies at /metrics/. Keeps all
-  # metrics work outside the app services.
+  # Metrics writer: logs docker stats, service replicas and aggregated edge
+  # requests to the app-logs JSONL store every METRICS_INTERVAL seconds. The
+  # only component allowed to touch the docker socket (read-only).
+  metrics:
+    image: docker:cli
+    volumes:
+      - '/var/run/docker.sock:/var/run/docker.sock:ro'
+      - 'app-logs:/logs'
+      - './scripts/metrics-collect.sh:/usr/local/bin/metrics-collect.sh:ro'
+    command: ['sh', '/usr/local/bin/metrics-collect.sh']
+    healthcheck:
+      test: ['CMD-SHELL', 'test -f /logs/metrics-stats.jsonl && [ $$(( $$(date +%s) - $$(date -r /logs/metrics-stats.jsonl +%s) )) -lt 60 ]']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+    logging: *default-logging
+
+  # Metrics read side: aggregates the JSONL store into /api/snapshot and
+  # serves the admin-gated dashboard nginx proxies at /metrics/. No docker
+  # socket — it only reads the data store.
   metering:
     build:
       context: ./backend
       target: metering
     image: ${DOCKERHUB_NAMESPACE:-danielliu30}/dating-coach-metering:${IMAGE_TAG:-latest}
-    volumes:
-      - '/var/run/docker.sock:/var/run/docker.sock:ro'
-      - 'app-logs:/logs:ro'
-    environment:
-      STACK_NAME: ${STACK_NAME:-dating-coach}
+    volumes: ['app-logs:/logs:ro']
     healthcheck:
       test: ['CMD-SHELL', 'wget -q -O /dev/null http://localhost:9090/healthz || exit 1']
       interval: 30s
