@@ -264,12 +264,19 @@ services:
       <<: *roll-stateless
       placement: *manager-only
 
+# Swarm configs are immutable — an existing config can never take new
+# content, so deploy-watch versions each name by a content hash
+# (NGINX_CONF_VERSION). Same content = same name = no-op; changed content =
+# a new config object and the service rolls onto it.
 configs:
   nginx_default_conf:
+    name: nginx_default_conf-${NGINX_CONF_VERSION:-v1}
     file: ../nginx/default.conf
   metrics_dashboard_html:
+    name: metrics_dashboard_html-${NGINX_CONF_VERSION:-v1}
     file: ../nginx/metrics-dashboard.html
   metrics_dashboard_js:
+    name: metrics_dashboard_js-${NGINX_CONF_VERSION:-v1}
     file: ../nginx/metrics-dashboard.js
 
 # attachable so the migrate gate in deploy-watch.sh can `docker run` on it
