@@ -94,7 +94,7 @@ func run() error {
 	go func() {
 		defer wg.Done()
 		consume(ctx, "analysis", func(ctx context.Context) error {
-			return runAnalysisConsumer(ctx, cfg.RabbitMQURL, cfg.AnalysisQueue, worker.Handle)
+			return runAnalysisConsumer(ctx, cfg.RabbitMQURL, cfg.AnalysisQueue, cfg.AnalysisPrefetch, worker.Handle)
 		})
 	}()
 	go func() {
@@ -185,8 +185,8 @@ func consume(ctx context.Context, kind string, run func(context.Context) error) 
 }
 
 // runAnalysisConsumer holds one broker connection for as long as it stays healthy.
-func runAnalysisConsumer(ctx context.Context, url, name string, handle analysis.JobHandler) error {
-	queue, err := analysis.OpenQueue(url, name)
+func runAnalysisConsumer(ctx context.Context, url, name string, prefetch int, handle analysis.JobHandler) error {
+	queue, err := analysis.OpenQueue(url, name, prefetch)
 	if err != nil {
 		return err
 	}

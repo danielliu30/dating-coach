@@ -10,9 +10,6 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
-// prefetchCount bounds both unacked deliveries and in-flight handlers.
-const prefetchCount = 4
-
 // Job is the unit of work handed to the analysis worker.
 type Job struct {
 	AnalysisID     string `json:"analysis_id"`
@@ -23,14 +20,17 @@ type Job struct {
 // Queue is a thin RabbitMQ wrapper used by both the API (publish) and the worker
 // (consume).
 type Queue struct {
-	conn    *amqp.Connection
-	channel *amqp.Channel
-	name    string
+	conn     *amqp.Connection
+	channel  *amqp.Channel
+	name     string
+	prefetch int
 }
 
 // OpenQueue dials the broker, declares the durable queue and configures
-// prefetch plus publisher confirms. Callers must Close the result.
-func OpenQueue(url, name string) (*Queue, error) {
+// prefetch plus publisher confirms. Callers must Close the result. prefetch
+// bounds unacked deliveries and, on the worker, in-flight handlers — it is the
+// per-consumer drain concurrency.
+func OpenQueue(url, name string, prefetch int) (*Queue, error) {
 	conn, err := amqp.Dial(url)
 	if err != nil {
 		return nil, fmt.Errorf("dial rabbitmq: %w", err)
@@ -45,7 +45,7 @@ func OpenQueue(url, name string) (*Queue, error) {
 		conn.Close()
 		return nil, fmt.Errorf("declare queue %q: %w", name, err)
 	}
-	if err := channel.Qos(prefetchCount, 0, false); err != nil {
+	if err := channel.Qos(prefetch, 0, false); err != nil {
 		channel.Close()
 		conn.Close()
 		return nil, fmt.Errorf("set qos: %w", err)
@@ -57,7 +57,7 @@ func OpenQueue(url, name string) (*Queue, error) {
 		conn.Close()
 		return nil, fmt.Errorf("enable publisher confirms: %w", err)
 	}
-	return &Queue{conn: conn, channel: channel, name: name}, nil
+	return &Queue{conn: conn, channel: channel, name: name, prefetch: prefetch}, nil
 }
 
 // Publish sends a job and waits for the broker to confirm it, so callers only
@@ -96,7 +96,8 @@ type JobPublisher struct {
 
 // OpenPublisher dials the broker and returns the publisher used by the API.
 func OpenPublisher(url, name string) (*JobPublisher, error) {
-	queue, err := OpenQueue(url, name)
+	// The publish channel never consumes; QoS prefetch is a no-op for it.
+	queue, err := OpenQueue(url, name, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -133,7 +134,7 @@ func (p *JobPublisher) acquire() (*Queue, error) {
 		return p.queue, nil
 	}
 	p.queue = nil
-	queue, err := OpenQueue(p.url, p.name)
+	queue, err := OpenQueue(p.url, p.name, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -168,7 +169,7 @@ func (p *JobPublisher) Close() {
 type JobHandler func(ctx context.Context, job Job, lastAttempt bool) error
 
 // Consume blocks until ctx is cancelled or the channel drops, running up to
-// prefetchCount jobs concurrently so one slow model call does not stall the
+// prefetch jobs concurrently so one slow model call does not stall the
 // deliveries behind it. A failing first attempt is requeued so a transient ML
 // or network blip does not lose the analysis.
 func (q *Queue) Consume(ctx context.Context, handle JobHandler) error {
@@ -177,7 +178,7 @@ func (q *Queue) Consume(ctx context.Context, handle JobHandler) error {
 		return fmt.Errorf("consume queue: %w", err)
 	}
 	var wg sync.WaitGroup
-	slots := make(chan struct{}, prefetchCount)
+	slots := make(chan struct{}, q.prefetch)
 	defer wg.Wait()
 	for {
 		select {
