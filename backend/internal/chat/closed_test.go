@@ -82,7 +82,7 @@ func TestSendIntoClosedThreadOverSocket(t *testing.T) {
 		}
 		defer conn.CloseNow()
 		event := Event{Type: EventMessage, ClientID: "c-closed", Body: "anyone there?"}
-		h.handleIncoming(r.Context(), conn, f.threadID, auth.Principal{UserID: f.client}, uuid.New(), event)
+		h.handleIncoming(r.Context(), conn, f.threadID, auth.Principal{UserID: f.client}, uuid.New(), &socketGuard{}, event)
 	}))
 	defer server.Close()
 
