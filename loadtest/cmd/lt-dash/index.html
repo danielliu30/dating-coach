@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>dating-coach load test — live</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 14px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+         margin: 0; padding: 18px; background: #0d1117; color: #c9d1d9; }
+  h1 { font-size: 16px; margin: 0 0 4px; }
+  .sub { color: #8b949e; font-size: 12px; margin-bottom: 14px; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { padding: 5px 10px; text-align: left; border-bottom: 1px solid #21262d;
+           white-space: nowrap; }
+  th { color: #8b949e; font-weight: 600; font-size: 11px; text-transform: uppercase; }
+  td.flags { white-space: normal; }
+  .flag { color: #f85149; }
+  .ok { color: #3fb950; }
+  .stale { color: #8b949e; }
+  .empty { color: #8b949e; padding: 24px 10px; }
+</style>
+</head>
+<body>
+<h1>dating-coach load test — live</h1>
+<div class="sub">polling <code>out/live-*.json</code> every second · staleness greys a row after 5s</div>
+<table>
+  <thead><tr>
+    <th>component</th><th>elapsed</th><th>obs</th><th>rate/s</th>
+    <th>counters</th><th>flags</th><th>updated</th>
+  </tr></thead>
+  <tbody id="rows"><tr><td class="empty" colspan="7">waiting for components…</td></tr></tbody>
+</table>
+<script>
+const fmt = (n, d=1) => n === undefined || n === null ? "–" : Number(n).toFixed(d);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+function render(states) {
+  const tb = document.getElementById("rows");
+  if (!states.length) {
+    tb.innerHTML = '<tr><td class="empty" colspan="7">waiting for components…</td></tr>';
+    return;
+  }
+  const now = Date.now();
+  tb.innerHTML = states.map(s => {
+    const age = (now - Date.parse(s.updated_at)) / 1000;
+    const cls = age > 5 ? "stale" : "";
+    const counters = Object.entries(s.counters || {})
+      .sort((a, b) => b[1] - a[1]).slice(0, 8)
+      .map(([k, v]) => `${esc(k)}=${v}`).join("  ");
+    const flags = Object.entries(s.flags || {})
+      .map(([k, v]) => `<span class="flag">${esc(k)}=${v}</span>`).join("  ")
+      || '<span class="ok">none</span>';
+    return `<tr class="${cls}">
+      <td>${esc(s.component)}</td>
+      <td>${fmt(s.elapsed_s)}s</td>
+      <td>${s.obs_total}</td>
+      <td>${fmt(s.obs_rate)}</td>
+      <td>${counters}</td>
+      <td class="flags">${flags}</td>
+      <td>${age < 5 ? age.toFixed(0) + "s ago" : "stale"}</td>
+    </tr>`;
+  }).join("");
+}
+
+async function tick() {
+  try {
+    const r = await fetch("/api/live", {cache: "no-store"});
+    render(await r.json());
+  } catch (e) { /* keep last render */ }
+}
+setInterval(tick, 1000);
+tick();
+</script>
+</body>
+</html>

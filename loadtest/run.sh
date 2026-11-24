@@ -28,6 +28,13 @@ curl -fsS "$BASE/ml/healthz" >/dev/null || { echo "ml-analyzer unhealthy at $BAS
 
 go build ./...
 
+# Live dashboard over out/live-*.json; already-running copies just fail to
+# bind and the first instance keeps serving.
+if [ "${LT_DASH:-1}" != "0" ]; then
+	(go run ./cmd/lt-dash -out out ${LT_DASH_ADDR:+-addr "$LT_DASH_ADDR"} >/dev/null 2>&1 &)
+	echo "live dashboard: http://localhost${LT_DASH_ADDR:-:8099}"
+fi
+
 run() {
 	local c="$1"
 	shift
