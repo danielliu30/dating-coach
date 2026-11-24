@@ -58,7 +58,11 @@ services:
     # commands/clients, OSS license. `redis-cli` inside the image is a symlink
     # to valkey-cli, so the healthcheck stays as-is.
     image: valkey/valkey:8-alpine
+    # AOF (fsync every second) so keys survive `compose down`/up; data lands in
+    # /data, which is what the named volume mounts.
+    command: ['valkey-server', '--appendonly', 'yes']
     ports: ['${REDIS_PORT:-127.0.0.1:6379}:6379']
+    volumes: ['redis-data:/data']
     healthcheck:
       test: ['CMD', 'redis-cli', 'ping']
       interval: 5s
@@ -67,10 +71,14 @@ services:
 
   rabbitmq:
     image: rabbitmq:3-management-alpine
+    # Mnesia stores under rabbit@<hostname>; pinning the hostname keeps the
+    # node name stable so the volume's data is picked up after a recreate.
+    hostname: rabbitmq
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}
     ports: ['${RABBITMQ_PORT:-127.0.0.1:5672}:5672', '${RABBITMQ_MANAGEMENT_PORT:-127.0.0.1:15672}:15672']
+    volumes: ['rabbitmq-data:/var/lib/rabbitmq']
     healthcheck:
       test: ['CMD', 'rabbitmq-diagnostics', '-q', 'ping']
       interval: 10s
@@ -203,4 +211,6 @@ services:
 
 volumes:
   postgres-data:
+  redis-data:
+  rabbitmq-data:
   pgadmin-data:
