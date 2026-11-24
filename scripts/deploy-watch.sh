@@ -74,6 +74,17 @@ NET="${DEPLOY_STACK}_appnet"
 
 log() { echo "deploy-watch[$(date -u +%Y-%m-%dT%H:%M:%SZ)]: $*"; }
 
+# Append a deploy event to the app-logs volume for the metrics dashboard.
+# Best-effort: a metrics write must never fail the deploy itself.
+emit_deploy_event() {
+    local result="$1"
+    docker run --rm -i -v "${DEPLOY_STACK}_app-logs:/logs" alpine:3.20 \
+        sh -c 'cat >> /logs/deploy-history.jsonl' <<EOF || true
+{"ts":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","sha":"${remote_sha:-unknown}","result":"$result","seconds":$SECONDS}
+EOF
+}
+trap 'emit_deploy_event failed' ERR
+
 git -C "$DEPLOY_DIR" fetch --quiet
 local_sha="$(git -C "$DEPLOY_DIR" rev-parse HEAD)"
 remote_sha="$(git -C "$DEPLOY_DIR" rev-parse "$DEPLOY_GIT_REF")"
@@ -153,6 +164,7 @@ done
 
 if curl -fsS --max-time 10 "$DEPLOY_HEALTH_URL" >/dev/null; then
     echo "$remote_sha" > "$MARKER"
+    emit_deploy_event ok
     log "deployed ${remote_sha:0:8} — $DEPLOY_HEALTH_URL healthy"
 else
     log "converged but $DEPLOY_HEALTH_URL not healthy" >&2
