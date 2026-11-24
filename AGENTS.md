@@ -15,10 +15,17 @@ Each service directory has its own `AGENTS.md` — read it before working there.
 
 `main` is protected (strict, PR required). Required checks: `build-test`, `typecheck-export`, `test`, `e2e`, `dependency-gate`, `merge-gate-tests`. One logical change per PR; dependencies declared in the body (`Depends on: #N`); same-repo non-draft PRs auto-merge on green via `merge-gate.yml`. See `.agents/skills/pr-granularity/SKILL.md`.
 
-## Ops skills
+## Workflow skills — apply every session
 
-- `.agents/skills/testing-dating-coach/` — local stack bring-up, click-through recipes, adversarial scenarios.
-- `.agents/skills/running-dating-coach-in-docker/` — images, release pipeline, `DEPLOY_TARGET` switch, local vs Cloud Run deploys, rollback, backups.
-- `.agents/skills/coding-efficiency/` — efficient-change playbook: guardrails first, smallest diff, tests with the code, cheapest sufficient verify.
-- `.agents/skills/dating-coach-verify/` — per-service gate commands, targeted test invocations, change-type → minimum-check guide.
-- `.agents/skills/review/` — severity-ordered review of local diffs or GitHub PRs against the repo non-negotiables.
+Invoke these whenever their trigger matches — they are part of the working protocol, not optional references:
+
+- `dev-cycle` — end-to-end loop for any code-change task: decompose → implement → verify → review → PR → merge.
+- `coding-efficiency` — every code-change task (implement, fix, refactor, add, remove).
+- `pr-granularity` — any change that splits into logical units; decompose before coding.
+- `dating-coach-verify` — before reporting any change; cheapest sufficient check.
+- `review` — self-review the final `git diff` before reporting; also `/review <PR#>` for GitHub PRs.
+
+## Ops skills — invoke when needed
+
+- `testing-dating-coach` — local stack bring-up, click-through recipes, adversarial scenarios.
+- `running-dating-coach-in-docker` — images, release pipeline, `DEPLOY_TARGET` switch, local vs Cloud Run deploys, rollback, backups.
