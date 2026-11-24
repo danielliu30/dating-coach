@@ -1,8 +1,6 @@
 package main
 
 import (
-	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,111 +10,86 @@ import (
 	"time"
 )
 
-// fakeDocker serves the docker HTTP API paths metering scrapes.
-func fakeDocker(t *testing.T) *dockerClient {
+func writeLines(t *testing.T, path string, lines ...string) {
 	t.Helper()
-	mux := http.NewServeMux()
-	mux.HandleFunc("/v1.43/services", func(w http.ResponseWriter, _ *http.Request) {
-		json.NewEncoder(w).Encode([]map[string]any{{
-			"ID":   "svc1",
-			"Spec": map[string]any{"Name": "dating-coach_api", "Mode": map[string]any{"Replicated": map[string]any{"Replicas": 1}}, "TaskTemplate": map[string]any{"ContainerSpec": map[string]any{"Image": "img:tag"}}},
-		}})
-	})
-	mux.HandleFunc("/v1.43/tasks", func(w http.ResponseWriter, _ *http.Request) {
-		json.NewEncoder(w).Encode([]map[string]any{{
-			"ServiceID": "svc1", "DesiredState": "running", "Status": map[string]string{"State": "running"},
-		}})
-	})
-	mux.HandleFunc("/v1.43/containers/json", func(w http.ResponseWriter, _ *http.Request) {
-		json.NewEncoder(w).Encode([]map[string]any{{
-			"Id": "abc", "Names": []string{"/dating-coach_api.1.x"}, "State": "running",
-		}})
-	})
-	mux.HandleFunc("/v1.43/containers/abc/stats", func(w http.ResponseWriter, _ *http.Request) {
-		json.NewEncoder(w).Encode(map[string]any{
-			"cpu_stats":    map[string]any{"cpu_usage": map[string]any{"total_usage": 300}, "system_cpu_usage": 1000, "online_cpus": 2},
-			"memory_stats": map[string]any{"usage": 512, "limit": 1024},
-			"networks":     map[string]any{"eth0": map[string]any{"rx_bytes": 7, "tx_bytes": 9}},
-			"pids_stats":   map[string]any{"current": 5},
-		})
-	})
-	mux.HandleFunc("/v1.43/containers/abc/json", func(w http.ResponseWriter, _ *http.Request) {
-		json.NewEncoder(w).Encode(map[string]any{"State": map[string]any{"StartedAt": time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano)}})
-	})
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-	return &dockerClient{http: srv.Client(), base: srv.URL}
+	os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644)
+}
+
+func store(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	writeLines(t, filepath.Join(dir, "metrics-stats.jsonl"),
+		`{"ts":"t1","started":"`+time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano)+`","Name":"dating-coach_api.1.x","CPUPerc":"0.50%","MemUsage":"8MiB / 16GiB","NetIO":"85kB / 90kB","MemPerc":"0.05%","PIDs":"15"}`,
+		`{"ts":"t2","started":"`+time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano)+`","Name":"dating-coach_api.1.x","CPUPerc":"1.00%","MemUsage":"9MiB / 16GiB","NetIO":"86kB / 91kB","MemPerc":"0.06%","PIDs":"15"}`,
+		`{"ts":"t2","started":"","Name":"dating-coach_web.1.y","CPUPerc":"0.10%","MemUsage":"1GiB / 16GiB","NetIO":"0B / 0B","MemPerc":"6.25%","PIDs":"3"}`,
+	)
+	writeLines(t, filepath.Join(dir, "metrics-services.jsonl"),
+		`{"ts":"t1","Name":"dating-coach_api","Replicas":"0/1","Image":"img:old"}`,
+		`{"ts":"t2","Name":"dating-coach_api","Replicas":"1/1","Image":"img:new"}`,
+		`{"ts":"t2","Name":"dating-coach_web","Replicas":"1/1","Image":"img:web"}`,
+	)
+	writeLines(t, filepath.Join(dir, "metrics-requests.jsonl"),
+		`{"ts":"t1","bucket":"api","requests":10,"s2xx":9,"s4xx":1,"s5xx":0}`,
+		`{"ts":"t2","bucket":"api","requests":5,"s2xx":4,"s4xx":0,"s5xx":1}`,
+		`{"ts":"t2","bucket":"web","requests":3,"s2xx":3,"s4xx":0,"s5xx":0}`,
+	)
+	writeLines(t, filepath.Join(dir, "deploy-history.jsonl"),
+		`{"ts":"t0","sha":"a","result":"ok","seconds":9}`,
+		`{"ts":"t1","sha":"b","result":"failed","seconds":4}`,
+	)
+	return dir
 }
 
 func TestCollect(t *testing.T) {
-	dir := t.TempDir()
-	access := filepath.Join(dir, "access.log")
-	os.WriteFile(access, []byte(
-		`{"uri":"/api/v1/auth/signin","status":200}`+"\n"+
-			`{"uri":"/api/v1/coaches","status":500}`+"\n"+
-			`{"uri":"/metrics/dashboard.js","status":200}`+"\n"+
-			`{"uri":"/app.js","status":404}`+"\n"), 0o644)
-	deploys := filepath.Join(dir, "deploys.jsonl")
-	os.WriteFile(deploys, []byte(`{"ts":"t1","sha":"abc","result":"ok","seconds":9}`+"\n"), 0o644)
+	r := newReader(store(t), 10)
+	snap := r.collect()
 
-	c := newCollector(fakeDocker(t), access, deploys, "dating-coach", 10)
-	snap := c.collect(context.Background())
-
-	if len(snap.Services) != 1 || snap.Services[0].Running != 1 || snap.Services[0].Desired != 1 {
+	if len(snap.Services) != 2 || snap.Services[0].Running != 1 || snap.Services[0].Desired != 1 || snap.Services[0].Image != "img:new" {
 		t.Fatalf("services: %+v", snap.Services)
 	}
 	if snap.Services[0].UptimeS < 3500 {
-		t.Fatalf("uptime: %d", snap.Services[0].UptimeS)
+		t.Fatalf("api uptime from started: %d", snap.Services[0].UptimeS)
 	}
-	if len(snap.Tasks) != 1 || snap.Tasks[0].MemPerc != 50 || snap.Tasks[0].Pids != 5 {
+	if len(snap.Tasks) != 2 {
 		t.Fatalf("tasks: %+v", snap.Tasks)
 	}
-	if snap.Requests["api"].Requests != 2 || snap.Requests["api"].S5xx != 1 || snap.Requests["metrics"].Requests != 1 || snap.Requests["web"].S4xx != 1 {
+	api := snap.Tasks[0]
+	if api.CPUPerc != 1.00 || api.MemBytes != 9<<20 || api.NetRx != 86e3 || api.Pids != 15 {
+		t.Fatalf("api task: %+v", api)
+	}
+	if h := snap.CPUHist["dating-coach_api.1.x"]; len(h) != 2 || h[1] != 1.00 {
+		t.Fatalf("cpu hist: %+v", h)
+	}
+	if snap.Requests["api"].Requests != 15 || snap.Requests["api"].S5xx != 1 || snap.Requests["web"].Requests != 3 {
 		t.Fatalf("requests: %+v", snap.Requests)
 	}
-	if len(snap.Deploys) != 1 {
-		t.Fatalf("deploys: %+v", snap.Deploys)
+	if len(snap.Deploys) != 2 || !strings.Contains(string(snap.Deploys[0]), `"sha":"b"`) {
+		t.Fatalf("deploys newest-first: %v", snap.Deploys)
 	}
 }
 
-func TestAccessLogDeltaAndRotation(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "access.log")
-	c := newCollector(fakeDocker(t), path, filepath.Join(t.TempDir(), "none"), "", 10)
-
-	os.WriteFile(path, []byte(`{"uri":"/api/a","status":200}`+"\n"), 0o644)
-	c.countAccessLog()
-	c.countAccessLog() // no new bytes -> no double count
-	if c.counters["api"].Requests != 1 {
-		t.Fatalf("after first pass: %+v", c.counters["api"])
+func TestParseHelpers(t *testing.T) {
+	if parseBytes("8.5MiB") != uint64(8.5*(1<<20)) || parseBytes("85kB") != 85e3 || parseBytes("0B") != 0 {
+		t.Fatal("parseBytes")
 	}
-	f, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
-	f.WriteString(`{"uri":"/api/b","status":503}` + "\n")
-	f.Close()
-	c.countAccessLog()
-	if c.counters["api"].Requests != 2 || c.counters["api"].S5xx != 1 {
-		t.Fatalf("after append: %+v", c.counters["api"])
+	if parsePct("1.25%") != 1.25 {
+		t.Fatal("parsePct")
 	}
-	// rotation: smaller file -> offset resets, counters keep accumulating
-	os.WriteFile(path, []byte(`{"uri":"/x","status":200}`+"\n"), 0o644)
-	c.countAccessLog()
-	if c.counters["api"].Requests != 2 || c.counters["web"].Requests != 1 {
-		t.Fatalf("after rotation: %+v", c.counters)
+	rx, tx := parsePair("1KiB / 2KiB")
+	if rx != 1024 || tx != 2048 {
+		t.Fatal("parsePair")
 	}
 }
 
-func TestBucketFor(t *testing.T) {
-	for uri, want := range map[string]string{"/api/v1/x": "api", "/metrics/y": "metrics", "/": "web", "/app.js": "web"} {
-		if got := bucketFor(uri); got != want {
-			t.Fatalf("%s -> %s, want %s", uri, got, want)
-		}
+func TestEmptyStore(t *testing.T) {
+	r := newReader(t.TempDir(), 10)
+	snap := r.collect()
+	if snap.Tasks != nil || len(snap.Services) != 0 || len(snap.Requests) != 0 {
+		t.Fatalf("expected empty snapshot, got %+v", snap)
 	}
-}
-
-func TestLatestEmpty(t *testing.T) {
-	c := newCollector(fakeDocker(t), filepath.Join(t.TempDir(), "none"), filepath.Join(t.TempDir(), "none2"), "", 10)
 	rec := httptest.NewRecorder()
-	c.latest(rec, httptest.NewRequest("GET", "/api/snapshot", nil))
-	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "no data") {
-		t.Fatalf("code %d body %q", rec.Code, rec.Body.String())
+	r.latest(rec, httptest.NewRequest("GET", "/api/snapshot", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("before first collect want 503, got %d", rec.Code)
 	}
 }

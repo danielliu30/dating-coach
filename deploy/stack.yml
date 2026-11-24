@@ -237,18 +237,37 @@ services:
       <<: *roll-stateless
       placement: *manager-only
 
-  # Ops metering sidecar: scrapes the docker socket (services/tasks/container
-  # stats) and the nginx edge log into /api/snapshot, serves the dashboard
-  # nginx proxies at /metrics/. Socket and log volume are read-only; all
-  # metrics work stays outside the app services.
+  # Metrics writer: logs docker stats, service replicas and aggregated edge
+  # requests to the app-logs JSONL store (the data store) every
+  # METRICS_INTERVAL seconds. The only component allowed to touch the docker
+  # socket (read-only).
+  metrics:
+    image: docker:cli
+    networks: [appnet]
+    volumes:
+      - '/var/run/docker.sock:/var/run/docker.sock:ro'
+      - 'app-logs:/logs'
+    command: ['sh', '/usr/local/bin/metrics-collect.sh']
+    configs:
+      - source: metrics_collect_sh
+        target: /usr/local/bin/metrics-collect.sh
+    healthcheck:
+      test: ['CMD-SHELL', 'test -f /logs/metrics-stats.jsonl && [ $$(( $$(date +%s) - $$(date -r /logs/metrics-stats.jsonl +%s) )) -lt 60 ]']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      replicas: 1
+      <<: *roll-stateless
+      placement: *manager-only
+
+  # Metrics read side: aggregates the JSONL store into /api/snapshot and
+  # serves the admin-gated dashboard nginx proxies at /metrics/. No docker
+  # socket — it only reads the data store.
   metering:
     image: ${DOCKERHUB_NAMESPACE:-danielliu30}/dating-coach-metering:${IMAGE_TAG:-latest}
     networks: [appnet]
-    environment:
-      STACK_NAME: ${STACK_NAME:-dating-coach}
-    volumes:
-      - '/var/run/docker.sock:/var/run/docker.sock:ro'
-      - 'app-logs:/logs:ro'
+    volumes: ['app-logs:/logs:ro']
     healthcheck:
       test: ['CMD-SHELL', 'wget -q -O /dev/null http://localhost:9090/healthz || exit 1']
       interval: 30s
@@ -267,6 +286,9 @@ configs:
   nginx_default_conf:
     name: nginx_default_conf-${NGINX_CONF_VERSION:-v1}
     file: ../nginx/default.conf
+  metrics_collect_sh:
+    name: metrics_collect_sh-${NGINX_CONF_VERSION:-v1}
+    file: ../scripts/metrics-collect.sh
 
 # attachable so the migrate gate in deploy-watch.sh can `docker run` on it
 # before rolling the app. External so the script can create it on first boot
