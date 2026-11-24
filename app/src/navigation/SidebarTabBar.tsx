@@ -1,8 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
 import { BottomTabBar, type BottomTabBarProps } from '@react-navigation/bottom-tabs';
-import { CommonActions } from '@react-navigation/native';
+import { PlatformPressable } from '@react-navigation/elements';
+import { CommonActions, useLinkBuilder } from '@react-navigation/native';
 import React, { useState } from 'react';
-import { Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 
 import { colors, elevation, fonts, radii } from '../theme';
 
@@ -25,6 +26,7 @@ export function SidebarTabBar(props: BottomTabBarProps): React.ReactElement {
 
 export function CollapsibleSidebar({ state, descriptors, navigation, insets }: BottomTabBarProps): React.ReactElement {
   const [collapsed, setCollapsed] = useState(false);
+  const { buildHref } = useLinkBuilder();
 
   return (
     <View
@@ -45,48 +47,48 @@ export function CollapsibleSidebar({ state, descriptors, navigation, insets }: B
         )}
       </View>
 
-      <View role="tablist" style={styles.items}>
-        {state.routes.map((route, index) => {
-          const focused = index === state.index;
-          const { options } = descriptors[route.key];
-          const label =
-            (typeof options.tabBarLabel === 'string' && options.tabBarLabel) || options.title || route.name;
-          const color = focused
-            ? (options.tabBarActiveTintColor ?? colors.primaryDeep)
-            : (options.tabBarInactiveTintColor ?? colors.muted);
+      {/* The item list scrolls so lower tabs stay reachable in short windows;
+          the collapse control is pinned below it. */}
+      <ScrollView style={styles.itemsScroll} showsVerticalScrollIndicator={false}>
+        <View role="tablist" style={styles.items}>
+          {state.routes.map((route, index) => {
+            const focused = index === state.index;
+            const { options } = descriptors[route.key];
+            const label =
+              (typeof options.tabBarLabel === 'string' && options.tabBarLabel) || options.title || route.name;
+            const color = focused
+              ? (options.tabBarActiveTintColor ?? colors.primaryDeep)
+              : (options.tabBarInactiveTintColor ?? colors.muted);
 
-          return (
-            <Pressable
-              key={route.key}
-              role="tab"
-              accessibilityLabel={label}
-              accessibilityState={{ selected: focused }}
-              onPress={() => {
-                const event = navigation.emit({ type: 'tabPress', target: route.key, canPreventDefault: true });
-                if (!focused && !event.defaultPrevented) {
-                  navigation.dispatch({ ...CommonActions.navigate(route.name, route.params), target: state.key });
-                }
-              }}
-              onLongPress={() => navigation.emit({ type: 'tabLongPress', target: route.key })}
-              style={({ pressed }) => [
-                styles.item,
-                focused && styles.itemActive,
-                collapsed && styles.itemCollapsed,
-                pressed && styles.itemPressed,
-              ]}
-            >
-              {options.tabBarIcon?.({ focused, color, size: 22 })}
-              {collapsed ? null : (
-                <Text style={[styles.itemLabel, { color }]} numberOfLines={1}>
-                  {label}
-                </Text>
-              )}
-            </Pressable>
-          );
-        })}
-      </View>
-
-      <View style={styles.spacer} />
+            return (
+              <PlatformPressable
+                key={route.key}
+                href={buildHref(route.name, route.params)}
+                role="tab"
+                accessibilityLabel={label}
+                accessibilityState={{ selected: focused }}
+                aria-selected={focused}
+                onPress={() => {
+                  const event = navigation.emit({ type: 'tabPress', target: route.key, canPreventDefault: true });
+                  if (!focused && !event.defaultPrevented) {
+                    navigation.dispatch({ ...CommonActions.navigate(route.name, route.params), target: state.key });
+                  }
+                }}
+                onLongPress={() => navigation.emit({ type: 'tabLongPress', target: route.key })}
+                hoverEffect={{ color: colors.muted }}
+                style={[styles.item, focused && styles.itemActive, collapsed && styles.itemCollapsed]}
+              >
+                {options.tabBarIcon?.({ focused, color, size: 22 })}
+                {collapsed ? null : (
+                  <Text style={[styles.itemLabel, { color }]} numberOfLines={1}>
+                    {label}
+                  </Text>
+                )}
+              </PlatformPressable>
+            );
+          })}
+        </View>
+      </ScrollView>
 
       <Pressable
         accessibilityRole="button"
@@ -123,6 +125,7 @@ const styles = StyleSheet.create({
     ...elevation.primary,
   },
   wordmark: { fontFamily: fonts.sansBlack, fontSize: 17, letterSpacing: -0.4, color: colors.text, flexShrink: 1 },
+  itemsScroll: { flex: 1 },
   items: { gap: 4 },
   item: {
     flexDirection: 'row',
@@ -137,6 +140,5 @@ const styles = StyleSheet.create({
   itemActive: { backgroundColor: colors.primaryTint },
   itemPressed: { opacity: 0.75 },
   itemLabel: { fontFamily: fonts.sansBold, fontSize: 13, flexShrink: 1 },
-  spacer: { flex: 1 },
   collapseLabel: { fontFamily: fonts.sansSemi, fontSize: 13, color: colors.muted },
 });

@@ -5,6 +5,15 @@ import { Text } from 'react-native';
 
 import { CollapsibleSidebar } from './SidebarTabBar';
 
+jest.mock('@react-navigation/native', () => {
+  const actual = jest.requireActual('@react-navigation/native');
+  return {
+    ...actual,
+    useLinkBuilder: () => ({ buildHref: () => undefined }),
+    useTheme: () => actual.DefaultTheme,
+  };
+});
+
 const ROUTES = ['Coaches', 'Sessions', 'Chats', 'Analyse', 'Account'];
 
 function makeProps(index = 0): BottomTabBarProps {
