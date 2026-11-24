@@ -24,4 +24,6 @@ COPY data/eval_holdout.jsonl data/eval_extended.jsonl ./data/
 
 EXPOSE 8000
 
-CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# UVICORN_WORKERS forks that many serving processes; the heuristic backend is
+# CPU-bound inside async handlers, so a single worker serializes scoring.
+CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers ${UVICORN_WORKERS:-1}"]
