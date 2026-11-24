@@ -49,6 +49,10 @@ type Config struct {
 
 	AnalysisQueue        string
 	AccountDeletionQueue string
+	// AnalysisPrefetch bounds in-flight analysis jobs per worker — the queue's
+	// consumer concurrency. Raise it (or scale worker replicas) to grow drain
+	// capacity; RabbitMQ round-robins deliveries across consumers.
+	AnalysisPrefetch int
 
 	// DeadLetterAlertPeriod is how often the worker reports the depth of the
 	// account-deletion dead-letter queue. It drives a ticker, so it must be
@@ -155,6 +159,7 @@ func Load() (*Config, error) {
 		MLServiceTimeout:          envDuration("ML_SERVICE_TIMEOUT", 60*time.Second),
 		ProfileScoreEnabled:       envBool("PROFILE_SCORE_ENABLED", false),
 		AnalysisQueue:             env("ANALYSIS_QUEUE", "conversation.analysis"),
+		AnalysisPrefetch:          envInt("ANALYSIS_PREFETCH", 4),
 		AccountDeletionQueue:      env("ACCOUNT_DELETION_QUEUE", "account.deletion"),
 
 		DeadLetterAlertPeriod: envDuration("DEAD_LETTER_ALERT_PERIOD", time.Minute),
@@ -195,6 +200,9 @@ func Load() (*Config, error) {
 			}
 			cfg.TrustedProxyCIDRs = append(cfg.TrustedProxyCIDRs, prefix)
 		}
+	}
+	if cfg.AnalysisPrefetch <= 0 {
+		bad = append(bad, "ANALYSIS_PREFETCH must be positive")
 	}
 	if cfg.LoginFailureLimit <= 0 {
 		bad = append(bad, "LOGIN_FAILURE_LIMIT must be positive")
