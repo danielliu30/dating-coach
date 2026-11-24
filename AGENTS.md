@@ -15,6 +15,8 @@ Each service directory has its own `AGENTS.md` — read it before working there.
 
 `main` is protected (strict, PR required). Required checks: `build-test`, `typecheck-export`, `test`, `e2e`, `dependency-gate`, `merge-gate-tests`. One logical change per PR; dependencies declared in the body (`Depends on: #N`); same-repo non-draft PRs auto-merge on green via `merge-gate.yml`. See `.agents/skills/pr-granularity/SKILL.md`.
 
+Loadtest-surfaced issues (`loadtest-finding` in danielliu30/dating-coach-loadtest): label the fix PR `loadtest-fix` — it dispatches the suite against the head SHA (or comments the manual command until `LOADTEST_DISPATCH_PAT` is set). Don't merge a load finding's fix on app checks alone; the finding must not recur under load.
+
 ## Workflow skills — apply every session
 
 Invoke these whenever their trigger matches — they are part of the working protocol, not optional references:
