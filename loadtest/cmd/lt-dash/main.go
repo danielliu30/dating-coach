@@ -57,6 +57,16 @@ func main() {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = w.Write(data)
 	})
+	http.HandleFunc("/api/suite", func(w http.ResponseWriter, r *http.Request) {
+		data, err := os.ReadFile(filepath.Join(*out, "suite.json"))
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte("{}"))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(data)
+	})
 	serve := func(name string) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			data, err := pages.ReadFile(name)

@@ -249,6 +249,7 @@ func main() {
 	extra["ramp"] = res
 
 	// --- Fan-out phase --------------------------------------------------------
+	m.SetPhase("coach fan-out")
 	// One coach, many client threads: the coach answers every thread at once
 	// over REST while every client holds an open socket. A socket may only
 	// ever see its own thread's tagged replies — a lt-fan-t<j> body arriving

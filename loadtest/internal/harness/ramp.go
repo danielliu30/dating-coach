@@ -80,7 +80,8 @@ func RunRate(ctx context.Context, m *Metrics, stages []Stage, rps float64, fn fu
 		return Result{Reason: "no stages configured"}
 	}
 	var lastGood Stage
-	for _, s := range stages {
+	for i, s := range stages {
+		m.SetStage(i+1, len(stages), s.Name, s.VUs, s.Duration)
 		rate := NewRate(rps)
 		stageCtx, cancel := context.WithTimeout(ctx, s.Duration)
 		var wg sync.WaitGroup

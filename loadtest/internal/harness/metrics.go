@@ -19,7 +19,13 @@ type Metrics struct {
 	eps   map[string]*endpoint
 	count map[string]int64
 	notes []string
-	start time.Time
+	start      time.Time
+	stage      string
+	vus        int
+	stageIdx   int
+	stageTotal int
+	stageStart time.Time
+	stageDur   time.Duration
 }
 
 type endpoint struct {
@@ -75,6 +81,36 @@ func (m *Metrics) Count(name string) int64 {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.count[name]
+}
+
+// SetStage records the stage currently running so live views can show the
+// active concurrency level (how many virtual users are driving the load),
+// where in the ramp it is (idx/total), and how far into the stage duration.
+func (m *Metrics) SetStage(idx, total int, name string, vus int, dur time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.stage, m.vus = name, vus
+	m.stageIdx, m.stageTotal = idx, total
+	m.stageStart, m.stageDur = time.Now(), dur
+}
+
+// SetPhase labels a non-ramped phase (fan-out check, race probe, ...) so live
+// views show what the component is doing between stages. VUs is set to 0.
+func (m *Metrics) SetPhase(name string) {
+	m.SetStage(0, 0, name, 0, 0)
+}
+
+// StageInfo returns the running stage's label, position (idx/total), VU
+// count, and seconds elapsed / allotted (0 when outside a stage).
+func (m *Metrics) StageInfo() (name string, idx, total, vus int, elapsed, dur float64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	name, idx, total, vus = m.stage, m.stageIdx, m.stageTotal, m.vus
+	dur = m.stageDur.Seconds()
+	if !m.stageStart.IsZero() {
+		elapsed = time.Since(m.stageStart).Seconds()
+	}
+	return
 }
 
 // Note appends a free-form finding line to the report.
