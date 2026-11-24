@@ -141,7 +141,9 @@ services:
     image: ${DOCKERHUB_NAMESPACE:-danielliu30}/dating-coach-ml-analyzer:${IMAGE_TAG:-latest}
     build: ./ml-analyzer
     command: ['sh', '-c', 'uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers ${UVICORN_WORKERS:-1} 2>&1 | tee -a /logs/ml-analyzer.log']
-    volumes: ['app-logs:/logs']
+    # /models holds train.py checkpoints (ML_MODEL_DIR defaults under it);
+    # persist so trained scorers survive down/recreate.
+    volumes: ['app-logs:/logs', 'ml-models:/models']
     environment:
       ML_BACKEND: ${ML_BACKEND:-llm}
       ML_PROFILE_EVIDENCE_ENABLED: ${ML_PROFILE_EVIDENCE_ENABLED:-false}
@@ -221,3 +223,4 @@ volumes:
   rabbitmq-data:
   pgadmin-data:
   app-logs:
+  ml-models:
