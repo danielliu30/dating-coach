@@ -59,3 +59,4 @@ for c in $COMPONENTS; do
 done
 
 go run ./cmd/lt-summarize -out out || echo "(reports are in out/)"
+go run ./cmd/lt-report -out out || echo "(html report skipped — reports are in out/)"
