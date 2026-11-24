@@ -40,7 +40,9 @@ x-backend-env: &backend-env
 
 services:
   postgres:
-    image: postgres:16-alpine
+    # Custom image: postgres:16-alpine + pgvector (RAG embeddings). Built
+    # locally — it is not one of the published app images.
+    build: ./postgres
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-datingcoach}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-datingcoach}
