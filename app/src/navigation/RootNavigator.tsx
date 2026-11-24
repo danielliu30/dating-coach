@@ -23,6 +23,7 @@ import ThreadsScreen from '../screens/ThreadsScreen';
 import VerifyEmailScreen from '../screens/VerifyEmailScreen';
 import { useAuth } from '../state/auth';
 import { colors, fonts } from '../theme';
+import { SidebarTabBar } from './SidebarTabBar';
 import type {
   AnalysisStackParams,
   AuthStackParams,
@@ -140,31 +141,20 @@ function MainTabs(): React.ReactElement {
 
   return (
     <Tabs.Navigator
+      tabBar={(props) => <SidebarTabBar {...props} />}
       screenOptions={{
         headerShown: false,
         tabBarActiveTintColor: colors.primaryDeep,
         tabBarInactiveTintColor: colors.muted,
         tabBarLabelStyle: { fontFamily: fonts.sansBold, fontSize: 11 },
-        // On a wide web viewport the tab bar reads better as a centred top row.
-        tabBarPosition: isWide ? 'top' : 'bottom',
-        tabBarStyle: isWide
-          ? {
-              width: '100%',
-              maxWidth: 900,
-              alignSelf: 'center',
-              backgroundColor: colors.surface,
-              borderRadius: 999,
-              marginTop: 12,
-              marginBottom: 4,
-              borderTopWidth: 0,
-              borderBottomWidth: 0,
-              paddingHorizontal: 8,
-            }
-          : {
-              backgroundColor: colors.surface,
-              borderTopColor: colors.border,
-              paddingTop: 6,
-            },
+        // Wide viewports navigate from a collapsible left sidebar; narrow
+        // viewports keep the bottom tab bar.
+        tabBarPosition: isWide ? 'left' : 'bottom',
+        tabBarStyle: {
+          backgroundColor: colors.surface,
+          borderTopColor: colors.border,
+          paddingTop: 6,
+        },
       }}
     >
       {user?.role === 'coach' ? (
