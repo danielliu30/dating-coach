@@ -6,7 +6,7 @@ info:
     Contract for everything served behind the nginx edge on a single origin.
 
     Surfaces:
-    - **api** (`/api/v1/*`, `/healthz`, `/stats`) — the Go `cmd/api` service the
+    - **api** (`/api/v1/*`, `/healthz`) — the Go `cmd/api` service the
       web app talks to. App calls live in `app/src/api/client.ts`.
     - **ops** (`/metrics/*`) — nginx-served, admin-gated ops dashboard. Every
       location runs `auth_request` against the api's admin check, so a caller
@@ -59,19 +59,6 @@ paths:
                 properties:
                   status: { type: string, example: ok }
                   env: { type: string, example: development }
-
-  /stats:
-    get:
-      tags: [ops]
-      summary: In-process runtime snapshot (uptime, goroutines, heap, live sockets) for the metrics dashboard; request counts come from the nginx edge log, not this endpoint.
-      operationId: apiStats
-      security: []
-      responses:
-        '200':
-          description: Stats snapshot.
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Stats' }
 
   /api/v1/auth/signup:
     post:
@@ -1107,12 +1094,12 @@ paths:
       operationId: metricsRedirect
       security: []
       responses:
-        '308': { description: Permanent redirect to /metrics/dashboard.html. }
+        '308': { description: Permanent redirect to /metrics/. }
 
-  /metrics/dashboard.html:
+  /metrics/:
     get:
       tags: [ops]
-      summary: The ops dashboard page (static). Requires an admin session token.
+      summary: The ops dashboard page, served by the metering service. Requires an admin session token.
       operationId: metricsDashboard
       responses:
         '200': { description: Dashboard HTML. }
@@ -1121,56 +1108,25 @@ paths:
   /metrics/dashboard.js:
     get:
       tags: [ops]
-      summary: Dashboard script; served same-origin so CSP script-src 'self' holds.
+      summary: Dashboard script served by metering; same-origin so CSP script-src 'self' holds.
       operationId: metricsDashboardJS
       responses:
         '200': { description: Dashboard JavaScript. }
         '401': { $ref: '#/components/responses/Error' }
 
-  /metrics/data/{file}:
+  /metrics/api/snapshot:
     get:
       tags: [ops]
-      summary: Collector JSONL off the shared app-logs volume (metrics-stats.jsonl, metrics-services.jsonl, deploy-history.jsonl).
-      operationId: metricsData
-      parameters:
-        - name: file
-          in: path
-          required: true
-          schema: { type: string }
+      summary: Aggregated ops snapshot from the metering service — swarm services/tasks, container resource stats, edge request buckets and deploy history, all collected outside the app.
+      operationId: metricsSnapshot
       responses:
         '200':
-          description: Newline-delimited JSON records.
-          content:
-            application/x-ndjson:
-              schema: { type: string }
-        '401': { $ref: '#/components/responses/Error' }
-        '404': { description: Unknown file. }
-
-  /metrics/proxy/api:
-    get:
-      tags: [ops]
-      summary: Proxied GET /stats from the api service.
-      operationId: metricsProxyAPI
-      responses:
-        '200':
-          description: Api stats snapshot.
+          description: Latest collected snapshot.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Stats' }
+              schema: { $ref: '#/components/schemas/MeteringSnapshot' }
         '401': { $ref: '#/components/responses/Error' }
-
-  /metrics/proxy/worker:
-    get:
-      tags: [ops]
-      summary: Proxied GET /stats from the worker service.
-      operationId: metricsProxyWorker
-      responses:
-        '200':
-          description: Worker stats snapshot.
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/Stats' }
-        '401': { $ref: '#/components/responses/Error' }
+        '503': { description: No sample collected yet (service just started). }
 
   /pubsub/analysis:
     post:
@@ -1604,14 +1560,53 @@ components:
         consented: { type: boolean }
         label_source: { type: string }
 
-    Stats:
+    MeteringSnapshot:
       type: object
-      description: Runtime snapshot sampled at scrape time; request counts are not collected in-process (they come from the nginx edge log) so /stats adds zero work to the request path.
+      description: One scrape of the metering sidecar — everything is gathered externally (docker socket API + nginx edge log + deploy history file); the app carries no metrics endpoints.
       properties:
-        uptime_seconds: { type: integer }
-        goroutines: { type: integer }
-        mem_alloc_mb: { type: integer }
-        ws_connections: { type: integer, description: Api only — live chat sockets. }
+        ts: { type: string, format: date-time }
+        services:
+          type: array
+          items:
+            type: object
+            properties:
+              name: { type: string }
+              desired: { type: integer }
+              running: { type: integer }
+              image: { type: string }
+              uptime_seconds: { type: integer }
+        tasks:
+          type: array
+          items:
+            type: object
+            properties:
+              name: { type: string }
+              started_at: { type: string, format: date-time }
+              cpu_perc: { type: number }
+              mem_bytes: { type: integer }
+              mem_perc: { type: number }
+              net_rx: { type: integer }
+              net_tx: { type: integer }
+              pids: { type: integer }
+        requests:
+          type: object
+          description: Cumulative edge-request buckets keyed api|web|metrics, counted from the nginx access log since metering start.
+          additionalProperties:
+            type: object
+            properties:
+              requests: { type: integer }
+              s2xx: { type: integer }
+              s4xx: { type: integer }
+              s5xx: { type: integer }
+        deploys:
+          type: array
+          items: { type: object, description: Deploy event (ts, sha, result, seconds), newest first. }
+        cpu_hist:
+          type: object
+          description: Per-task CPU% series over the retained history window, for sparklines.
+          additionalProperties:
+            type: array
+            items: { type: number }
 
 security:
   - bearerAuth: []

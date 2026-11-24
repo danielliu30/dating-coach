@@ -15,7 +15,6 @@ import (
 	"github.com/danielliu30/dating-coach/backend/internal/auth"
 	"github.com/danielliu30/dating-coach/backend/internal/coaching"
 	"github.com/danielliu30/dating-coach/backend/internal/config"
-	"github.com/danielliu30/dating-coach/backend/internal/httpx"
 	"github.com/danielliu30/dating-coach/backend/internal/notify"
 	"github.com/danielliu30/dating-coach/backend/internal/store/db"
 )
@@ -72,18 +71,17 @@ type workerRoute struct {
 }
 
 // Cloud Run IAM (--no-allow-unauthenticated) authenticates push and scheduler calls.
-func workerRouter(a analysis.JobHandler, d account.JobHandler, maxAttempts int, tasks map[string]task, stats *httpx.Stats) http.Handler {
+func workerRouter(a analysis.JobHandler, d account.JobHandler, maxAttempts int, tasks map[string]task) http.Handler {
 	mux := http.NewServeMux()
-	for _, route := range workerRoutes(a, d, maxAttempts, tasks, stats) {
+	for _, route := range workerRoutes(a, d, maxAttempts, tasks) {
 		mux.HandleFunc(route.pattern, route.handler)
 	}
 	return mux
 }
 
-func workerRoutes(a analysis.JobHandler, d account.JobHandler, maxAttempts int, tasks map[string]task, stats *httpx.Stats) []workerRoute {
+func workerRoutes(a analysis.JobHandler, d account.JobHandler, maxAttempts int, tasks map[string]task) []workerRoute {
 	routes := []workerRoute{
 		{"GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) }},
-		{"GET /stats", stats.Handler},
 		{"POST /pubsub/analysis", pushHandler(a, maxAttempts, false)},
 		{"POST /pubsub/account-deletion", pushHandler(d, maxAttempts, true)},
 		{"POST /pubsub/email-outbox", pushHandler(func(ctx context.Context, _ json.RawMessage, _ bool) error {
@@ -141,7 +139,7 @@ func openJobPublisher(ctx context.Context, cfg *config.Config) (closeablePublish
 	return account.OpenPublisher(cfg.RabbitMQURL, cfg.AccountDeletionQueue)
 }
 
-func runHTTP(ctx context.Context, cfg *config.Config, q *db.Queries, a *analysis.Worker, d *account.Worker, deny *auth.Denylist, bookings *coaching.Service, n notify.Notifier, payments bool, stats *httpx.Stats) error {
+func runHTTP(ctx context.Context, cfg *config.Config, q *db.Queries, a *analysis.Worker, d *account.Worker, deny *auth.Denylist, bookings *coaching.Service, n notify.Notifier, payments bool) error {
 	publisher, err := openJobPublisher(ctx, cfg)
 	if err != nil {
 		return err
@@ -164,7 +162,7 @@ func runHTTP(ctx context.Context, cfg *config.Config, q *db.Queries, a *analysis
 	if port == "" {
 		port = "8080"
 	}
-	server := &http.Server{Addr: ":" + port, Handler: workerRouter(a.Handle, d.Handle, cfg.PubSubMaxDeliveryAttempts, tasks, stats), ReadHeaderTimeout: 10 * time.Second, BaseContext: nil}
+	server := &http.Server{Addr: ":" + port, Handler: workerRouter(a.Handle, d.Handle, cfg.PubSubMaxDeliveryAttempts, tasks), ReadHeaderTimeout: 10 * time.Second, BaseContext: nil}
 	done := make(chan error, 1)
 	go func() { done <- server.ListenAndServe() }()
 	select {
