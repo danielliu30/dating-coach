@@ -1,6 +1,6 @@
 # dating-coach guardrails
 
-Monorepo: `backend/` (Go: `cmd/api` + `cmd/worker`, `internal/*`, `migrations/`, sqlc), `app/` (Expo SDK 57 web + jest), `ml-analyzer/` (FastAPI + heuristic/LLM scorers), `e2e/` (Playwright against the compose gateway), `.github/` + `scripts/` (CI, merge gate, release).
+Monorepo: `backend/` (Go: `cmd/api` + `cmd/worker`, `internal/*`, `migrations/`, sqlc), `app/` (Expo SDK 57 web + jest), `ml-analyzer/` (FastAPI + heuristic/LLM scorers), `e2e/` (Playwright against the compose gateway), `.github/` + `scripts/` (CI, merge gate; deploy pipelines live in dating-coach-infra).
 
 Each service directory has its own `AGENTS.md` — read it before working there.
 
@@ -28,4 +28,4 @@ Invoke these whenever their trigger matches — they are part of the working pro
 ## Ops skills — invoke when needed
 
 - `testing-dating-coach` — local stack bring-up, click-through recipes, adversarial scenarios.
-- `running-dating-coach-in-docker` — images, release pipeline, `DEPLOY_TARGET` switch, local vs Cloud Run deploys, rollback, backups.
+- `running-dating-coach-in-docker` — images, local vs Cloud Run deploys (pipelines live in `danielliu30/dating-coach-infra`), rollback, backups.

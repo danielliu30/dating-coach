@@ -1,6 +1,7 @@
 name: App (Expo/TypeScript)
 
-# Runs on every PR (required check) and from release.yml on push to main.
+# Runs on every PR (required check). Deploys are handled by the
+# dating-coach-infra repo pipelines via notify-infra.yml.
 on:
   workflow_call:
   pull_request:

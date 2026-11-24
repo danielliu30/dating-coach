@@ -1,6 +1,6 @@
 ---
 name: running-dating-coach-in-docker
-description: Build the dating-coach backend, ml-analyzer and web images, publish them to Docker Hub (danielliu30/*) manually or via the release.yml CI/CD pipeline, deploy locally from the published images (default) or to Google Cloud Run behind the DEPLOY_TARGET switch, and expose the stack through nginx (compose gateway service or host-installed nginx).
+description: Build the dating-coach backend, ml-analyzer and web images, publish them to Docker Hub (danielliu30/*) manually or via the dating-coach-infra deploy pipelines, deploy locally from the published images (default) or to Google Cloud Run behind the DEPLOY_TARGET switch, and expose the stack through nginx (compose gateway service or host-installed nginx).
 ---
 
 # Running dating-coach in Docker behind nginx
@@ -31,39 +31,40 @@ Repository descriptions can be set with `updateRepositoryInfo`.
 required checks (`build-test`, `typecheck-export`, `test`, `e2e`,
 `dependency-gate`, `merge-gate-tests`) pass. Merge order for dependent PRs is declared in the PR
 body (`Depends on: #N`) and enforced by `merge-gate.yml`; see
-`.agents/skills/pr-granularity/SKILL.md` for the protocol. Every merge to `main`
-therefore flows straight into the release below — the path from green PR to
-production is fully automated. Watch a deploy with
-`gh run list --workflow=release.yml` / `gh run watch <run-id>`.
+`.agents/skills/pr-granularity/SKILL.md` for the protocol.
 
-`.github/workflows/release.yml` (trigger: `push` to `main`, or `workflow_dispatch`):
-1. Runs `backend.yml`, `app.yml`, `ml-analyzer.yml`, `e2e.yml` as reusable workflows (`workflow_call`). Any failure stops the release.
-2. `build-push`: `docker compose --profile gateway build api ml-analyzer web migrate` with `IMAGE_TAG=${{ github.sha }}`, `DOCKERHUB_NAMESPACE=$DOCKERHUB_USERNAME`, `WEB_API_URL=$API_PUBLIC_URL` and `GOOGLE_CLIENT_ID` from repo variables; pushes the SHA tags, then promotes `latest` only if the run is on `main` and `github.sha` is still `origin/main` (manual dispatches on other branches and superseded main runs publish SHA tags only).
-3. Deploy is behind a **switch** — the repository variable `DEPLOY_TARGET`:
-   - **unset / anything but `cloud-run` (current default): local deploys.** The `deploy-local` job prints the pull commands and the run stays green; nothing touches a cloud. "Deploy" means running the published images yourself, locally or on a VM:
-     ```bash
-     IMAGE_TAG=<git-sha> docker compose --profile gateway pull
-     IMAGE_TAG=<git-sha> docker compose --profile gateway up -d
-     ```
-     Pinning `IMAGE_TAG` (in `.env` or inline) keeps a later `up -d` on the deployed SHA instead of drifting to `latest`.
-   - **`cloud-run`: the Google Cloud Run deploy** (api/worker/ml/web services + a migrate job + Pub/Sub push subs + Cloud Scheduler; see `docs/deploy-cloud-run.md`). Requires the one-time `scripts/gcp-bootstrap.sh` run (GCP project, Neon, Upstash, LLM key) which prints the `GCP_*` GitHub variables. If api or web health checks fail on the new revision, traffic is reverted to the previous revisions automatically.
-   - `load-test` / `scale-approval` only run when `DEPLOY_TARGET=cloud-run` *and* `SCALE_PROFILE=production`.
+Deployment itself lives in **`danielliu30/dating-coach-infra`** (this repo
+carries product code and PR checks only). `.github/workflows/notify-infra.yml`
+fires `repository_dispatch(app-merge)` there on every merge; the infra repo's
+four pipelines (`deploy-db`, `deploy-backend`, `deploy-ml`, `deploy-web`)
+path-filter on the merge diff, run the e2e gate at the app SHA, build and push
+`<sha>` (+`latest` at main tip) images to Docker Hub, then deploy. api and web
+roll out through a wave staircase (alpha tag -> percent waves -> 100%) with
+coverage/latency/fault bake checks and automatic rollback, inside a
+configurable release window. Watch deploys with
+`gh run list -R danielliu30/dating-coach-infra`.
+- Deploy is behind a **switch** — the infra-repo variable `DEPLOY_TARGET`:
+  - **unset / anything but `cloud-run` (current default): local deploys.** The `deploy-local` job prints the pull commands and the run stays green; nothing touches a cloud. "Deploy" means running the published images yourself, locally or on a VM:
+    ```bash
+    IMAGE_TAG=<git-sha> docker compose --profile gateway pull
+    IMAGE_TAG=<git-sha> docker compose --profile gateway up -d
+    ```
+    Pinning `IMAGE_TAG` (in `.env` or inline) keeps a later `up -d` on the deployed SHA instead of drifting to `latest`.
+  - **`cloud-run`: the Google Cloud Run deploy** (api/worker/ml/web services + a migrate job + Pub/Sub push subs + Cloud Scheduler). Requires the one-time `gcp-bootstrap.sh` run in the infra repo (GCP project, Neon, Upstash, LLM key) which prints the `GCP_*` GitHub variables — set them on `dating-coach-infra`. See the infra repo's `docs/deploy-cloud-run.md`.
 
 ### GitHub secrets / variables
 | Name | Kind | Purpose |
 |---|---|---|
-| `MERGE_BOT_TOKEN` | secret | PAT (`contents:write` + `pull_requests:write`) so workflow-armed merges fire `closed`/`push` events — without it the merge cascade and `release.yml` never run for auto-merged PRs |
-| `DOCKERHUB_USERNAME` | secret | Hub account + image namespace |
-| `DOCKERHUB_TOKEN` | secret | Hub PAT (Read & Write) |
-| `DEPLOY_TARGET` | variable | `cloud-run` enables the Cloud Run deploy job; unset/absent = local deploys only |
-| `GOOGLE_CLIENT_ID` | variable | baked into the web bundle (public, so not a secret) |
-| `API_PUBLIC_URL`, `PUBLIC_APP_URL` | variable | api URL baked into the web bundle; public web URL for CORS + health checks |
-| `GCP_PROJECT_ID`, `GCP_REGION`, `GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_DEPLOY_SERVICE_ACCOUNT`, `GCP_RUNTIME_SERVICE_ACCOUNT`, `GCP_WEB_SERVICE_ACCOUNT`, `GCP_INVOKER_SERVICE_ACCOUNT` | variable | Cloud Run deploy targets; printed by `scripts/gcp-bootstrap.sh`. Only used when `DEPLOY_TARGET=cloud-run` |
-| `SMTP_*`, `MAIL_FROM`, `LLM_PROVIDER`, `LLM_MODEL`, `SCALE_PROFILE`, `*_INSTANCES` | variable | app/runtime settings for the Cloud Run services |
+| `MERGE_BOT_TOKEN` | secret | PAT (`contents:write` + `pull_requests:write`) so workflow-armed merges fire `closed`/`push` events — without it the merge cascade and `notify-infra.yml` never run for auto-merged PRs; also the fallback dispatch token if it covers dating-coach-infra |
+| `INFRA_DISPATCH_TOKEN` | secret | PAT with `contents:write` on `dating-coach-infra` — used by `notify-infra.yml` to trigger the deploy pipelines |
+
+All deploy-side secrets/variables (`DOCKERHUB_*`, `GCP_*`, `DEPLOY_TARGET`,
+`DEPLOY_WINDOW_*`, `DEPLOY_WAVE_PLAN`, `BAKE_*`, `SMTP_*`, `*_INSTANCES`, …)
+live on `dating-coach-infra` — see its README.
 
 ### Roll back
 - **Local deploy (current):** `IMAGE_TAG=<older-sha> docker compose --profile gateway pull && docker compose --profile gateway up -d` — caveat: `migrate` only runs `up`, so redeploying an older SHA does not revert schema changes; keep migrations backward-compatible or restore a dump first (`scripts/backup.sh` / `scripts/restore.sh <dump> --no-start`).
-- **Cloud Run:** Actions -> *Release* -> *Run workflow*, `image_tag` = an earlier commit SHA (list with `listRepositoryTags` on the Docker Hub MCP server); tests and build are skipped. A deploy whose health checks fail already reverts traffic itself.
+- **Cloud Run:** in the infra repo, Actions -> the service's deploy workflow -> *Run workflow*, `image_tag` = an earlier app commit SHA (list with `listRepositoryTags` on the Docker Hub MCP server); restores skip the release window and go straight to 100%. A failed bake or health check already reverts traffic itself.
 
 ### Local/VM deploy prerequisites
 - Docker Engine + Compose plugin; a checkout of the repo (or just `docker-compose.yml` + `nginx/`) and a `.env` (from `.env.example`: `APP_ENV`, `JWT_SECRET`, `POSTGRES_PASSWORD`, `PUBLIC_APP_URL`, `CORS_ORIGINS`, SMTP, `GOOGLE_CLIENT_ID`; `NGINX_PORT`/`WEB_PORT` for host-nginx setups).
