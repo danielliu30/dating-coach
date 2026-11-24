@@ -28,9 +28,10 @@ the task takes.
    callers of code you are about to touch. Confirm a dependency is already in
    use before importing it - check `go.mod` / `package.json` /
    `requirements.txt`, do not assume.
-3. **Make the smallest correct diff.** Edit surgically. Reuse existing helpers,
-   patterns and conventions; match the surrounding code style. No drive-by
-   refactors, no dead code, no speculative abstractions.
+3. **Keep the code minimal.** Implement only what the task requires. Edit
+   surgically. Reuse existing helpers, patterns and conventions; match the
+   surrounding code style. No drive-by refactors, no dead code, no speculative
+   abstractions.
 4. **Ship tests with the code.** Tests go in the same change as the code they
    cover - never deferred. Put them where the service keeps them: `*_test.go`
    beside the Go code, `app/test_*.py` in ml-analyzer, jest specs in `app/`,
@@ -47,6 +48,10 @@ the task takes.
    logical units, apply the `pr-granularity` skill to plan the PR sequence
    first - one function or self-contained piece of logic per PR, dependencies
    first.
+8. **Contain scope creep.** The diff stays scoped to the task at hand. When the
+   work grows a new logic block, do not bundle it - give it its own PR, stacked
+   on the current branch when it depends on the current one (the
+   `pr-granularity` skill covers the stacking protocol).
 
 ## Forbidden
 
@@ -57,6 +62,7 @@ the task takes.
   codebase.
 - Weakening a gate, auth check, security header, or proxy-trust setting to make
   something pass.
+- Bundling a new logic block into a PR it does not belong to.
 - Running the full e2e suite or rebuilding the compose stack when a targeted
   unit run answers the question.
 - Leaving the working tree dirtier than you found it: stray debug prints,
