@@ -1,6 +1,10 @@
 // lt-booking load-tests the coaching-booking surface while asserting slot
 // and lifecycle correctness:
 //
+//  0. churn — staged VUs book+cancel distinct far-future slots at -rps
+//     aggregate; every -race-every iterations each VU targets the shared
+//     rotating slot instead, so same-slot contention fires continuously.
+//     Distinct-slot conflicts are impossible by construction and counted.
 //  1. slot race — every VU books the same coach+time concurrently; exactly
 //     one 201 may win, losers must get a clean 409, and the DB must hold
 //     exactly one session for that slot (exclusion constraint is the last
@@ -33,17 +37,27 @@ import (
 
 func main() {
 	base := flag.String("base", "http://localhost", "gateway base URL")
-	vus := flag.Int("vus", 6, "concurrent bookers")
+	stagesCSV := flag.String("vus", "10,20,50", "comma-separated VU counts per churn stage")
+	rps := flag.Float64("rps", 150, "aggregate booking attempts per second per stage (0 = unpaced)")
+	duration := flag.Duration("duration", 30*time.Second, "duration of each churn stage")
+	raceEvery := flag.Int64("race-every", 100, "each VU's Nth booking targets the shared rotating slot")
 	out := flag.String("out", "out", "report output directory")
 	expireWait := flag.Duration("expire-wait", 90*time.Second, "max wait for the expiry sweep")
 	flag.Parse()
 
+	stages, err := harness.Stages(*stagesCSV, *duration)
+	if err != nil {
+		log.Fatalf("%v", err)
+	}
+	maxVUs := harness.MaxVUs(stages)
+
 	tag := harness.Tag("book")
 	ctx := context.Background()
 	m := harness.NewMetrics()
+	m.Progress(ctx, "booking", harness.ProgressEvery, *out)
 	defer harness.CleanupTag(tag)
 
-	emails, err := harness.SeedUsers(tag, 1, *vus, "user")
+	emails, err := harness.SeedUsers(tag, 1, maxVUs, "user")
 	if err != nil {
 		log.Fatalf("seed users: %v", err)
 	}
@@ -53,7 +67,7 @@ func main() {
 	}
 	coachEmail := tag + "-coach@loadtest.local"
 
-	users := make([]*harness.Client, *vus)
+	users := make([]*harness.Client, maxVUs)
 	for i := range users {
 		c := harness.NewClient(*base, m)
 		res, err := c.SignIn(ctx, emails[i], harness.SeedPassword)
@@ -74,7 +88,59 @@ func main() {
 	extra := map[string]any{}
 	baseSlot := time.Now().UTC().Add(7 * 24 * time.Hour).Truncate(time.Hour)
 
+	// --- Phase 0: sustained booking churn -------------------------------------
+	// Distinct-slot book+cancel at the aggregate rate; every -race-every
+	// iterations a VU targets the shared rotating slot so same-slot
+	// contention keeps firing through the stage. Distinct-slot conflicts are
+	// impossible by construction — any that appear are a real bug.
+	{
+		soloBase := time.Now().UTC().Add(30 * 24 * time.Hour).Truncate(time.Hour)
+		hotBase := time.Now().UTC().Add(90 * 24 * time.Hour).Truncate(time.Hour)
+		res := harness.RunRate(ctx, m, stages, *rps,
+			func(ctx context.Context, vu int, rate *harness.Rate) {
+				c := users[vu]
+				var seq int64
+				for rate.Wait(ctx) {
+					seq++
+					var slot time.Time
+					shared := seq%*raceEvery == 0
+					if shared {
+						slot = hotBase.Add(time.Duration(seq/(*raceEvery)) * 2 * time.Hour)
+					} else {
+						slot = soloBase.Add(time.Duration(vu)*20000*time.Hour + time.Duration(seq)*2*time.Hour)
+					}
+					s, res, err := c.BookSession(ctx, coachID, slot.Format(time.RFC3339), 60, "lt churn")
+					switch {
+					case err != nil:
+						m.Inc("churn_transport_errors")
+					case res.Status == http.StatusCreated:
+						if shared {
+							m.Inc("shared_booked")
+						} else {
+							m.Inc("solo_booked")
+						}
+						if _, err := c.CancelSession(ctx, s.ID); err != nil {
+							m.Failf("churn_cancel_failed", "vu=%d session=%s: %v", vu, s.ID, err)
+						}
+					case res.Status == http.StatusConflict:
+						if shared {
+							m.Inc("shared_conflict")
+						} else {
+							m.Failf("solo_conflict", "vu=%d distinct slot %s got 409", vu, slot.Format(time.RFC3339))
+						}
+					default:
+						m.Failf("churn_unexpected", "vu=%d book → %d", vu, res.Status)
+					}
+				}
+			}, harness.ErrorRateTripwire(0.01))
+		extra["churn_stage"] = res
+		if n := m.Count("solo_conflict"); n > 0 {
+			m.Note("churn: %d conflicts on distinct slots — slot allocation overlapped", n)
+		}
+	}
+
 	// --- Phase 1: same-slot race ---------------------------------------------
+	m.SetPhase("same-slot race")
 	{
 		slot := baseSlot.Format(time.RFC3339)
 		var winners, conflicts, other int64
@@ -108,7 +174,7 @@ func main() {
 		wg.Wait()
 		n := countSessions(coachID, slot)
 		extra["slot_race"] = map[string]any{
-			"bookers": *vus, "winners": winners, "conflicts": conflicts,
+			"bookers": maxVUs, "winners": winners, "conflicts": conflicts,
 			"unexpected": other, "db_sessions": n,
 		}
 		switch {
@@ -123,6 +189,7 @@ func main() {
 	}
 
 	// --- Phase 2: respond race -------------------------------------------------
+	m.SetPhase("respond race")
 	// Each VU books a distinct pending slot; coach confirm and decline are
 	// fired concurrently. Exactly one may succeed; the stored status must
 	// match the winning action.
@@ -133,7 +200,7 @@ func main() {
 			slot := baseSlot.Add(time.Duration(2+i) * 2 * time.Hour).Format(time.RFC3339)
 			s, res, err := u.BookSession(ctx, coachID, slot, 60, "lt respond")
 			if err != nil || res.Status != http.StatusCreated {
-				m.Inc("respond_setup_book_failed")
+				m.Failf("respond_setup_book_failed", "slot %s: err=%v status=%d", slot, err, harness.Status(res))
 				continue
 			}
 			wg.Add(1)
@@ -159,15 +226,14 @@ func main() {
 				var winningAction string
 				switch {
 				case st["confirm"] == http.StatusOK && st["decline"] == http.StatusOK:
-					m.Note("respond race: both confirm and decline returned 200 for one session")
-					m.Inc("respond_double_win")
+					m.Failf("respond_double_win", "session %s: confirm+decline both 200", s.ID)
 					return
 				case st["confirm"] == http.StatusOK:
 					winningAction = "confirm"
 				case st["decline"] == http.StatusOK:
 					winningAction = "decline"
 				default:
-					m.Inc("respond_no_winner")
+					m.Failf("respond_no_winner", "session %s: confirm=%d decline=%d", s.ID, st["confirm"], st["decline"])
 					return
 				}
 				atomic.AddInt64(&won, 1)
@@ -183,12 +249,13 @@ func main() {
 		}
 		wg.Wait()
 		extra["respond_race"] = map[string]any{
-			"sessions": *vus, "decided": won,
+			"sessions": maxVUs, "decided": won,
 			"final_consistent": finalConsistent, "final_inconsistent": finalInconsistent,
 		}
 	}
 
 	// --- Phase 3: cancel-vs-confirm race ---------------------------------------
+	m.SetPhase("cancel race")
 	{
 		u := users[0]
 		slot := baseSlot.Add(48 * time.Hour).Format(time.RFC3339)
@@ -240,6 +307,7 @@ func main() {
 	}
 
 	// --- Phase 4: expiry sweep + slot release ----------------------------------
+	m.SetPhase("expiry sweep")
 	{
 		u := users[1]
 		slot := baseSlot.Add(56 * time.Hour).Format(time.RFC3339)
@@ -270,8 +338,7 @@ func main() {
 						m.Inc("rebook_after_expiry_ok")
 						cancelSessionQuiet(ctx, u, s2.ID)
 					default:
-						m.Inc("rebook_after_expiry_failed")
-						m.Note("rebook after expiry got %d: %s", res2.Status, res2.ErrBody())
+						m.Failf("rebook_after_expiry_failed", "rebook slot %s → %d: %s", slot, res2.Status, res2.ErrBody())
 					}
 				}
 				extra["expiry"] = map[string]any{"final": final}
@@ -280,6 +347,7 @@ func main() {
 	}
 
 	// --- Phase 5: overlap invariant --------------------------------------------
+	m.SetPhase("overlap check")
 	if n := countOverlaps(coachID); n != 0 {
 		m.Note("overlap invariant: %d overlapping active sessions remain", n)
 		extra["overlap_violations"] = n

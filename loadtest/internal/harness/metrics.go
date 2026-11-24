@@ -15,11 +15,21 @@ import (
 // counts and latencies, free-form counters, and finding notes. Safe for
 // concurrent use by every VU sharing the collector.
 type Metrics struct {
-	mu    sync.Mutex
-	eps   map[string]*endpoint
-	count map[string]int64
-	notes []string
-	start time.Time
+	mu         sync.Mutex
+	eps        map[string]*endpoint
+	count      map[string]int64
+	notes      []string
+	start      time.Time
+	stage      string
+	vus        int
+	stageIdx   int
+	stageTotal int
+	stageStart time.Time
+	stageDur   time.Duration
+	comp       string
+	liveErrs   []string
+	errSeen    map[string]int
+	flagSeen   map[string]int
 }
 
 type endpoint struct {
@@ -40,9 +50,11 @@ type EndpointStats struct {
 // NewMetrics starts an empty collector.
 func NewMetrics() *Metrics {
 	return &Metrics{
-		eps:   map[string]*endpoint{},
-		count: map[string]int64{},
-		start: time.Now(),
+		eps:      map[string]*endpoint{},
+		count:    map[string]int64{},
+		errSeen:  map[string]int{},
+		flagSeen: map[string]int{},
+		start:    time.Now(),
 	}
 }
 
@@ -63,11 +75,23 @@ func (m *Metrics) Observe(label string, status int, lat time.Duration) {
 // Inc adds one to a named counter (sends, echoes received, violations...).
 func (m *Metrics) Inc(name string) { m.Add(name, 1) }
 
-// Add adds n to a named counter.
+// Add adds n to a named counter. Flagged counters also emit a greppable
+// "[comp] FLAG name=value" stderr line on their first occurrences so a
+// correctness finding is visible the moment it happens.
 func (m *Metrics) Add(name string, n int64) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	m.count[name] += n
+	v := m.count[name]
+	times := m.flagSeen[name]
+	m.flagSeen[name]++
+	comp := m.comp
+	m.mu.Unlock()
+	if n > 0 && flagCounter(name) && (times < 3 || times == 9 || times == 99) {
+		if comp == "" {
+			comp = "lt"
+		}
+		fmt.Fprintf(os.Stderr, "[%s] FLAG %s=%d\n", comp, name, v)
+	}
 }
 
 // Count reads a named counter.
@@ -75,6 +99,88 @@ func (m *Metrics) Count(name string) int64 {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.count[name]
+}
+
+// SetName names the component; failure lines are prefixed "[name] ERR".
+// Progress calls it automatically.
+func (m *Metrics) SetName(name string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.comp = name
+}
+
+// Errf records a failure detail: prints a greppable "[comp] ERR ..." line,
+// keeps it in the live error ring, and notes it so it lands in the report.
+func (m *Metrics) Errf(format string, a ...any) {
+	msg := fmt.Sprintf(format, a...)
+	m.mu.Lock()
+	comp := m.comp
+	m.liveErrs = append(m.liveErrs, msg)
+	if len(m.liveErrs) > 12 {
+		m.liveErrs = m.liveErrs[len(m.liveErrs)-12:]
+	}
+	m.notes = append(m.notes, "err: "+msg)
+	m.mu.Unlock()
+	if comp == "" {
+		comp = "lt"
+	}
+	fmt.Fprintf(os.Stderr, "[%s] ERR %s\n", comp, msg)
+}
+
+// ErrOnce is Errf rate-limited per key: prints the first 3 occurrences,
+// then the 10th, 100th, ... so repeated identical failures stay visible
+// without flooding the log.
+func (m *Metrics) ErrOnce(key, format string, a ...any) {
+	m.mu.Lock()
+	n := m.errSeen[key]
+	m.errSeen[key]++
+	m.mu.Unlock()
+	if n < 3 || n == 9 || n == 99 || n == 999 {
+		m.Errf(format, a...)
+	}
+}
+
+// Failf is Inc + Errf: bump a counter and record what actually failed.
+func (m *Metrics) Failf(counter, format string, a ...any) {
+	m.Inc(counter)
+	m.Errf(format, a...)
+}
+
+// LiveErrors returns the most recent failure details (ring, newest last).
+func (m *Metrics) LiveErrors() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]string(nil), m.liveErrs...)
+}
+
+// SetStage records the stage currently running so live views can show the
+// active concurrency level (how many virtual users are driving the load),
+// where in the ramp it is (idx/total), and how far into the stage duration.
+func (m *Metrics) SetStage(idx, total int, name string, vus int, dur time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.stage, m.vus = name, vus
+	m.stageIdx, m.stageTotal = idx, total
+	m.stageStart, m.stageDur = time.Now(), dur
+}
+
+// SetPhase labels a non-ramped phase (fan-out check, race probe, ...) so live
+// views show what the component is doing between stages. VUs is set to 0.
+func (m *Metrics) SetPhase(name string) {
+	m.SetStage(0, 0, name, 0, 0)
+}
+
+// StageInfo returns the running stage's label, position (idx/total), VU
+// count, and seconds elapsed / allotted (0 when outside a stage).
+func (m *Metrics) StageInfo() (name string, idx, total, vus int, elapsed, dur float64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	name, idx, total, vus = m.stage, m.stageIdx, m.stageTotal, m.vus
+	dur = m.stageDur.Seconds()
+	if !m.stageStart.IsZero() {
+		elapsed = time.Since(m.stageStart).Seconds()
+	}
+	return
 }
 
 // Note appends a free-form finding line to the report.
