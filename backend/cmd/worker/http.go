@@ -164,7 +164,7 @@ func runHTTP(ctx context.Context, cfg *config.Config, q *db.Queries, a *analysis
 	if port == "" {
 		port = "8080"
 	}
-	server := &http.Server{Addr: ":" + port, Handler: stats.Middleware(workerRouter(a.Handle, d.Handle, cfg.PubSubMaxDeliveryAttempts, tasks, stats)), ReadHeaderTimeout: 10 * time.Second, BaseContext: nil}
+	server := &http.Server{Addr: ":" + port, Handler: workerRouter(a.Handle, d.Handle, cfg.PubSubMaxDeliveryAttempts, tasks, stats), ReadHeaderTimeout: 10 * time.Second, BaseContext: nil}
 	done := make(chan error, 1)
 	go func() { done <- server.ListenAndServe() }()
 	select {

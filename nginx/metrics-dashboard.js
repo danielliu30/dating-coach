@@ -43,6 +43,7 @@ async function render() {
 
   const svcTxt = await get('/metrics/data/metrics-services.jsonl').catch(() => '');
   const statTxt = await get('/metrics/data/metrics-stats.jsonl').catch(() => '');
+  const reqTxt = await get('/metrics/data/metrics-requests.jsonl').catch(() => '');
   const depTxt = await get('/metrics/data/deploy-history.jsonl').catch(() => '');
 
   // latest service snapshot per name
@@ -68,13 +69,23 @@ async function render() {
         `<td>${esc(last.MemUsage.split(' / ')[0])}</td><td>${esc(last.MemPerc)}</td><td class="dim">${esc(last.NetIO)}</td><td>${esc(last.PIDs)}</td></tr>`;
     }).join('');
 
-  // app /stats cards
+  // request counts from the nginx edge log, summed over recent samples (~1h)
   const cards = [];
+  const reqSum = {};
+  for (const l of lines(reqTxt).slice(-400)) {
+    const b = (reqSum[l.bucket] = reqSum[l.bucket] || { requests: 0, s2xx: 0, s4xx: 0, s5xx: 0 });
+    b.requests += l.requests || 0; b.s2xx += l.s2xx || 0; b.s4xx += l.s4xx || 0; b.s5xx += l.s5xx || 0;
+  }
+  for (const b of Object.keys(reqSum).sort()) {
+    const j = reqSum[b];
+    cards.push(`<div class="card"><div class="k">${b} req (~1h)</div><div class="v">${j.requests}</div>` +
+      `<div class="k">2xx ${j.s2xx} / 4xx ${j.s4xx} / 5xx ${j.s5xx}</div></div>`);
+  }
+
+  // app /stats cards (runtime snapshot — request counts live in the edge log)
   for (const svc of ['api', 'worker']) {
     try {
       const j = JSON.parse(await get(`/metrics/proxy/${svc}`));
-      cards.push(`<div class="card"><div class="k">${svc} requests</div><div class="v">${j.requests_total}</div>` +
-        `<div class="k">2xx ${j.responses_2xx} / 4xx ${j.responses_4xx} / 5xx ${j.responses_5xx}</div></div>`);
       cards.push(`<div class="card"><div class="k">${svc} uptime</div><div class="v">${Math.round(j.uptime_seconds / 60)}m</div>` +
         `<div class="k">${j.goroutines} goroutines, ${j.mem_alloc_mb} MiB${j.ws_connections !== undefined ? ', ' + j.ws_connections + ' ws' : ''}</div></div>`);
     } catch (e) { cards.push(`<div class="card"><div class="k">${svc}</div><div class="v bad">down</div></div>`); }

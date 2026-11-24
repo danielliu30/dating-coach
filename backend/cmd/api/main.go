@@ -188,7 +188,7 @@ type handlers struct {
 func newRouter(cfg *config.Config, authenticate func(http.Handler) http.Handler, stats *httpx.Stats, h handlers) http.Handler {
 	router := chi.NewRouter()
 	router.Use(httpx.SecurityHeaders)
-	router.Use(middleware.RequestID, auth.TrustedProxyMiddleware(cfg.TrustedProxyCIDRs, cfg.TrustedProxyHops), middleware.Recoverer, middleware.Logger, stats.Middleware)
+	router.Use(middleware.RequestID, auth.TrustedProxyMiddleware(cfg.TrustedProxyCIDRs, cfg.TrustedProxyHops), middleware.Recoverer, middleware.Logger)
 	router.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   cfg.CORSOrigins,
 		AllowedMethods:   []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete, http.MethodOptions},

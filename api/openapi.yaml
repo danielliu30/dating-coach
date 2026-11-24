@@ -63,7 +63,7 @@ paths:
   /stats:
     get:
       tags: [ops]
-      summary: In-process request/liveness counters for the metrics dashboard.
+      summary: In-process runtime snapshot (uptime, goroutines, heap, live sockets) for the metrics dashboard; request counts come from the nginx edge log, not this endpoint.
       operationId: apiStats
       security: []
       responses:
@@ -1606,14 +1606,11 @@ components:
 
     Stats:
       type: object
+      description: Runtime snapshot sampled at scrape time; request counts are not collected in-process (they come from the nginx edge log) so /stats adds zero work to the request path.
       properties:
         uptime_seconds: { type: integer }
         goroutines: { type: integer }
         mem_alloc_mb: { type: integer }
-        requests_total: { type: integer }
-        responses_2xx: { type: integer }
-        responses_4xx: { type: integer }
-        responses_5xx: { type: integer }
         ws_connections: { type: integer, description: Api only — live chat sockets. }
 
 security:
