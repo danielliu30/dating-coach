@@ -104,8 +104,25 @@ func workerRouter(a analysis.JobHandler, d account.JobHandler, maxAttempts int, 
 	return mux
 }
 
+// closeablePublisher is the account deletion publisher plus the Close both
+// backends already implement.
+type closeablePublisher interface {
+	account.Publisher
+	Close()
+}
+
+// openJobPublisher returns the deletion-queue publisher matching the queue
+// backend — Pub/Sub on Cloud Run, RabbitMQ self-hosted — so /tasks/* works
+// in both modes without requiring GCP credentials locally.
+func openJobPublisher(ctx context.Context, cfg *config.Config) (closeablePublisher, error) {
+	if cfg.QueueBackend == "pubsub" {
+		return analysis.OpenPubSubPublisher[account.Job](ctx, cfg.GCPProjectID, cfg.AccountDeletionQueue)
+	}
+	return account.OpenPublisher(cfg.RabbitMQURL, cfg.AccountDeletionQueue)
+}
+
 func runHTTP(ctx context.Context, cfg *config.Config, q *db.Queries, a *analysis.Worker, d *account.Worker, deny *auth.Denylist, bookings *coaching.Service, n notify.Notifier, payments bool) error {
-	publisher, err := analysis.OpenPubSubPublisher[account.Job](ctx, cfg.GCPProjectID, cfg.AccountDeletionQueue)
+	publisher, err := openJobPublisher(ctx, cfg)
 	if err != nil {
 		return err
 	}

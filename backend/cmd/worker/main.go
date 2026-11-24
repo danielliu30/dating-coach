@@ -85,6 +85,14 @@ func run() error {
 		"ml_service", cfg.MLServiceURL,
 	)
 
+	// RabbitMQ mode still serves /healthz and /tasks/* so orchestrators can
+	// health-gate rolls and operators can trigger scheduled jobs; it runs
+	// alongside the consumers rather than replacing them.
+	httpErr := make(chan error, 1)
+	go func() {
+		httpErr <- runHTTP(ctx, cfg, pg.Queries, worker, deleter, denylist, bookings, notifier, provider.Enabled())
+	}()
+
 	var wg sync.WaitGroup
 	wg.Add(8)
 	go func() {
@@ -149,8 +157,17 @@ func run() error {
 			})
 		}()
 	}
-	wg.Wait()
-	return nil
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case err := <-httpErr:
+		return err
+	case <-done:
+		return nil
+	}
 }
 
 const (
