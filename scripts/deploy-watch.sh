@@ -33,10 +33,6 @@
 #          build, migrate, deploy or verify failure.
 set -euo pipefail
 
-# Under Git Bash (incl. the Task Scheduler entry), MSYS rewrites args like
-# -path=/migrations into C:/... before docker sees them. Disable it globally.
-export MSYS2_ARG_CONV_EXCL='*'
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 ENV_FILE="${ENV_FILE:-$REPO_DIR/.env}"
@@ -120,7 +116,10 @@ docker network inspect "$NET" >/dev/null 2>&1 \
 # bring infra up first and converge on its own.
 if docker service ls -q -f "name=${DEPLOY_STACK}_postgres" | grep -q .; then
     log "running migrate gate"
-    docker run --rm --network "$NET" "$MIGRATE_IMAGE" \
+    # MSYS2_ARG_CONV_EXCL is scoped to this call only: -path=/migrations must
+    # reach docker verbatim (Git Bash otherwise rewrites it to a Windows
+    # path), while other commands still need /c/ path translation.
+    MSYS2_ARG_CONV_EXCL='*' docker run --rm --network "$NET" "$MIGRATE_IMAGE" \
         -path=/migrations \
         -database="postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable" \
         up
