@@ -14,6 +14,13 @@ import (
 // hash is produced by Postgres's crypt() so seeding stays pure SQL.
 const SeedPassword = "loadtest-password"
 
+// Tag builds a per-run fixture tag ("component-<time>-<pid>") so concurrent
+// components never share the CleanupTag prefix — one run's cleanup can never
+// delete another run's seeded accounts mid-flight.
+func Tag(component string) string {
+	return fmt.Sprintf("%s-%x-%d", component, time.Now().UnixNano()&0xffffff, os.Getpid()%0x1000)
+}
+
 // RepoRoot walks up from the working directory to the folder containing
 // docker-compose.yml.
 func RepoRoot() (string, error) {
@@ -70,6 +77,28 @@ func ComposeLogs(service, since string) (string, error) {
 		return "", fmt.Errorf("compose logs %s failed: %w", service, err)
 	}
 	return string(out), nil
+}
+
+// ComposeUp runs `docker compose up -d --wait` for the given services with the
+// loadtest env file and override, used by lt-payments to bring the
+// payments-enabled api-pay/worker-pay services up next to the base stack.
+func ComposeUp(services ...string) error {
+	root, err := RepoRoot()
+	if err != nil {
+		return err
+	}
+	args := []string{
+		"compose", "--env-file", filepath.Join(root, "loadtest", ".env"),
+		"-f", filepath.Join(root, "docker-compose.yml"),
+		"-f", filepath.Join(root, "loadtest", "docker-compose.override.yml"),
+		"up", "-d", "--wait",
+	}
+	args = append(args, services...)
+	out, err := exec.Command("docker", args...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("compose up %v failed: %w: %s", services, err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // CountLogLines greps service logs for a substring and returns the number of

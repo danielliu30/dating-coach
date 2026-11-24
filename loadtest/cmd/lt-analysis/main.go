@@ -45,7 +45,7 @@ func main() {
 	out := flag.String("out", "out", "report output directory")
 	flag.Parse()
 
-	tag := fmt.Sprintf("anls%d", time.Now().Unix()%100000)
+	tag := harness.Tag("anls")
 	ctx := context.Background()
 	m := harness.NewMetrics()
 	defer harness.CleanupTag(tag)

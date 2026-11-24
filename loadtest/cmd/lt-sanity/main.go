@@ -11,7 +11,6 @@ import (
 	"log"
 	"net/http"
 	"path/filepath"
-	"time"
 
 	"github.com/danielliu30/dating-coach/loadtest/internal/harness"
 )
@@ -21,7 +20,7 @@ func main() {
 	out := flag.String("out", "out", "report output directory")
 	flag.Parse()
 
-	tag := fmt.Sprintf("sanity%d", time.Now().Unix()%100000)
+	tag := harness.Tag("sanity")
 	ctx := context.Background()
 	m := harness.NewMetrics()
 
