@@ -17,9 +17,13 @@ allowed-tools:
   else `git diff`; on a feature branch with committed work,
   `git diff main...HEAD` (or `origin/main...HEAD`).
 - **Numeric argument - a GitHub PR.** `gh pr view <n>`, `gh pr diff <n>`,
-  `gh pr checks <n>`. For fork PRs, inspect the `.github/**` portion of the
-  diff before anything else - a fork could weaken its own checks - and never
-  auto-approve one (see the `pr-granularity` skill).
+  `gh pr checks <n>`. Fetch review comments too: `gh pr view <n> --comments`
+  plus `gh api repos/{owner}/{repo}/pulls/<n>/comments` for inline notes -
+  automated reviewers (e.g. Devin Review) count as findings; verify each
+  against the code before accepting or rebutting it. For fork PRs, inspect
+  the `.github/**` portion of the diff before anything else - a fork could
+  weaken its own checks - and never auto-approve one (see the
+  `pr-granularity` skill).
 
 Read enough surrounding code and the diff's callers to judge correctness - a
 diff alone hides context.
@@ -56,7 +60,8 @@ diff alone hides context.
 **General quality**
 - Logic errors, missed edge cases, wrong error-handling boundaries.
 - Consistent with surrounding conventions; reuses existing helpers.
-- No dead code, stray debug output, or unrelated changes.
+- Addresses only the asked scope: no dead code, bloat, stray debug output, or
+  out-of-scope changes - scope creep belongs in its own PR.
 
 ## Report
 
@@ -74,6 +79,8 @@ Each finding: `file:line`, what is wrong, and a suggested fix. Then:
 - **Verdict**: approve / request changes / comment-only.
 - **Proving tests**: the specific tests that would demonstrate the risky parts
   are correct.
+- **Self-review loop**: when the diff is yours, fix blocker/major findings and
+  re-verify instead of reporting them - only minors/nits may ship flagged.
 
 ## Posting
 

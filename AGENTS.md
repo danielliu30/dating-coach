@@ -19,6 +19,7 @@ Each service directory has its own `AGENTS.md` — read it before working there.
 
 Invoke these whenever their trigger matches — they are part of the working protocol, not optional references:
 
+- `dev-cycle` — end-to-end loop for any code-change task: decompose → implement → verify → review → PR → merge.
 - `coding-efficiency` — every code-change task (implement, fix, refactor, add, remove).
 - `pr-granularity` — any change that splits into logical units; decompose before coding.
 - `dating-coach-verify` — before reporting any change; cheapest sufficient check.
