@@ -99,6 +99,17 @@ func (h *Hub) Register(userID, connID uuid.UUID, drop func()) func() {
 
 // deregister forgets one socket, so a later revocation cannot call a drop
 // belonging to a connection that has already gone away.
+// SocketCount reports how many sockets this replica currently tracks.
+func (h *Hub) SocketCount() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	n := 0
+	for _, conns := range h.sockets {
+		n += len(conns)
+	}
+	return n
+}
+
 func (h *Hub) deregister(userID, connID uuid.UUID) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
