@@ -63,6 +63,7 @@ func main() {
 	tag := harness.Tag("chat")
 	ctx := context.Background()
 	m := harness.NewMetrics()
+	m.Progress(ctx, "chat", harness.ProgressEvery, *out)
 	defer harness.CleanupTag(tag)
 
 	emails, err := harness.SeedUsers(tag, 1, maxVUs, "user")

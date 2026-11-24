@@ -74,6 +74,7 @@ func main() {
 	tag := harness.Tag("e2e")
 	ctx := context.Background()
 	m := harness.NewMetrics()
+	m.Progress(ctx, "e2e-"+*journey, harness.ProgressEvery, *out)
 	defer harness.CleanupTag(tag)
 
 	coachID, err := harness.SeedCoach(tag)

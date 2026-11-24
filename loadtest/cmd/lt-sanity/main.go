@@ -23,6 +23,7 @@ func main() {
 	tag := harness.Tag("sanity")
 	ctx := context.Background()
 	m := harness.NewMetrics()
+	m.Progress(ctx, "sanity", harness.ProgressEvery, *out)
 
 	health := harness.NewClient(*base, m)
 	for _, path := range []string{"/healthz", "/ml/healthz"} {
