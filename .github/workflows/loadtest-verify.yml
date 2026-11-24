@@ -30,7 +30,7 @@ jobs:
           set -e
           dispatch="gh workflow run load-test.yml --repo danielliu30/dating-coach-loadtest -f app_sha=$SHA"
           if [ -z "$PAT" ]; then
-            gh pr comment "$PR" --body "Labeled \`loadtest-fix\`, but \`LOADTEST_DISPATCH_PAT\` isn't configured — dispatch the suite manually before merge:
+            gh pr comment "$PR" --repo "${{ github.repository }}" --body "Labeled \`loadtest-fix\`, but \`LOADTEST_DISPATCH_PAT\` isn't configured — dispatch the suite manually before merge:
 
             \`\`\`sh
             $dispatch
@@ -39,4 +39,4 @@ jobs:
             exit 0
           fi
           GH_TOKEN="$PAT" $dispatch
-          gh pr comment "$PR" --body "Dispatched the load-test suite against \`$SHA\`: https://github.com/danielliu30/dating-coach-loadtest/actions/workflows/load-test.yml — do not merge until it clears; the suite re-checks the finding under load."
+          gh pr comment "$PR" --repo "${{ github.repository }}" --body "Dispatched the load-test suite against \`$SHA\`: https://github.com/danielliu30/dating-coach-loadtest/actions/workflows/load-test.yml — do not merge until it clears; the suite re-checks the finding under load."
