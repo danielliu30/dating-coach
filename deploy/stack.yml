@@ -235,6 +235,30 @@ services:
       <<: *roll-stateless
       placement: *manager-only
 
+  # Container/service snapshotter feeding the metrics dashboard: appends
+  # docker stats (per task) and service replica counts to
+  # /logs/metrics-{stats,services}.jsonl every METRICS_INTERVAL seconds.
+  # Socket is mounted read-only; rotation bounds the files.
+  metrics:
+    image: docker:cli
+    networks: [appnet]
+    volumes:
+      - '/var/run/docker.sock:/var/run/docker.sock:ro'
+      - 'app-logs:/logs'
+    command:
+      - 'sh'
+      - '-c'
+      - 'while true; do ts="$$(date -u +%Y-%m-%dT%H:%M:%SZ)"; docker stats --no-stream --format "{{json .}}" | sed "s/^{/{\"ts\":\"$$ts\",/" >> /logs/metrics-stats.jsonl; docker service ls --format "{{json .}}" 2>/dev/null | sed "s/^{/{\"ts\":\"$$ts\",/" >> /logs/metrics-services.jsonl; sleep $${METRICS_INTERVAL:-15}; done'
+    healthcheck:
+      test: ['CMD-SHELL', 'test -f /logs/metrics-stats.jsonl && [ $$(( $$(date +%s) - $$(date -r /logs/metrics-stats.jsonl +%s) )) -lt 60 ]']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      replicas: 1
+      <<: *roll-stateless
+      placement: *manager-only
+
 configs:
   nginx_default_conf:
     file: ../nginx/default.conf
