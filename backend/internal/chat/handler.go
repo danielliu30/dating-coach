@@ -262,6 +262,8 @@ func (h *Handler) websocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	guard := &socketGuard{}
+
 	incoming := make(chan Event, 8)
 	go h.readLoop(ctx, cancel, conn, incoming)
 
@@ -288,8 +290,7 @@ func (h *Handler) websocket(w http.ResponseWriter, r *http.Request) {
 			closeSocket(conn, socketExpired, principal.UserID, connID, "expiry")
 			return
 		case <-accountTicker.C:
-			if verdict := h.sessionStatus(ctx, principal); verdict != socketActive {
-				closeSocket(conn, verdict, principal.UserID, connID, "heartbeat")
+			if !guard.check(ctx, h, conn, principal, connID, "heartbeat") {
 				return
 			}
 		case <-ticker.C:
@@ -305,7 +306,7 @@ func (h *Handler) websocket(w http.ResponseWriter, r *http.Request) {
 			if !open {
 				return
 			}
-			if !h.handleIncoming(ctx, conn, threadID, principal, connID, event) {
+			if !h.handleIncoming(ctx, conn, threadID, principal, connID, guard, event) {
 				return
 			}
 		}
@@ -321,6 +322,41 @@ const (
 	socketExpired
 	socketUnverifiable
 )
+
+// maxUnverifiableStreak bounds how many consecutive session checks may come
+// back unverifiable before an established socket is closed. One transient
+// infrastructure error must not drop it — a database or Redis blip would
+// otherwise disconnect every socket whose event or heartbeat landed in the
+// window — while a sustained outage still ends the socket within seconds.
+const maxUnverifiableStreak = 3
+
+// socketGuard counts consecutive unverifiable session checks on a live
+// socket. Revoked and expired verdicts always close at once; unverifiable
+// ones are tolerated until the streak reaches maxUnverifiableStreak, and the
+// count resets on the first check that succeeds.
+type socketGuard struct{ unverifiable int }
+
+// check re-verifies the account behind an established socket for the given
+// trigger (heartbeat, client_event) and reports whether the socket stays
+// open. It is the established-socket counterpart of the connect-time check,
+// which stays strict: an unverifiable status at upgrade rejects the socket
+// outright since the client can simply retry.
+func (g *socketGuard) check(ctx context.Context, h *Handler, conn *websocket.Conn, principal auth.Principal, connID uuid.UUID, trigger string) bool {
+	verdict := h.sessionStatus(ctx, principal)
+	if verdict == socketUnverifiable {
+		g.unverifiable++
+		if g.unverifiable < maxUnverifiableStreak {
+			return true
+		}
+	} else {
+		g.unverifiable = 0
+	}
+	if verdict != socketActive {
+		closeSocket(conn, verdict, principal.UserID, connID, trigger)
+		return false
+	}
+	return true
+}
 
 // expiryTimer fires when a token expires, and never for the zero time, which is
 // what a token without an expiry claim leaves on the Principal. A deadline that
@@ -409,13 +445,12 @@ func closeSocket(conn *websocket.Conn, verdict socketVerdict, userID, connID uui
 // privileged action, so none is dispatched without a fresh revocation check, or
 // on a token whose expiry the main loop's timer has yet to notice, rather than
 // waiting for the next heartbeat.
-func (h *Handler) handleIncoming(ctx context.Context, conn *websocket.Conn, threadID uuid.UUID, principal auth.Principal, connID uuid.UUID, event Event) bool {
+func (h *Handler) handleIncoming(ctx context.Context, conn *websocket.Conn, threadID uuid.UUID, principal auth.Principal, connID uuid.UUID, guard *socketGuard, event Event) bool {
 	if !principal.ExpiresAt.IsZero() && !time.Now().Before(principal.ExpiresAt) {
 		closeSocket(conn, socketExpired, principal.UserID, connID, "client_event")
 		return false
 	}
-	if verdict := h.sessionStatus(ctx, principal); verdict != socketActive {
-		closeSocket(conn, verdict, principal.UserID, connID, "client_event")
+	if !guard.check(ctx, h, conn, principal, connID, "client_event") {
 		return false
 	}
 	switch event.Type {

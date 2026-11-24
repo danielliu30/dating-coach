@@ -29,6 +29,23 @@ func (s stubAccounts) UserActive(context.Context, uuid.UUID) (bool, error) {
 	return s.active, s.err
 }
 
+// flakyAccounts fails UserActive until failures run out, then delegates to
+// next: a transient outage that heals while the socket is open.
+type flakyAccounts struct {
+	failures int
+	err      error
+	next     stubAccounts
+}
+
+// UserActive satisfies AccountStatus.
+func (f *flakyAccounts) UserActive(ctx context.Context, id uuid.UUID) (bool, error) {
+	if f.failures > 0 {
+		f.failures--
+		return false, f.err
+	}
+	return f.next.UserActive(ctx, id)
+}
+
 func TestSessionStatus(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -96,13 +113,122 @@ func TestHandleIncomingClosesInactiveSocket(t *testing.T) {
 		want      websocket.StatusCode
 	}{
 		{"deleted account is told to stop reconnecting", stubAccounts{}, time.Time{}, websocket.StatusPolicyViolation},
-		{"unverifiable account may reconnect", stubAccounts{err: errors.New("dial postgres: connection refused")}, time.Time{}, websocket.StatusTryAgainLater},
 		{"expired token stops acting", stubAccounts{active: true}, time.Now().Add(-time.Minute), websocket.StatusPolicyViolation},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			assertSocketClosed(t, tc.accounts, tc.expiresAt, tc.want)
 		})
+	}
+}
+
+// TestHandleIncomingToleratesTransientUnverifiable exercises a socket through
+// a short outage: fewer unverifiable checks than maxUnverifiableStreak leave
+// it open and dispatching, and the next healthy check resets the streak.
+func TestHandleIncomingToleratesTransientUnverifiable(t *testing.T) {
+	flaky := &flakyAccounts{
+		failures: maxUnverifiableStreak - 1,
+		err:      errors.New("dial postgres: connection refused"),
+		next:     stubAccounts{active: true},
+	}
+	h := NewHandler(NewService(nil, nil), nil, flaky, nil)
+
+	dispatched := make(chan bool, maxUnverifiableStreak)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			t.Errorf("accept: %v", err)
+			return
+		}
+		defer conn.CloseNow()
+		principal := auth.Principal{UserID: uuid.New()}
+		guard := &socketGuard{}
+		for i := 0; i < maxUnverifiableStreak; i++ {
+			// The whitespace send is rejected and echoed as an error event,
+			// which doubles as proof on the wire that the socket stayed open.
+			dispatched <- h.handleIncoming(r.Context(), conn, uuid.New(), principal, uuid.New(), guard,
+				Event{Type: EventMessage, ClientID: "c", Body: " "})
+		}
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, _, err := websocket.Dial(ctx, "ws"+server.URL[len("http"):], nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.CloseNow()
+
+	for i := 0; i < maxUnverifiableStreak; i++ {
+		if !<-dispatched {
+			t.Fatalf("event %d dropped the socket on a %d-check outage", i+1, maxUnverifiableStreak-1)
+		}
+		if _, _, err := conn.Read(ctx); err != nil {
+			t.Fatalf("socket closed on a %d-check outage: %v", maxUnverifiableStreak-1, websocket.CloseStatus(err))
+		}
+	}
+}
+
+// TestHandleIncomingClosesAfterUnverifiableStreak exercises the ceiling: an
+// outage that never heals still closes the socket once the streak reaches
+// maxUnverifiableStreak, with the retryable status rather than a revocation.
+func TestHandleIncomingClosesAfterUnverifiableStreak(t *testing.T) {
+	h := NewHandler(NewService(nil, nil), nil,
+		stubAccounts{err: errors.New("dial postgres: connection refused")}, nil)
+
+	dispatched := make(chan bool, maxUnverifiableStreak)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			t.Errorf("accept: %v", err)
+			return
+		}
+		defer conn.CloseNow()
+		principal := auth.Principal{UserID: uuid.New()}
+		guard := &socketGuard{}
+		for i := 0; i < maxUnverifiableStreak; i++ {
+			dispatched <- h.handleIncoming(r.Context(), conn, uuid.New(), principal, uuid.New(), guard,
+				Event{Type: EventMessage, ClientID: "c", Body: " "})
+		}
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, _, err := websocket.Dial(ctx, "ws"+server.URL[len("http"):], nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.CloseNow()
+
+	// Read from one goroutine so a read is always in flight when the close
+	// frame arrives: reads issued after the peer's close is processed can
+	// return the lock error rather than the close status.
+	reads := make(chan error, maxUnverifiableStreak+1)
+	go func() {
+		for {
+			_, _, err := conn.Read(ctx)
+			reads <- err
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	for i := 0; i < maxUnverifiableStreak-1; i++ {
+		if !<-dispatched {
+			t.Fatalf("event %d closed before the streak bound", i+1)
+		}
+		if err := <-reads; err != nil {
+			t.Fatalf("socket closed before the streak bound: %v", websocket.CloseStatus(err))
+		}
+	}
+	if <-dispatched {
+		t.Fatal("socket stayed open past maxUnverifiableStreak")
+	}
+	if err := <-reads; websocket.CloseStatus(err) != websocket.StatusTryAgainLater {
+		t.Fatalf("close status = %v, want %v", websocket.CloseStatus(err), websocket.StatusTryAgainLater)
 	}
 }
 
@@ -144,7 +270,7 @@ func assertSocketClosed(t *testing.T, accounts stubAccounts, expiresAt time.Time
 		defer conn.CloseNow()
 		event := Event{Type: EventMessage, Body: "still here"}
 		principal := auth.Principal{UserID: uuid.New(), ExpiresAt: expiresAt}
-		dispatched <- h.handleIncoming(r.Context(), conn, uuid.New(), principal, uuid.New(), event)
+		dispatched <- h.handleIncoming(r.Context(), conn, uuid.New(), principal, uuid.New(), &socketGuard{}, event)
 	}))
 	defer server.Close()
 
@@ -222,7 +348,7 @@ func TestHandleIncomingRejectionEchoesClientID(t *testing.T) {
 		defer conn.CloseNow()
 		event := Event{Type: EventMessage, ClientID: "c-42", Body: "   "}
 		principal := auth.Principal{UserID: uuid.New()}
-		h.handleIncoming(r.Context(), conn, threadID, principal, uuid.New(), event)
+		h.handleIncoming(r.Context(), conn, threadID, principal, uuid.New(), &socketGuard{}, event)
 	}))
 	defer server.Close()
 
