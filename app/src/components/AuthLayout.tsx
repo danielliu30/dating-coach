@@ -173,6 +173,7 @@ function NavLink({
     <Pressable
       accessibilityRole="button"
       accessibilityState={{ selected: active }}
+      aria-current={active ? 'page' : undefined}
       onPress={onPress}
       style={({ pressed }) => [
         styles.navLink,

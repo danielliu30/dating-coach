@@ -40,8 +40,11 @@ describe('AuthLayout landing nav', () => {
   it('marks the current page link as selected', () => {
     renderLanding();
     expect(screen.getByRole('button', { name: 'Product' }).props.accessibilityState.selected).toBe(true);
+    expect(screen.getByRole('button', { name: 'Product' }).props['aria-current']).toBe('page');
     fireEvent.press(screen.getByRole('button', { name: 'About' }));
     expect(screen.getByRole('button', { name: 'About' }).props.accessibilityState.selected).toBe(true);
+    expect(screen.getByRole('button', { name: 'About' }).props['aria-current']).toBe('page');
     expect(screen.getByRole('button', { name: 'Product' }).props.accessibilityState.selected).toBe(false);
+    expect(screen.getByRole('button', { name: 'Product' }).props['aria-current']).toBeUndefined();
   });
 });
