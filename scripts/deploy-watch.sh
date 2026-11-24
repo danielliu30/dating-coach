@@ -33,6 +33,10 @@
 #          build, migrate, deploy or verify failure.
 set -euo pipefail
 
+# Under Git Bash (incl. the Task Scheduler entry), MSYS rewrites args like
+# -path=/migrations into C:/... before docker sees them. Disable it globally.
+export MSYS2_ARG_CONV_EXCL='*'
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 ENV_FILE="${ENV_FILE:-$REPO_DIR/.env}"
