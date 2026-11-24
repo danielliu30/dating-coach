@@ -15,10 +15,10 @@ import (
 // counts and latencies, free-form counters, and finding notes. Safe for
 // concurrent use by every VU sharing the collector.
 type Metrics struct {
-	mu    sync.Mutex
-	eps   map[string]*endpoint
-	count map[string]int64
-	notes []string
+	mu         sync.Mutex
+	eps        map[string]*endpoint
+	count      map[string]int64
+	notes      []string
 	start      time.Time
 	stage      string
 	vus        int

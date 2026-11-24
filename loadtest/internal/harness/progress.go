@@ -62,12 +62,12 @@ func (m *Metrics) Counters() map[string]int64 {
 // LiveEndpoint is a live view of one endpoint: call count, per-status
 // breakdown (success vs failure rates derive from it), and tail latencies.
 type LiveEndpoint struct {
-	Name     string         `json:"name"`
-	Count    int            `json:"count"`
-	Statuses map[int]int    `json:"statuses"`
-	P50ms    float64        `json:"p50_ms"`
-	P95ms    float64        `json:"p95_ms"`
-	P99ms    float64        `json:"p99_ms"`
+	Name     string      `json:"name"`
+	Count    int         `json:"count"`
+	Statuses map[int]int `json:"statuses"`
+	P50ms    float64     `json:"p50_ms"`
+	P95ms    float64     `json:"p95_ms"`
+	P99ms    float64     `json:"p99_ms"`
 }
 
 type LiveState struct {
