@@ -145,9 +145,20 @@ else
     log "no ${DEPLOY_STACK}_postgres service yet — bootstrap deploy (migrations run next pass or by hand)"
 fi
 
-# 4. Rolling deploy.
-log "stack deploy"
+# 4. Rolling deploy. Swarm configs are immutable — a changed file fails with
+# "only updates to Labels are allowed" — so config names carry a content
+# hash and a change creates a new object the service rolls onto.
+NGINX_CONF_VERSION="$(cat "$DEPLOY_DIR"/nginx/default.conf "$DEPLOY_DIR"/nginx/metrics-dashboard.html "$DEPLOY_DIR"/nginx/metrics-dashboard.js 2>/dev/null | sha256sum | cut -c1-8)"
+export NGINX_CONF_VERSION
+log "stack deploy (config version $NGINX_CONF_VERSION)"
 docker stack deploy -c "$DEPLOY_DIR/deploy/stack.yml" "$DEPLOY_STACK"
+
+# Prune config objects superseded by earlier hashes; ones still attached to
+# draining tasks fail harmlessly and get cleaned on a later pass.
+docker config ls --format '{{.Name}}' \
+    | grep -E '(^|_)(nginx_default_conf|metrics_dashboard_(html|js))' \
+    | grep -v "$NGINX_CONF_VERSION" \
+    | xargs -rn1 docker config rm >/dev/null 2>&1 || true
 
 # 5. Convergence: every service at desired replicas within 5 minutes.
 deadline=$((SECONDS + 300))
