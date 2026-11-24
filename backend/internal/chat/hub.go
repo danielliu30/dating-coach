@@ -176,6 +176,16 @@ func (h *Hub) unsubscribe(threadID uuid.UUID, sub *subscriber) {
 // pump forwards Redis messages for a thread to the local sockets.
 func (h *Hub) pump(ctx context.Context, threadID uuid.UUID) {
 	pubsub := h.rdb.Subscribe(ctx, channelFor(threadID))
+	// ReceiveMessage only turns a context deadline into a socket deadline; a
+	// plain cancel leaves it blocked on the read forever. Close the pubsub when
+	// the thread's last socket goes away so the read fails and both this
+	// goroutine and the Redis subscription are released.
+	pumpCtx, stopPump := context.WithCancel(ctx)
+	defer stopPump()
+	go func() {
+		<-pumpCtx.Done()
+		_ = pubsub.Close()
+	}()
 	defer func() {
 		if err := pubsub.Close(); err != nil && ctx.Err() == nil {
 			slog.Error("close chat subscription", "error", err, "thread_id", threadID)
