@@ -31,6 +31,7 @@ type Config struct {
 	JWTTTL               time.Duration
 	VerifyTokenTTL       time.Duration
 	RefreshTokenTTL      time.Duration
+	RefreshReuseGrace    time.Duration
 	ResetCodeTTL         time.Duration
 	ResetResendCooldown  time.Duration
 	VerifyResendCooldown time.Duration
@@ -140,6 +141,7 @@ func Load() (*Config, error) {
 		JWTTTL:                    envDuration("JWT_TTL", 15*time.Minute),
 		VerifyTokenTTL:            envDuration("VERIFY_TOKEN_TTL", 30*time.Minute),
 		RefreshTokenTTL:           envDuration("REFRESH_TOKEN_TTL", 30*24*time.Hour),
+		RefreshReuseGrace:         envDuration("REFRESH_REUSE_GRACE", 30*time.Second),
 		ResetCodeTTL:              envDuration("RESET_CODE_TTL", 15*time.Minute),
 		ResetResendCooldown:       envDuration("RESET_RESEND_COOLDOWN", time.Minute),
 		VerifyResendCooldown:      envDuration("VERIFY_RESEND_COOLDOWN", time.Minute),
@@ -230,6 +232,7 @@ func Load() (*Config, error) {
 		{"JWT_TTL", cfg.JWTTTL},
 		{"VERIFY_TOKEN_TTL", cfg.VerifyTokenTTL},
 		{"REFRESH_TOKEN_TTL", cfg.RefreshTokenTTL},
+		{"REFRESH_REUSE_GRACE", cfg.RefreshReuseGrace},
 		{"RESET_CODE_TTL", cfg.ResetCodeTTL},
 		{"RESET_RESEND_COOLDOWN", cfg.ResetResendCooldown},
 		{"VERIFY_RESEND_COOLDOWN", cfg.VerifyResendCooldown},

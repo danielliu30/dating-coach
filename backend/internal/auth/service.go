@@ -73,7 +73,15 @@ type Service struct {
 	refreshTTL     time.Duration
 	google         GoogleTokenVerifier
 	loginThrottle  *LoginThrottle
+	reuseGrace     time.Duration
 }
+
+// defaultReuseGrace is how long after a refresh token is spent its
+// re-presentation is treated as a concurrent-rotation artifact rather than
+// theft. A client refreshing from parallel tabs or retried requests can only
+// repeat the token it was given — only one exchange mints the replacement —
+// so a replay inside the window is not evidence the token leaked.
+const defaultReuseGrace = 30 * time.Second
 
 // DeletionPublisher queues the row removal that follows a revoked account.
 // Service depends on the interface so cmd/api owns the broker connection.
@@ -119,6 +127,7 @@ func NewService(
 		sessionTTL:     sessionTTL,
 		verifyTokenTTL: verifyTokenTTL,
 		refreshTTL:     refreshTTL,
+		reuseGrace:     defaultReuseGrace,
 	}
 }
 
@@ -651,6 +660,14 @@ func (s *Service) claimGoogleUser(ctx context.Context, userID uuid.UUID) (db.Use
 
 func (s *Service) SetLoginThrottle(throttle *LoginThrottle) {
 	s.loginThrottle = throttle
+}
+
+// SetRefreshReuseGrace overrides the window in which a spent refresh token's
+// re-presentation is answered with a plain invalid rather than the family
+// revocation reserved for theft. Zero restores the strict behaviour: every
+// replay revokes.
+func (s *Service) SetRefreshReuseGrace(grace time.Duration) {
+	s.reuseGrace = grace
 }
 
 // SignIn verifies the password and opens a session. Unknown emails, wrong

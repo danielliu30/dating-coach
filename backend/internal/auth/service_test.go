@@ -160,6 +160,7 @@ func TestSignUpMintsVerifyScopedToken(t *testing.T) {
 // down with it.
 func TestRefreshRotatesAndDetectsReuse(t *testing.T) {
 	svc, issuer, pool := newTestService(t)
+	svc.SetRefreshReuseGrace(0)
 	ctx := context.Background()
 
 	user := verifiedUser(t, svc, pool)
@@ -210,6 +211,77 @@ func TestRefreshRotatesAndDetectsReuse(t *testing.T) {
 		if rec.Code != http.StatusUnauthorized {
 			t.Fatalf("%s access token after reuse: status = %d, want 401", name, rec.Code)
 		}
+	}
+}
+
+// TestRefreshReplayInsideGraceKeepsFamily covers the concurrent-rotation
+// case: a client that repeats the spent token inside the grace window is the
+// race's loser, not a thief, so the answer is a plain invalid and the winner's
+// family — its replacement token and minted access tokens — stays alive.
+func TestRefreshReplayInsideGraceKeepsFamily(t *testing.T) {
+	svc, issuer, pool := newTestService(t)
+	ctx := context.Background()
+
+	user := verifiedUser(t, svc, pool)
+	first, err := svc.SignIn(ctx, user.email, user.password)
+	if err != nil {
+		t.Fatalf("sign in: %v", err)
+	}
+	second, err := svc.Refresh(ctx, first.RefreshToken)
+	if err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+
+	if _, err := svc.Refresh(ctx, first.RefreshToken); !errors.Is(err, ErrInvalidRefreshToken) {
+		t.Fatalf("replay inside grace: error = %v, want %v", err, ErrInvalidRefreshToken)
+	}
+	if _, err := svc.Refresh(ctx, second.RefreshToken); err != nil {
+		t.Fatalf("replacement token after a grace-window replay: %v", err)
+	}
+
+	// The winner's access token still validates: no denylist cutoff was
+	// recorded, so nothing minted before the replay dies with it.
+	req := httptest.NewRequest(http.MethodGet, "/me", nil)
+	req.Header.Set("Authorization", "Bearer "+second.Token)
+	rec := httptest.NewRecorder()
+	Middleware(issuer, nil, svc.denylist)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})).ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("winner's access token after a grace-window replay: status = %d, want 204", rec.Code)
+	}
+}
+
+// TestRefreshReplayAfterGraceRevokes keeps the theft path armed past the
+// window: a spent token replayed long after its rotation is evidence it
+// leaked, so the family still comes down.
+func TestRefreshReplayAfterGraceRevokes(t *testing.T) {
+	svc, _, pool := newTestService(t)
+	ctx := context.Background()
+
+	user := verifiedUser(t, svc, pool)
+	first, err := svc.SignIn(ctx, user.email, user.password)
+	if err != nil {
+		t.Fatalf("sign in: %v", err)
+	}
+	second, err := svc.Refresh(ctx, first.RefreshToken)
+	if err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+
+	// Age the spend past the grace window as if the replay arrived much later.
+	if _, err := pool.Exec(ctx,
+		`UPDATE refresh_tokens SET used_at = now() - interval '1 hour' WHERE token_hash = $1`,
+		hashRefreshToken(first.RefreshToken),
+	); err != nil {
+		t.Fatalf("backdate spent token: %v", err)
+	}
+
+	if _, err := svc.Refresh(ctx, first.RefreshToken); !errors.Is(err, ErrRevokedRefreshToken) {
+		t.Fatalf("replay past grace: error = %v, want %v", err, ErrRevokedRefreshToken)
+	}
+	if _, err := svc.Refresh(ctx, second.RefreshToken); !errors.Is(err, ErrInvalidRefreshToken) {
+		t.Fatalf("after detected reuse: error = %v, want %v", err, ErrInvalidRefreshToken)
 	}
 }
 
@@ -819,6 +891,7 @@ func TestRevocationsSurviveARedisOutage(t *testing.T) {
 			return nil
 		},
 		"refresh reuse": func(svc *Service, s Session, down *Denylist) error {
+			svc.SetRefreshReuseGrace(0)
 			if _, err := svc.Refresh(context.Background(), s.RefreshToken); err != nil {
 				return fmt.Errorf("refresh: %w", err)
 			}
