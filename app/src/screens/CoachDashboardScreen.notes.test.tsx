@@ -49,8 +49,14 @@ describe('CoachDashboardScreen save notes', () => {
     mocked.setSessionNotes.mockResolvedValue(session);
   });
 
+  /** Expands the card's collapsed prep section so the notes field renders. */
+  async function expandPrep() {
+    fireEvent.press(await screen.findByRole('button', { name: 'Prep — meeting link and notes' }));
+  }
+
   it('keeps the existing notes when "Save notes" is pressed without editing', async () => {
     render(<CoachDashboardScreen />);
+    await expandPrep();
     await screen.findByDisplayValue('Existing notes from last time');
 
     fireEvent.press(screen.getByText('Save notes'));
@@ -61,6 +67,7 @@ describe('CoachDashboardScreen save notes', () => {
 
   it('sends the edited draft when the notes were changed', async () => {
     render(<CoachDashboardScreen />);
+    await expandPrep();
     const input = await screen.findByDisplayValue('Existing notes from last time');
 
     fireEvent.changeText(input, 'Follow up on openers');

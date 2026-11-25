@@ -49,6 +49,12 @@ const buttons = (name: string) => screen.getAllByRole('button', { name });
 /** `Button` swaps its label for a spinner while loading, so count spinners. */
 const spinners = () => screen.UNSAFE_queryAllByType(ActivityIndicator);
 
+/** Expands every card's collapsed prep section so its controls render. */
+async function expandAllPrep() {
+  const toggles = await screen.findAllByRole('button', { name: 'Prep — meeting link and notes' });
+  toggles.forEach((toggle) => fireEvent.press(toggle));
+}
+
 describe('CoachDashboardScreen action busy state', () => {
   beforeEach(() => {
     mocked.coachSessions.mockResolvedValue([session('s1'), session('s2')]);
@@ -59,6 +65,7 @@ describe('CoachDashboardScreen action busy state', () => {
     let finish: () => void = () => {};
     mocked.setSessionNotes.mockImplementationOnce(() => new Promise((resolve) => (finish = () => resolve(session('s1')))));
     render(<CoachDashboardScreen />);
+    await expandAllPrep();
     await waitFor(() => expect(buttons('Save notes')).toHaveLength(2));
 
     fireEvent.press(buttons('Save notes')[0]);
@@ -91,6 +98,7 @@ describe('CoachDashboardScreen action busy state', () => {
     mocked.setSessionNotes.mockImplementationOnce(() => new Promise((resolve) => (finishA = () => resolve(session('s1')))));
     mocked.setSessionMeetingUrl.mockImplementationOnce(() => new Promise((resolve) => (finishB = () => resolve(session('s2')))));
     render(<CoachDashboardScreen />);
+    await expandAllPrep();
     await waitFor(() => expect(buttons('Save notes')).toHaveLength(2));
 
     fireEvent.press(buttons('Save notes')[0]);
@@ -114,6 +122,7 @@ describe('CoachDashboardScreen action busy state', () => {
     mocked.setSessionNotes.mockImplementationOnce(() => new Promise(() => {}));
     mocked.setSessionStatus.mockImplementationOnce(() => new Promise(() => {}));
     render(<CoachDashboardScreen />);
+    await expandAllPrep();
     await waitFor(() => expect(buttons('Save notes')).toHaveLength(2));
 
     const notes = buttons('Save notes')[0];
