@@ -24,10 +24,21 @@ class Settings:
     # with the number of segments in the conversation.
     llm_max_output_tokens: int = 8192
     profile_evidence_enabled: bool = False
+    # Embeddings for the backend's RAG retrieval: an OpenAI-compatible
+    # /embeddings endpoint (OpenAI by default, Voyage via a different base URL).
+    embedding_provider: str = "openai"
+    embedding_api_key: str = ""
+    embedding_model: str = "text-embedding-3-small"
+    embedding_base_url: str = ""
+    embedding_timeout: float = 15.0
 
     @property
     def llm_configured(self) -> bool:
         return bool(self.llm_api_key)
+
+    @property
+    def embeddings_configured(self) -> bool:
+        return bool(self.embedding_api_key)
 
 
 def env(name: str, fallback: str) -> str:
@@ -55,6 +66,21 @@ def get_settings() -> Settings:
         "anthropic": "claude-3-5-haiku-latest",
     }.get(provider, "gpt-4o-mini")
 
+    embedding_provider = env("EMBEDDING_PROVIDER", "openai").lower()
+    embedding_default_base = {
+        "openai": "https://api.openai.com/v1",
+        "voyage": "https://api.voyageai.com/v1",
+    }.get(embedding_provider, "https://api.openai.com/v1")
+    embedding_default_model = {
+        "openai": "text-embedding-3-small",
+        "voyage": "voyage-3",
+    }.get(embedding_provider, "text-embedding-3-small")
+    embedding_api_key = env("EMBEDDING_API_KEY", "")
+    # Reuse the LLM key only when the same provider serves both APIs; a key
+    # for a different provider (e.g. Anthropic chat) is never an embedding key.
+    if not embedding_api_key and embedding_provider == provider:
+        embedding_api_key = os.getenv("LLM_API_KEY", "").strip()
+
     return Settings(
         backend=env("ML_BACKEND", "llm").lower(),
         llm_provider=provider,
@@ -66,4 +92,9 @@ def get_settings() -> Settings:
         segment_size=int(env("ML_SEGMENT_SIZE", "4")),
         llm_max_output_tokens=positive_int("LLM_MAX_OUTPUT_TOKENS", "8192"),
         profile_evidence_enabled=env("ML_PROFILE_EVIDENCE_ENABLED", "false").lower() == "true",
+        embedding_provider=embedding_provider,
+        embedding_api_key=embedding_api_key,
+        embedding_model=env("EMBEDDING_MODEL", embedding_default_model),
+        embedding_base_url=env("EMBEDDING_BASE_URL", embedding_default_base).rstrip("/"),
+        embedding_timeout=float(env("EMBEDDING_TIMEOUT_SECONDS", "15")),
     )
