@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, type NavigationProp } from '@react-navigation/native';
 import React, { useRef, useState } from 'react';
-import { FlatList, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, FlatList, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { api } from '../api/client';
 import type { CoachingSession, Slot } from '../api/types';
@@ -269,16 +269,20 @@ export default function MySessionsScreen(): React.ReactElement {
                         }}
                       />
                     </View>
-                    <View style={{ flex: 1 }}>
-                      <Button
-                        label="Cancel"
-                        variant="secondary"
-                        loading={isBusy(item.id, 'cancel')}
-                        disabled={isBlocked(item.id, 'cancel')}
-                        onPress={() => void cancel(item.id)}
-                      />
-                    </View>
                   </View>
+                  {/* Destructive action is demoted out of the primary row. */}
+                  <Pressable
+                    accessibilityRole="button"
+                    disabled={isBusy(item.id, 'cancel') || isBlocked(item.id, 'cancel')}
+                    onPress={() => void cancel(item.id)}
+                    style={({ pressed }) => [styles.cancel, pressed && { opacity: 0.7 }]}
+                  >
+                    {isBusy(item.id, 'cancel') ? (
+                      <ActivityIndicator size="small" color={colors.flat} />
+                    ) : (
+                      <Text style={styles.cancelText}>Cancel</Text>
+                    )}
+                  </Pressable>
                   {actionError?.sessionID === item.id ? <Text style={shared.error}>{actionError.message}</Text> : null}
                 </>
               ) : null}
@@ -343,6 +347,8 @@ const styles = StyleSheet.create({
   notesLabel: { ...type.eyebrow, fontSize: 11 },
   link: { color: colors.primaryDeep, textDecorationLine: 'underline' },
   actions: { flexDirection: 'row', gap: 8 },
+  cancel: { alignSelf: 'flex-end', minHeight: 24, justifyContent: 'center', paddingHorizontal: 4 },
+  cancelText: { fontFamily: fonts.sansSemi, fontSize: 13, color: colors.flat },
   reschedule: { gap: 8, padding: 14, borderRadius: radii.md, backgroundColor: colors.surfaceAlt },
   showMore: { alignSelf: 'center', paddingVertical: 6, paddingHorizontal: 12 },
   showMoreText: { fontFamily: fonts.sansBold, fontSize: 14, color: colors.primaryDeep },
