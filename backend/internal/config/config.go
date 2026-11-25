@@ -54,6 +54,16 @@ type Config struct {
 	// capacity; RabbitMQ round-robins deliveries across consumers.
 	AnalysisPrefetch int
 
+	// AnalysisRAG* tune the worker's retrieval-augmented context for scoring:
+	// the switch, how many similar past snippets to fetch, the cosine-distance
+	// ceiling for a match, and the character budgets for each embedded
+	// document and the assembled context block.
+	AnalysisRAGEnabled         bool
+	AnalysisRAGTopK            int
+	AnalysisRAGMaxDistance     float64
+	AnalysisRAGMaxDocChars     int
+	AnalysisRAGMaxContextChars int
+
 	// DeadLetterAlertPeriod is how often the worker reports the depth of the
 	// account-deletion dead-letter queue. It drives a ticker, so it must be
 	// positive.
@@ -129,6 +139,18 @@ func Load() (*Config, error) {
 		}
 		return v
 	}
+	envFloat := func(key string, fallback float64) float64 {
+		raw := env(key, "")
+		if raw == "" {
+			return fallback
+		}
+		v, err := strconv.ParseFloat(raw, 64)
+		if err != nil {
+			bad = append(bad, fmt.Sprintf("%s=%q is not a number", key, raw))
+			return fallback
+		}
+		return v
+	}
 
 	cfg := &Config{
 		Env:                       env("APP_ENV", "production"),
@@ -161,6 +183,12 @@ func Load() (*Config, error) {
 		AnalysisQueue:             env("ANALYSIS_QUEUE", "conversation.analysis"),
 		AnalysisPrefetch:          envInt("ANALYSIS_PREFETCH", 4),
 		AccountDeletionQueue:      env("ACCOUNT_DELETION_QUEUE", "account.deletion"),
+
+		AnalysisRAGEnabled:         envBool("ANALYSIS_RAG_ENABLED", false),
+		AnalysisRAGTopK:            envInt("ANALYSIS_RAG_TOP_K", 4),
+		AnalysisRAGMaxDistance:     envFloat("ANALYSIS_RAG_MAX_DISTANCE", 0.35),
+		AnalysisRAGMaxDocChars:     envInt("ANALYSIS_RAG_MAX_DOC_CHARS", 12000),
+		AnalysisRAGMaxContextChars: envInt("ANALYSIS_RAG_MAX_CONTEXT_CHARS", 8000),
 
 		DeadLetterAlertPeriod: envDuration("DEAD_LETTER_ALERT_PERIOD", time.Minute),
 
@@ -203,6 +231,18 @@ func Load() (*Config, error) {
 	}
 	if cfg.AnalysisPrefetch <= 0 {
 		bad = append(bad, "ANALYSIS_PREFETCH must be positive")
+	}
+	if cfg.AnalysisRAGTopK <= 0 {
+		bad = append(bad, "ANALYSIS_RAG_TOP_K must be positive")
+	}
+	if cfg.AnalysisRAGMaxDistance <= 0 || cfg.AnalysisRAGMaxDistance > 2 {
+		bad = append(bad, "ANALYSIS_RAG_MAX_DISTANCE must be > 0 and <= 2")
+	}
+	if cfg.AnalysisRAGMaxDocChars <= 0 {
+		bad = append(bad, "ANALYSIS_RAG_MAX_DOC_CHARS must be positive")
+	}
+	if cfg.AnalysisRAGMaxContextChars <= 0 {
+		bad = append(bad, "ANALYSIS_RAG_MAX_CONTEXT_CHARS must be positive")
 	}
 	if cfg.LoginFailureLimit <= 0 {
 		bad = append(bad, "LOGIN_FAILURE_LIMIT must be positive")

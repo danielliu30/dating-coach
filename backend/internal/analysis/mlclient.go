@@ -92,6 +92,28 @@ type MLGoalScore struct {
 	Comment string  `json:"comment"`
 }
 
+// MLEmbedRequest is the payload sent to the analyzer's /embed endpoint.
+type MLEmbedRequest struct {
+	Inputs []string `json:"inputs"`
+}
+
+// MLEmbedResponse mirrors ml-analyzer's EmbedResponse schema.
+type MLEmbedResponse struct {
+	Model      string      `json:"model"`
+	Dims       int         `json:"dims"`
+	Embeddings [][]float64 `json:"embeddings"`
+}
+
+// Embed asks the analyzer's /embed endpoint to embed a batch of texts;
+// the worker uses it for RAG retrieval. Errors carry the response snippet like Analyze.
+func (c *MLClient) Embed(ctx context.Context, in MLEmbedRequest) (MLEmbedResponse, error) {
+	var out MLEmbedResponse
+	if err := c.post(ctx, "/embed", in, &out); err != nil {
+		return MLEmbedResponse{}, err
+	}
+	return out, nil
+}
+
 // SummarizeReviews asks ml-analyzer's /summarize/reviews to condense a coach's
 // reviews; it satisfies coaching.ReviewSummarizer. Errors carry the response
 // snippet like Analyze.
