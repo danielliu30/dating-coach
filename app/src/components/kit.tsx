@@ -48,16 +48,23 @@ export function initials(name: string): string {
  * reading as a logo rather than a button.
  */
 export function LogoMark({ size = 32 }: { size?: number }): React.ReactElement {
+  const inset = Math.round(size * 0.1);
   return (
-    <View style={[styles.logo, { width: size, height: size, borderRadius: Math.round(size * 0.3) }]}>
+    <View style={[styles.logo, { width: size, height: size, borderRadius: size / 2 }]}>
       <LinearGradient
-        colors={gradients.primary}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
+        colors={gradients.meadow}
+        start={{ x: 0.2, y: 0 }}
+        end={{ x: 0.9, y: 1 }}
         style={styles.fill}
       />
-      <Text style={[styles.logoText, { fontSize: size * 0.46, lineHeight: size * 0.6 }]}>DH</Text>
-      <Ionicons name="leaf" size={size * 0.34} color="rgba(255,255,255,0.85)" style={styles.logoLeaf} />
+      <View
+        style={[
+          styles.logoRing,
+          { top: inset, left: inset, right: inset, bottom: inset, borderRadius: size / 2 },
+        ]}
+      />
+      <Ionicons name="leaf" size={size * 0.24} color="rgba(255,255,255,0.8)" style={{ marginBottom: -size * 0.03 }} />
+      <Text style={[styles.logoText, { fontSize: size * 0.42, lineHeight: size * 0.52 }]}>DH</Text>
     </View>
   );
 }
@@ -392,8 +399,8 @@ export function GradientCard({
 const styles = StyleSheet.create({
   fill: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
   logo: { alignItems: 'center', justifyContent: 'center', overflow: 'hidden', ...elevation.primary },
-  logoText: { fontFamily: fonts.serifItalicBold, color: colors.primaryText, letterSpacing: -0.5 },
-  logoLeaf: { position: 'absolute', top: '7%', right: '7%' },
+  logoRing: { position: 'absolute', borderWidth: 1, borderColor: 'rgba(255,255,255,0.3)' },
+  logoText: { fontFamily: fonts.serifItalic, color: colors.primaryText, letterSpacing: 0.5 },
   avatar: { alignItems: 'center', justifyContent: 'center', ...elevation.low },
   avatarText: { fontFamily: fonts.sansBlack, letterSpacing: -0.5 },
   presence: {
