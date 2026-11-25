@@ -32,4 +32,10 @@ ml-analyzer/data/*
 /e2e/test-results/
 .deploy.lock
 
+# Windows / local artifacts
+nul
+*.exe
+# Loadtest suite lives in dating-coach-loadtest; local runs only drop output here.
+/loadtest/out/
+
 
