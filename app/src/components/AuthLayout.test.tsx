@@ -56,6 +56,9 @@ describe('AuthLayout landing nav', () => {
     fireEvent.scroll(scroll, { nativeEvent: { contentOffset: { y: 2000 } } });
     const toTop = screen.getByRole('button', { name: 'Back to top' });
     expect(toTop).toBeTruthy();
+    // The sticky wrapper spans the landing width; box-none keeps its empty
+    // area from swallowing clicks meant for content behind it.
+    expect(screen.getByTestId('to-top-sticky').props.pointerEvents).toBe('box-none');
     fireEvent.press(toTop); // scrollTo is a native method — guarded no-op under jest
 
     fireEvent.scroll(scroll, { nativeEvent: { contentOffset: { y: 0 } } });
