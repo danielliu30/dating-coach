@@ -90,6 +90,10 @@ func (w *Worker) Handle(ctx context.Context, job Job, lastAttempt bool) error {
 		return fmt.Errorf("complete analysis: %w", err)
 	}
 
+	// Indexing is best-effort like retrieval: every failure inside is logged
+	// and swallowed, so it can never fail an already-completed job.
+	w.indexConversation(ctx, conversation, messages, resp.Overall.Summary)
+
 	w.notifyReady(ctx, job, analysisID)
 	return nil
 }
