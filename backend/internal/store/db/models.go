@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	pgvector "github.com/pgvector/pgvector-go"
 )
 
 type AccountDeletion struct {
@@ -149,6 +150,20 @@ type PaymentEvent struct {
 	SessionID       *uuid.UUID `json:"session_id"`
 	EventType       string     `json:"event_type"`
 	ReceivedAt      time.Time  `json:"received_at"`
+}
+
+type RagChunk struct {
+	ID             uuid.UUID       `json:"id"`
+	Kind           string          `json:"kind"`
+	OwnerID        *uuid.UUID      `json:"owner_id"`
+	ConversationID *uuid.UUID      `json:"conversation_id"`
+	Seq            int16           `json:"seq"`
+	Content        string          `json:"content"`
+	Embedding      pgvector.Vector `json:"embedding"`
+	Model          string          `json:"model"`
+	DocVersion     int16           `json:"doc_version"`
+	CreatedAt      time.Time       `json:"created_at"`
+	UpdatedAt      time.Time       `json:"updated_at"`
 }
 
 type RefreshToken struct {
