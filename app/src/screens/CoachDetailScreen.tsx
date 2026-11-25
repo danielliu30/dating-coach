@@ -252,6 +252,81 @@ export default function CoachDetailScreen({
       </View>
 
       <View style={shared.card}>
+        <SectionHeader title="Book a session" caption="Pick a length, choose a time, tell them what to focus on." />
+        <Text style={styles.label}>Session length</Text>
+        <View style={shared.row}>
+          {DURATIONS.map((minutes) => {
+            const active = duration === minutes;
+            return (
+              <Pressable
+                key={minutes}
+                accessibilityRole="radio"
+                accessibilityState={{ selected: active }}
+                onPress={() => pickDuration(minutes)}
+                style={[styles.duration, active && styles.durationActive]}
+              >
+                <Text style={[styles.durationValue, active && { color: colors.primaryText }]}>{minutes}</Text>
+                <Text style={[styles.durationUnit, active && { color: 'rgba(255,255,255,0.85)' }]}>min</Text>
+              </Pressable>
+            );
+          })}
+        </View>
+
+        <Text style={styles.label}>Open slots · next 7 days</Text>
+        {slots.loading && openSlots.length === 0 ? <Loading /> : null}
+        {!slots.loading && slots.error ? <Text style={shared.error}>{slots.error}</Text> : null}
+        {!slots.loading && !slots.error && slots.data && openSlots.length === 0 ? (
+          <MetaRow icon="calendar-clear-outline" text="No open slots in this window. Try another length." />
+        ) : null}
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+          {openSlots.map((slot) => {
+            const active = selected === slot.start;
+            const parts = slotParts(slot);
+            return (
+              <Pressable
+                key={slot.start}
+                accessibilityRole="button"
+                accessibilityLabel={slotLabel(slot)}
+                onPress={() => setSelected(slot.start)}
+                style={[styles.slot, active && styles.slotActive]}
+              >
+                <Text style={[styles.slotDay, active && { color: colors.primaryDeep }]}>{parts.day}</Text>
+                <Text style={[styles.slotTime, active && { color: colors.primaryDeep }]}>{parts.time}</Text>
+                {active ? <Ionicons name="checkmark-circle" size={16} color={colors.primary} /> : null}
+              </Pressable>
+            );
+          })}
+        </ScrollView>
+
+        <Field
+          label="What do you want to work on?"
+          value={topic}
+          onChangeText={setTopic}
+          placeholder="Opening messages on Hinge"
+        />
+        <View style={styles.summary}>
+          <Ionicons name="receipt-outline" size={16} color={colors.bark} />
+          <Text style={[type.caption, { flex: 1, color: colors.bark }]}>
+            {selectedSlot
+              ? `${duration} min with ${c.display_name} · ${slotLabel(selectedSlot)}`
+              : `${duration} min with ${c.display_name} · pick a time above`}
+          </Text>
+          <Text style={styles.summaryPrice}>${(Math.round((c.hourly_rate_cents * duration) / 60) / 100).toFixed(2)}</Text>
+        </View>
+        {status ? (
+          <View style={shared.row}>
+            <Ionicons name="checkmark-circle" size={16} color={colors.engaging} />
+            <Text style={[type.caption, { color: colors.engaging }]}>{status}</Text>
+          </View>
+        ) : null}
+        {error ? <Text style={shared.error}>{error}</Text> : null}
+        {checkoutUrl ? (
+          <Button label="Continue to payment" icon="card-outline" onPress={() => void openCheckout(checkoutUrl)} />
+        ) : null}
+        <Button label="Book session" icon="calendar-outline" onPress={book} loading={busy} />
+      </View>
+
+      <View style={shared.card}>
         <SectionHeader
           title="Reviews"
           caption="From clients who completed a session"
@@ -359,81 +434,6 @@ export default function CoachDetailScreen({
         ) : (
           <MetaRow icon="calendar-clear-outline" text="This coach has not published availability yet." />
         )}
-      </View>
-
-      <View style={shared.card}>
-        <SectionHeader title="Book a session" caption="Pick a length, choose a time, tell them what to focus on." />
-        <Text style={styles.label}>Session length</Text>
-        <View style={shared.row}>
-          {DURATIONS.map((minutes) => {
-            const active = duration === minutes;
-            return (
-              <Pressable
-                key={minutes}
-                accessibilityRole="radio"
-                accessibilityState={{ selected: active }}
-                onPress={() => pickDuration(minutes)}
-                style={[styles.duration, active && styles.durationActive]}
-              >
-                <Text style={[styles.durationValue, active && { color: colors.primaryText }]}>{minutes}</Text>
-                <Text style={[styles.durationUnit, active && { color: 'rgba(255,255,255,0.85)' }]}>min</Text>
-              </Pressable>
-            );
-          })}
-        </View>
-
-        <Text style={styles.label}>Open slots · next 7 days</Text>
-        {slots.loading && openSlots.length === 0 ? <Loading /> : null}
-        {!slots.loading && slots.error ? <Text style={shared.error}>{slots.error}</Text> : null}
-        {!slots.loading && !slots.error && slots.data && openSlots.length === 0 ? (
-          <MetaRow icon="calendar-clear-outline" text="No open slots in this window. Try another length." />
-        ) : null}
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
-          {openSlots.map((slot) => {
-            const active = selected === slot.start;
-            const parts = slotParts(slot);
-            return (
-              <Pressable
-                key={slot.start}
-                accessibilityRole="button"
-                accessibilityLabel={slotLabel(slot)}
-                onPress={() => setSelected(slot.start)}
-                style={[styles.slot, active && styles.slotActive]}
-              >
-                <Text style={[styles.slotDay, active && { color: colors.primaryDeep }]}>{parts.day}</Text>
-                <Text style={[styles.slotTime, active && { color: colors.primaryDeep }]}>{parts.time}</Text>
-                {active ? <Ionicons name="checkmark-circle" size={16} color={colors.primary} /> : null}
-              </Pressable>
-            );
-          })}
-        </ScrollView>
-
-        <Field
-          label="What do you want to work on?"
-          value={topic}
-          onChangeText={setTopic}
-          placeholder="Opening messages on Hinge"
-        />
-        <View style={styles.summary}>
-          <Ionicons name="receipt-outline" size={16} color={colors.bark} />
-          <Text style={[type.caption, { flex: 1, color: colors.bark }]}>
-            {selectedSlot
-              ? `${duration} min with ${c.display_name} · ${slotLabel(selectedSlot)}`
-              : `${duration} min with ${c.display_name} · pick a time above`}
-          </Text>
-          <Text style={styles.summaryPrice}>${(Math.round((c.hourly_rate_cents * duration) / 60) / 100).toFixed(2)}</Text>
-        </View>
-        {status ? (
-          <View style={shared.row}>
-            <Ionicons name="checkmark-circle" size={16} color={colors.engaging} />
-            <Text style={[type.caption, { color: colors.engaging }]}>{status}</Text>
-          </View>
-        ) : null}
-        {error ? <Text style={shared.error}>{error}</Text> : null}
-        {checkoutUrl ? (
-          <Button label="Continue to payment" icon="card-outline" onPress={() => void openCheckout(checkoutUrl)} />
-        ) : null}
-        <Button label="Book session" icon="calendar-outline" onPress={book} loading={busy} />
       </View>
     </Screen>
   );
