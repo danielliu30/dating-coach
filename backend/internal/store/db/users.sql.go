@@ -12,21 +12,6 @@ import (
 	"github.com/google/uuid"
 )
 
-const setUserPassword = `-- name: SetUserPassword :exec
-UPDATE users SET password_hash = $2, updated_at = now()
-WHERE id = $1 AND deleted_at IS NULL
-`
-
-type SetUserPasswordParams struct {
-	ID           uuid.UUID `json:"id"`
-	PasswordHash string    `json:"password_hash"`
-}
-
-func (q *Queries) SetUserPassword(ctx context.Context, arg SetUserPasswordParams) error {
-	_, err := q.db.Exec(ctx, setUserPassword, arg.ID, arg.PasswordHash)
-	return err
-}
-
 const createUser = `-- name: CreateUser :one
 INSERT INTO users (email, password_hash, display_name, role)
 VALUES ($1, $2, $3, $4)
@@ -252,35 +237,50 @@ func (q *Queries) RecordSessionRevocation(ctx context.Context, arg RecordSession
 	return err
 }
 
+const setUserPassword = `-- name: SetUserPassword :exec
+UPDATE users SET password_hash = $2, updated_at = now()
+WHERE id = $1 AND deleted_at IS NULL
+`
+
+type SetUserPasswordParams struct {
+	ID           uuid.UUID `json:"id"`
+	PasswordHash string    `json:"password_hash"`
+}
+
+func (q *Queries) SetUserPassword(ctx context.Context, arg SetUserPasswordParams) error {
+	_, err := q.db.Exec(ctx, setUserPassword, arg.ID, arg.PasswordHash)
+	return err
+}
+
 const updateUserDatingProfile = `-- name: UpdateUserDatingProfile :one
 UPDATE users
-SET dating_styles = $2,
-    phases_strong = $3,
-    phases_working_on = $4,
-    dating_preferences = $5,
-    coaching_goals = COALESCE($6::text[], coaching_goals),
+SET dating_styles = $1,
+    phases_strong = $2,
+    phases_working_on = $3,
+    dating_preferences = $4,
+    coaching_goals = COALESCE($5::text[], coaching_goals),
     updated_at = now()
-WHERE id = $1 AND deleted_at IS NULL
+WHERE id = $6 AND deleted_at IS NULL
 RETURNING id, email, password_hash, display_name, role, email_verified, created_at, updated_at, deleted_at, dating_styles, phases_strong, phases_working_on, dating_preferences, coaching_goals, sessions_revoked_at
 `
 
 type UpdateUserDatingProfileParams struct {
-	ID                uuid.UUID `json:"id"`
 	DatingStyles      []string  `json:"dating_styles"`
 	PhasesStrong      []string  `json:"phases_strong"`
 	PhasesWorkingOn   []string  `json:"phases_working_on"`
 	DatingPreferences string    `json:"dating_preferences"`
 	CoachingGoals     []string  `json:"coaching_goals"`
+	ID                uuid.UUID `json:"id"`
 }
 
 func (q *Queries) UpdateUserDatingProfile(ctx context.Context, arg UpdateUserDatingProfileParams) (User, error) {
 	row := q.db.QueryRow(ctx, updateUserDatingProfile,
-		arg.ID,
 		arg.DatingStyles,
 		arg.PhasesStrong,
 		arg.PhasesWorkingOn,
 		arg.DatingPreferences,
 		arg.CoachingGoals,
+		arg.ID,
 	)
 	var i User
 	err := row.Scan(
