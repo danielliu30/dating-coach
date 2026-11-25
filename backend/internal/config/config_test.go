@@ -109,6 +109,67 @@ func TestAnalysisPrefetch(t *testing.T) {
 	}
 }
 
+// TestAnalysisRAGConfig pins the RAG retrieval knobs: off by default with
+// usable retrieval limits, each variable parsed, and unusable values rejected
+// rather than silently tolerated.
+func TestAnalysisRAGConfig(t *testing.T) {
+	setRequired(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AnalysisRAGEnabled {
+		t.Fatal("AnalysisRAGEnabled should default to false")
+	}
+	if cfg.AnalysisRAGTopK != 4 || cfg.AnalysisRAGMaxDistance != 0.35 ||
+		cfg.AnalysisRAGMaxDocChars != 12000 || cfg.AnalysisRAGMaxContextChars != 8000 {
+		t.Fatalf("RAG defaults = %+v", cfg)
+	}
+
+	t.Setenv("ANALYSIS_RAG_ENABLED", "true")
+	t.Setenv("ANALYSIS_RAG_TOP_K", "8")
+	t.Setenv("ANALYSIS_RAG_MAX_DISTANCE", "0.5")
+	t.Setenv("ANALYSIS_RAG_MAX_DOC_CHARS", "4000")
+	t.Setenv("ANALYSIS_RAG_MAX_CONTEXT_CHARS", "2000")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.AnalysisRAGEnabled || cfg.AnalysisRAGTopK != 8 || cfg.AnalysisRAGMaxDistance != 0.5 ||
+		cfg.AnalysisRAGMaxDocChars != 4000 || cfg.AnalysisRAGMaxContextChars != 2000 {
+		t.Fatalf("RAG overrides = %+v", cfg)
+	}
+}
+
+// TestAnalysisRAGConfigRejected covers values that parse but cannot drive
+// retrieval: a zero/negative top-k or char budget, and a distance outside the
+// cosine range (0, 2].
+func TestAnalysisRAGConfigRejected(t *testing.T) {
+	cases := map[string]struct{ key, value string }{
+		"zero top k":            {"ANALYSIS_RAG_TOP_K", "0"},
+		"negative top k":        {"ANALYSIS_RAG_TOP_K", "-1"},
+		"zero max distance":     {"ANALYSIS_RAG_MAX_DISTANCE", "0"},
+		"negative max distance": {"ANALYSIS_RAG_MAX_DISTANCE", "-0.1"},
+		"distance above cosine": {"ANALYSIS_RAG_MAX_DISTANCE", "2.5"},
+		"non-numeric distance":  {"ANALYSIS_RAG_MAX_DISTANCE", "wide"},
+		"zero doc chars":        {"ANALYSIS_RAG_MAX_DOC_CHARS", "0"},
+		"negative context":      {"ANALYSIS_RAG_MAX_CONTEXT_CHARS", "-100"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			setRequired(t)
+			t.Setenv(tc.key, tc.value)
+			cfg, err := Load()
+			if err == nil {
+				t.Fatalf("Load() = %+v, want an error for %s=%s", cfg, tc.key, tc.value)
+			}
+			if !strings.Contains(err.Error(), tc.key) {
+				t.Fatalf("Load() error = %v, want it to name %s", err, tc.key)
+			}
+		})
+	}
+}
+
 func TestVerifyResendCooldown(t *testing.T) {
 	setRequired(t)
 	t.Setenv("VERIFY_RESEND_COOLDOWN", "")

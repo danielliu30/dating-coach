@@ -68,6 +68,50 @@ func TestMLOverallRoundTripsReflectionFields(t *testing.T) {
 	}
 }
 
+func TestMLClientEmbedPostsJSONAndDecodes(t *testing.T) {
+	var gotPath, gotContentType string
+	var got MLEmbedRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotContentType = r.Header.Get("Content-Type")
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(MLEmbedResponse{
+			Model:      "e5-small",
+			Dims:       2,
+			Embeddings: [][]float64{{0.1, 0.2}, {0.3, 0.4}},
+		})
+	}))
+	defer srv.Close()
+
+	out, err := NewMLClient(srv.URL+"/", time.Second).Embed(context.Background(), MLEmbedRequest{Inputs: []string{"hello", "world"}})
+	if err != nil {
+		t.Fatalf("Embed: %v", err)
+	}
+	if gotPath != "/embed" || gotContentType != "application/json" {
+		t.Fatalf("request went to %q with %q", gotPath, gotContentType)
+	}
+	if len(got.Inputs) != 2 || got.Inputs[0] != "hello" || got.Inputs[1] != "world" {
+		t.Fatalf("request body %+v", got)
+	}
+	if out.Model != "e5-small" || out.Dims != 2 || len(out.Embeddings) != 2 || out.Embeddings[1][1] != 0.4 {
+		t.Fatalf("response %+v", out)
+	}
+}
+
+func TestMLClientEmbedSurfacesNon200(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"detail":"embed bad"}`, http.StatusUnprocessableEntity)
+	}))
+	defer srv.Close()
+
+	_, err := NewMLClient(srv.URL, time.Second).Embed(context.Background(), MLEmbedRequest{Inputs: []string{"x"}})
+	if err == nil || !strings.Contains(err.Error(), "422") || !strings.Contains(err.Error(), "embed bad") {
+		t.Fatalf("got %v, want error carrying status and body snippet", err)
+	}
+}
+
 func TestMLClientAnalyzeSurfacesNon200(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"detail":"bad"}`, http.StatusUnprocessableEntity)
