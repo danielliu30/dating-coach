@@ -38,11 +38,7 @@ export function Screen({
     <View style={[shared.content, { flex: 1 }, contentStyle]}>{children}</View>
   );
   return (
-    <SafeAreaView style={shared.screen} edges={['top', 'left', 'right']}>
-      <View style={styles.screenGlow} />
-      <View style={styles.screenGlowSage} />
-      {body}
-    </SafeAreaView>
+    <SafeAreaView style={shared.screen} edges={['top', 'left', 'right']}>{body}</SafeAreaView>
   );
 }
 
@@ -73,7 +69,6 @@ export function Button({
         styles.button,
         isPrimary ? styles.buttonPrimary : styles.buttonSecondary,
         isPrimary && !inactive && elevation.primary,
-        !isPrimary && !inactive && elevation.low,
         pressed && styles.buttonPressed,
         !isPrimary && pressed && styles.buttonSecondaryPressed,
         inactive && styles.buttonDisabled,
@@ -255,28 +250,6 @@ export function Empty({ text, icon = 'leaf-outline' }: { text: string; icon?: Ic
 }
 
 const styles = StyleSheet.create({
-  screenGlow: {
-    pointerEvents: 'none',
-    position: 'absolute',
-    top: -160,
-    right: -120,
-    width: 420,
-    height: 420,
-    borderRadius: 210,
-    backgroundColor: colors.primaryTint,
-    opacity: 0.7,
-  },
-  screenGlowSage: {
-    pointerEvents: 'none',
-    position: 'absolute',
-    top: 40,
-    left: -180,
-    width: 360,
-    height: 360,
-    borderRadius: 180,
-    backgroundColor: colors.sageTint,
-    opacity: 0.8,
-  },
   button: {
     borderRadius: radii.pill,
     paddingVertical: 14,
@@ -292,7 +265,7 @@ const styles = StyleSheet.create({
   buttonSecondary: {
     backgroundColor: colors.surface,
     borderWidth: 1.5,
-    borderColor: colors.primaryTint,
+    borderColor: colors.border,
   },
   buttonPressed: { transform: [{ scale: 0.98 }], opacity: 0.92 },
   buttonSecondaryPressed: { backgroundColor: colors.primaryTint },
@@ -318,13 +291,11 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontFamily: fonts.sans,
     color: colors.text,
-    ...elevation.low,
   },
   inputFocused: {
     borderColor: colors.primary,
     backgroundColor: colors.surface,
     ...Platform.select({ web: { outlineWidth: 0 }, default: {} }),
-    ...elevation.mid,
   },
   inputMultiline: { minHeight: 120, textAlignVertical: 'top' },
   inputDisabled: { backgroundColor: colors.surfaceSunken, color: colors.muted, borderColor: 'transparent' },
@@ -358,7 +329,7 @@ const styles = StyleSheet.create({
     minHeight: 38,
     justifyContent: 'center',
   },
-  chipIdle: { borderColor: colors.border, backgroundColor: colors.surface, ...elevation.low },
+  chipIdle: { borderColor: colors.border, backgroundColor: colors.surface },
   chipPressed: { opacity: 0.85, transform: [{ scale: 0.97 }] },
   chipText: { fontSize: 14, fontFamily: fonts.sansSemi },
   center: { paddingVertical: 36, alignItems: 'center', gap: 12 },
@@ -369,7 +340,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: colors.surface,
-    ...elevation.mid,
+    ...elevation.low,
   },
   emptyCard: {
     alignItems: 'center',

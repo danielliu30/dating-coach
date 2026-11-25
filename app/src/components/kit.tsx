@@ -124,8 +124,6 @@ export function PageHeader({
         end={{ x: 1, y: 1 }}
         style={styles.headerGradient}
       />
-      <View style={styles.headerOrb} />
-      <View style={styles.headerOrbSmall} />
       <View style={styles.headerRow}>
         <View style={{ flex: 1, gap: 6 }}>
           {eyebrow ? <Text style={styles.headerEyebrow}>{eyebrow}</Text> : null}
@@ -172,24 +170,10 @@ export function SectionHeader({
   );
 }
 
-/** Compact metric card (value, label, icon) for summary strips. */
-export function StatTile({
-  value,
-  label,
-  icon,
-  hue = 'rose',
-}: {
-  value: string | number;
-  label: string;
-  icon: IconName;
-  hue?: Hue;
-}): React.ReactElement {
-  const h = hues[hue];
+/** Compact metric card (value, label) for summary strips. */
+export function StatTile({ value, label }: { value: string | number; label: string }): React.ReactElement {
   return (
     <View style={styles.stat}>
-      <View style={[styles.statIcon, { backgroundColor: h.bg }]}>
-        <Ionicons name={icon} size={16} color={h.fg} />
-      </View>
       <Text style={styles.statValue}>{value}</Text>
       <Text style={styles.statLabel}>{label}</Text>
     </View>
@@ -380,7 +364,6 @@ export function GradientCard({
         end={{ x: 1, y: 1 }}
         style={styles.fill}
       />
-      <View style={styles.gradientOrb} />
       <View style={{ gap: 10 }}>{children}</View>
     </View>
   );
@@ -401,32 +384,12 @@ const styles = StyleSheet.create({
   disc: { alignItems: 'center', justifyContent: 'center' },
   header: {
     borderRadius: radii.xl,
-    padding: 22,
+    padding: 18,
     gap: 16,
     overflow: 'hidden',
-    ...elevation.mid,
+    ...elevation.low,
   },
   headerGradient: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, opacity: 0.95 },
-  headerOrb: {
-    pointerEvents: 'none',
-    position: 'absolute',
-    right: -60,
-    top: -80,
-    width: 220,
-    height: 220,
-    borderRadius: 110,
-    backgroundColor: 'rgba(255,255,255,0.18)',
-  },
-  headerOrbSmall: {
-    pointerEvents: 'none',
-    position: 'absolute',
-    left: -30,
-    bottom: -70,
-    width: 160,
-    height: 160,
-    borderRadius: 80,
-    backgroundColor: 'rgba(255,255,255,0.12)',
-  },
   headerRow: { flexDirection: 'row', alignItems: 'center', gap: 16 },
   headerEyebrow: { ...type.eyebrow, color: 'rgba(255,255,255,0.85)' },
   headerTitle: { ...type.title, color: colors.primaryText },
@@ -439,11 +402,12 @@ const styles = StyleSheet.create({
     flexBasis: 140,
     backgroundColor: colors.surface,
     borderRadius: radii.lg,
-    padding: 14,
-    gap: 8,
-    ...elevation.low,
+    borderWidth: 1,
+    borderColor: 'rgba(47, 51, 38, 0.1)',
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    gap: 4,
   },
-  statIcon: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
   statValue: { fontFamily: fonts.sansBlack, fontSize: 22, lineHeight: 26, letterSpacing: -0.5, color: colors.text },
   statLabel: { ...type.caption, fontSize: 12 },
   meta: { flexDirection: 'row', alignItems: 'center', gap: 6 },
@@ -453,7 +417,9 @@ const styles = StyleSheet.create({
     padding: 28,
     borderRadius: radii.xl,
     backgroundColor: colors.surface,
-    ...elevation.mid,
+    borderWidth: 1,
+    borderColor: 'rgba(47, 51, 38, 0.1)',
+    ...elevation.low,
   },
   emptyDisc: { width: 88, height: 88, borderRadius: 44, alignItems: 'center', justifyContent: 'center', marginBottom: 6 },
   emptyDiscInner: { width: 60, height: 60, borderRadius: 30, alignItems: 'center', justifyContent: 'center', ...elevation.low },
@@ -478,22 +444,14 @@ const styles = StyleSheet.create({
   listCard: {
     backgroundColor: colors.surface,
     borderRadius: radii.lg,
-    padding: 16,
-    gap: 12,
-    ...elevation.mid,
+    borderWidth: 1,
+    borderColor: 'rgba(47, 51, 38, 0.1)',
+    padding: 14,
+    gap: 10,
+    ...elevation.low,
   },
   listCardPressed: { opacity: 0.92, transform: [{ scale: 0.99 }] },
   listRow: { flexDirection: 'row', alignItems: 'center', gap: 14 },
   divider: { height: StyleSheet.hairlineWidth, backgroundColor: colors.border },
-  gradientCard: { borderRadius: radii.xl, padding: 22, overflow: 'hidden', ...elevation.mid },
-  gradientOrb: {
-    pointerEvents: 'none',
-    position: 'absolute',
-    right: -50,
-    bottom: -60,
-    width: 180,
-    height: 180,
-    borderRadius: 90,
-    backgroundColor: 'rgba(255,255,255,0.14)',
-  },
+  gradientCard: { borderRadius: radii.xl, padding: 18, overflow: 'hidden', ...elevation.low },
 });
