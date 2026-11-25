@@ -211,6 +211,8 @@ export default function CoachDashboardScreen(): React.ReactElement {
               accessibilityRole="button"
               accessibilityLabel="Prep — meeting link and notes"
               accessibilityState={{ expanded: Boolean(prepOpen[session.id]) }}
+              // RN Web drops accessibilityState; mirror it for screen readers.
+              aria-expanded={Boolean(prepOpen[session.id])}
               onPress={() => setPrepOpen((current) => ({ ...current, [session.id]: !current[session.id] }))}
               style={({ pressed }) => [styles.prepToggle, pressed && { opacity: 0.7 }]}
             >
