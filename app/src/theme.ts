@@ -53,10 +53,10 @@ export const fonts = {
 };
 
 export const radii = {
-  sm: 12,
-  md: 16,
-  lg: 24,
-  xl: 32,
+  sm: 8,
+  md: 10,
+  lg: 14,
+  xl: 18,
   pill: 999,
 };
 
@@ -105,10 +105,10 @@ const elevate = (
 
 /** Soft, layered shadows shared by cards, inputs and controls. */
 export const elevation = {
-  low: elevate(1, { opacity: 0.06, radius: 8, offsetY: 2 }),
-  mid: elevate(2, { opacity: 0.09, radius: 20, offsetY: 8 }),
-  high: elevate(3, { opacity: 0.16, radius: 36, offsetY: 16 }),
-  primary: elevate(2, { opacity: 0.32, radius: 16, offsetY: 8, shadowColor: colors.primary }),
+  low: elevate(1, { opacity: 0.04, radius: 6, offsetY: 1 }),
+  mid: elevate(2, { opacity: 0.05, radius: 10, offsetY: 4 }),
+  high: elevate(3, { opacity: 0.1, radius: 20, offsetY: 8 }),
+  primary: elevate(2, { opacity: 0.22, radius: 10, offsetY: 4, shadowColor: colors.primary }),
 };
 
 export const scoreColor = (score: number): string =>
@@ -148,16 +148,16 @@ export const shared = StyleSheet.create({
     paddingHorizontal: 18,
     paddingVertical: 20,
     paddingBottom: 40,
-    gap: 16,
+    gap: 14,
   },
   card: {
     backgroundColor: colors.surface,
     borderRadius: radii.lg,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(47, 51, 38, 0.06)',
-    padding: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(47, 51, 38, 0.1)',
+    padding: 16,
     gap: 10,
-    ...elevation.mid,
+    ...elevation.low,
   },
   title: type.title,
   heading: type.heading,

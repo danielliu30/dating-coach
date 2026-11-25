@@ -133,9 +133,9 @@ export default function SubmitConversationScreen({
           placeholder={SAMPLE}
         />
         <StatRow>
-          <StatTile value={parsed.messages.length} label="Parsed" icon="checkmark-done-outline" hue="sage" />
-          <StatTile value={selfCount} label="From you" icon="person-outline" hue="rose" />
-          <StatTile value={matchCount} label="From them" icon="people-outline" hue="sky" />
+          <StatTile value={parsed.messages.length} label="Parsed" />
+          <StatTile value={selfCount} label="From you" />
+          <StatTile value={matchCount} label="From them" />
         </StatRow>
         {parsed.errors.length ? (
           <View style={styles.warn}>

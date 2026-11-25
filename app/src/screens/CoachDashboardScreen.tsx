@@ -94,10 +94,10 @@ export default function CoachDashboardScreen(): React.ReactElement {
         aside={user ? <Avatar name={user.display_name} size={56} /> : undefined}
       />
       <StatRow>
-        <StatTile value={threadList.length} label="Active chats" icon="chatbubbles-outline" hue="sky" />
-        <StatTile value={online} label="Online now" icon="radio-button-on-outline" hue="sage" />
-        <StatTile value={sessionList.length} label="Upcoming" icon="calendar-outline" hue="rose" />
-        <StatTile value={`${minutes}m`} label="Booked" icon="hourglass-outline" hue="sun" />
+        <StatTile value={threadList.length} label="Active chats" />
+        <StatTile value={online} label="Online now" />
+        <StatTile value={sessionList.length} label="Upcoming" />
+        <StatTile value={`${minutes}m`} label="Booked" />
       </StatRow>
 
       <SectionHeader
