@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 
 from .config import get_settings
+from .embedding import embed_texts
 from .schemas import (
     AnalyzeRequest,
     AnalyzeResponse,
+    EmbedRequest,
+    EmbedResponse,
     ImageAnalyzeRequest,
     ImageAnalyzeResponse,
     ReviewSummaryRequest,
@@ -43,6 +46,8 @@ async def healthz() -> dict[str, str]:
         "active_image_backend": type(image_scorer).__name__,
         "image_model_version": image_scorer.version,
         "review_model_version": review_summarizer.version,
+        "embeddings_configured": str(settings.embeddings_configured).lower(),
+        "embedding_model": settings.embedding_model,
     }
 
 
@@ -56,6 +61,19 @@ async def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
         except Exception:  # noqa: BLE001 - optional evidence must never block feedback
             logger.warning("profile evidence unavailable")
     return result
+
+
+@app.post("/embed", response_model=EmbedResponse)
+async def embed(request: EmbedRequest) -> EmbedResponse:
+    """Embed texts for the backend's RAG retrieval; 503 when no embedding provider is configured."""
+    if not settings.embeddings_configured:
+        raise HTTPException(status_code=503, detail="embeddings not configured")
+    vectors = await embed_texts(settings, request.inputs)
+    return EmbedResponse(
+        model=settings.embedding_model,
+        dims=len(vectors[0]) if vectors else 0,
+        embeddings=vectors,
+    )
 
 
 @app.post("/analyze/images", response_model=ImageAnalyzeResponse)
