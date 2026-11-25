@@ -3,7 +3,7 @@ import React from 'react';
 import { FlatList, StyleSheet, Text, View } from 'react-native';
 
 import { api } from '../api/client';
-import { Avatar, EmptyState, ListCard, MetaRow, PageHeader, SkeletonCard, StatRow, StatTile } from '../components/kit';
+import { Avatar, EmptyState, ListCard, MetaRow, PageHeader, SkeletonCard } from '../components/kit';
 import { Badge, Screen } from '../components/ui';
 import { useAsync } from '../hooks/useAsync';
 import { PHASE_LABELS } from '../lib/phases';
@@ -16,10 +16,6 @@ export default function CoachListScreen({
 }: NativeStackScreenProps<CoachesStackParams, 'CoachList'>): React.ReactElement {
   const { data, error, loading } = useAsync(() => api.listCoaches(true));
   const coaches = data ?? [];
-  const specialties = new Set(coaches.flatMap((c) => c.specialties)).size;
-  const avgYears = coaches.length
-    ? Math.round(coaches.reduce((sum, c) => sum + c.years_experience, 0) / coaches.length)
-    : 0;
 
   return (
     <Screen scroll={false}>
@@ -35,13 +31,6 @@ export default function CoachListScreen({
               subtitle="Book a session or start a live chat with a human coach who will actually listen."
               gradient="meadow"
             />
-            {coaches.length > 0 ? (
-              <StatRow>
-                <StatTile value={coaches.length} label="Accepting clients" icon="people-outline" hue="sage" />
-                <StatTile value={specialties} label="Specialties" icon="ribbon-outline" hue="sun" />
-                <StatTile value={`${avgYears}y`} label="Avg. experience" icon="leaf-outline" hue="sky" />
-              </StatRow>
-            ) : null}
             {error ? <Text style={shared.error}>{error}</Text> : null}
             {loading && !data ? (
               <>
@@ -78,12 +67,18 @@ export default function CoachListScreen({
                 {item.review_count > 0 ? (
                   <Badge text={recommendLabel(item)} tone={colors.primary} />
                 ) : null}
-                {item.phases.map((phase) => (
-                  <Badge key={`phase-${phase}`} text={PHASE_LABELS[phase]} tone={colors.primary} />
-                ))}
-                {item.specialties.map((specialty) => (
-                  <Badge key={`specialty-${specialty}`} text={specialty} tone={colors.primaryDeep} />
-                ))}
+                {/* Cap the tag row — the detail page lists every phase and specialty. */}
+                {[...item.phases.map((phase) => PHASE_LABELS[phase]), ...item.specialties]
+                  .slice(0, 3)
+                  .map((label) => (
+                    <Badge key={label} text={label} tone={colors.primaryDeep} />
+                  ))}
+                {item.phases.length + item.specialties.length > 3 ? (
+                  <Badge
+                    text={`+${item.phases.length + item.specialties.length - 3} more`}
+                    tone={colors.muted}
+                  />
+                ) : null}
               </View>
             ) : null}
             <View style={styles.metaRow}>

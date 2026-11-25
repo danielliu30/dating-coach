@@ -12,8 +12,6 @@ import {
   MetaRow,
   PageHeader,
   SkeletonCard,
-  StatRow,
-  StatTile,
   StatusPill,
 } from '../components/kit';
 import { Button, Empty, Loading, Screen } from '../components/ui';
@@ -68,10 +66,6 @@ export default function MySessionsScreen(): React.ReactElement {
   const [actionError, setActionError] = useState<{ sessionID: string; message: string } | null>(null);
 
   const sessions = data ?? [];
-  const now = Date.now();
-  const upcoming = sessions.filter((s) => s.status === 'scheduled' && new Date(s.scheduled_time).getTime() > now).length;
-  const completed = sessions.filter((s) => s.status === 'completed').length;
-  const minutes = sessions.filter((s) => s.status === 'completed').reduce((sum, s) => sum + s.duration_minutes, 0);
 
   const openReschedule = async (session: CoachingSession) => {
     setReschedulingID(session.id);
@@ -158,13 +152,6 @@ export default function MySessionsScreen(): React.ReactElement {
               subtitle="Upcoming and past time with your coaches, all in one place."
               gradient="sunrise"
             />
-            {sessions.length > 0 ? (
-              <StatRow>
-                <StatTile value={upcoming} label="Upcoming" icon="calendar-outline" hue="rose" />
-                <StatTile value={completed} label="Completed" icon="checkmark-done-outline" hue="sage" />
-                <StatTile value={`${minutes}m`} label="Time coached" icon="hourglass-outline" hue="sun" />
-              </StatRow>
-            ) : null}
             {error ? <Text style={shared.error}>{error}</Text> : null}
             {linkError ? <Text style={shared.error}>{linkError}</Text> : null}
             {loading && !data ? (
