@@ -19,12 +19,13 @@ type Worker struct {
 	queries  *db.Queries
 	ml       *MLClient
 	notifier notify.Notifier
+	rag      RAGConfig
 }
 
 // NewWorker wires the worker dependencies; called once from cmd/worker, whose
 // consumer loop invokes Handle for every delivery.
-func NewWorker(queries *db.Queries, ml *MLClient, notifier notify.Notifier) *Worker {
-	return &Worker{queries: queries, ml: ml, notifier: notifier}
+func NewWorker(queries *db.Queries, ml *MLClient, notifier notify.Notifier, rag RAGConfig) *Worker {
+	return &Worker{queries: queries, ml: ml, notifier: notifier, rag: rag}
 }
 
 // Handle processes a single job. It returns an error only for failures worth
@@ -62,7 +63,11 @@ func (w *Worker) Handle(ctx context.Context, job Job, lastAttempt bool) error {
 		return w.fail(ctx, analysisID, lastAttempt, fmt.Errorf("load preferences: %w", err))
 	}
 
-	resp, err := w.ml.Analyze(ctx, newMLRequest(conversation, messages, owner))
+	req := newMLRequest(conversation, messages, owner)
+	// Retrieval is best-effort: every failure inside is logged and swallowed,
+	// so a RAG outage degrades the scoring context but can never fail the job.
+	req.SimilarConversations = w.similarConversations(ctx, conversation, messages)
+	resp, err := w.ml.Analyze(ctx, req)
 	if err != nil {
 		return w.fail(ctx, analysisID, lastAttempt, err)
 	}
