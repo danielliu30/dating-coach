@@ -105,6 +105,13 @@ class UserProfile(BaseModel):
         )
 
 
+class SimilarConversation(BaseModel):
+    """One of the owner's own past conversations retrieved as similar to the one being scored."""
+
+    conversation_id: str = Field(max_length=64)
+    content: str = Field(min_length=1, max_length=2000)
+
+
 class AnalyzeRequest(BaseModel):
     conversation_id: str
     platform: str = "unknown"
@@ -125,6 +132,11 @@ class AnalyzeRequest(BaseModel):
     profile: Optional[UserProfile] = Field(
         default=None,
         description="The customer's own dating profile; absent or empty leaves the analysis untailored to it",
+    )
+    similar_conversations: List[SimilarConversation] = Field(
+        default_factory=list,
+        max_length=8,
+        description="The owner's most-similar past conversations (retrieval context for scoring); absent or empty means untailored",
     )
 
     @field_validator("focus_areas", mode="before")
