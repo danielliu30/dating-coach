@@ -25,8 +25,13 @@ test.describe.serial('happy path', () => {
   let sessionID: string;
 
   test.beforeAll(async ({ browser }) => {
-    coachCtx = await browser.newContext();
-    clientCtx = await browser.newContext();
+    // RECORD_VIDEO=1 films both contexts (videos land in test-results/videos);
+    // used by playwright.tunnel.config.ts runs that demo the live journey.
+    const videoOpts = process.env.RECORD_VIDEO
+      ? { recordVideo: { dir: 'test-results/videos', size: { width: 1280, height: 800 } } }
+      : {};
+    coachCtx = await browser.newContext(videoOpts);
+    clientCtx = await browser.newContext(videoOpts);
   });
 
   test.afterAll(async () => {
