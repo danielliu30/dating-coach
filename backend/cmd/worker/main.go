@@ -42,7 +42,9 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	pg, err := store.Open(ctx, cfg.DatabaseURL)
+	// The relaxed iterative scan matters only to the worker's rag_chunks
+	// similarity search; the API pool doesn't need it.
+	pg, err := store.Open(ctx, cfg.DatabaseURL, store.WithRelaxedIterativeScan())
 	if err != nil {
 		return err
 	}
@@ -57,6 +59,13 @@ func run() error {
 		pg.Queries,
 		ml,
 		notifier,
+		analysis.RAGConfig{
+			Enabled:         cfg.AnalysisRAGEnabled,
+			TopK:            cfg.AnalysisRAGTopK,
+			MaxDistance:     cfg.AnalysisRAGMaxDistance,
+			MaxDocChars:     cfg.AnalysisRAGMaxDocChars,
+			MaxContextChars: cfg.AnalysisRAGMaxContextChars,
+		},
 	)
 	provider, err := payments.New(cfg.PaymentsEnabled, cfg.StripeSecretKey, cfg.StripeWebhookSecret, cfg.StripeAPIBaseURL)
 	if err != nil {

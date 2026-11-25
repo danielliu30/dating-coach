@@ -29,8 +29,19 @@ type MLRequest struct {
 	FocusAreas []string `json:"focus_areas,omitempty"`
 	// Profile is the owner's self-reported dating profile, context for their
 	// own goals; nil (omitted) when every field is empty.
-	Profile  *MLProfile  `json:"profile,omitempty"`
-	Messages []MLMessage `json:"messages"`
+	Profile *MLProfile `json:"profile,omitempty"`
+	// SimilarConversations is the owner's most-similar past conversations,
+	// retrieved from rag_chunks as longitudinal context for scoring; omitted
+	// when empty so the analyzer takes its single-conversation path.
+	SimilarConversations []MLSimilarConversation `json:"similar_conversations,omitempty"`
+	Messages             []MLMessage             `json:"messages"`
+}
+
+// MLSimilarConversation mirrors the analyzer's similar_conversations entry:
+// one retrieved past conversation the scorer reads as context.
+type MLSimilarConversation struct {
+	ConversationID string `json:"conversation_id"`
+	Content        string `json:"content"`
 }
 
 // MLProfile mirrors ml-analyzer's UserProfile: the owner's users.dating_styles,
