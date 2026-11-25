@@ -28,8 +28,11 @@ describe('FeatureTabs', () => {
   it('marks the selected tab in its accessibility state', () => {
     render(<FeatureTabs />);
     expect(screen.getByRole('button', { name: 'Live chat' }).props.accessibilityState.selected).toBe(true);
+    expect(screen.getByRole('button', { name: 'Live chat' }).props['aria-pressed']).toBe(true);
     fireEvent.press(screen.getByRole('button', { name: 'Analyzer' }));
     expect(screen.getByRole('button', { name: 'Analyzer' }).props.accessibilityState.selected).toBe(true);
+    expect(screen.getByRole('button', { name: 'Analyzer' }).props['aria-pressed']).toBe(true);
     expect(screen.getByRole('button', { name: 'Live chat' }).props.accessibilityState.selected).toBe(false);
+    expect(screen.getByRole('button', { name: 'Live chat' }).props['aria-pressed']).toBe(false);
   });
 });
