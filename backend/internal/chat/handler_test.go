@@ -372,3 +372,43 @@ func TestHandleIncomingRejectionEchoesClientID(t *testing.T) {
 		t.Fatalf("error frame = %+v, want type %q with client_id c-42 for thread %s", got, EventError, threadID)
 	}
 }
+
+// TestCloseSockets verifies shutdown draining: an accepted socket registered
+// with track is closed with a normal closure status when CloseSockets runs,
+// which is what lets clients reconnect cleanly during a deploy instead of
+// waiting for the task to be killed.
+func TestCloseSockets(t *testing.T) {
+	h := NewHandler(nil, nil, stubAccounts{active: true}, nil)
+
+	accepted := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			t.Errorf("accept: %v", err)
+			return
+		}
+		defer conn.CloseNow()
+		defer h.track(conn)()
+		close(accepted)
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, _, err := websocket.Dial(ctx, "ws"+server.URL[len("http"):], nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.CloseNow()
+	<-accepted
+
+	h.CloseSockets()
+
+	// Fresh deadline: CloseSockets may block on the peer's handshake reply.
+	readCtx, readCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer readCancel()
+	if _, _, err := conn.Read(readCtx); websocket.CloseStatus(err) != websocket.StatusNormalClosure {
+		t.Fatalf("close status = %v, want %v", websocket.CloseStatus(err), websocket.StatusNormalClosure)
+	}
+}

@@ -162,6 +162,10 @@ func run() error {
 		return err
 	case <-ctx.Done():
 		slog.Info("shutting down api")
+		// Hijacked WebSocket conns are invisible to server.Shutdown; close them
+		// first so clients get a clean close frame and reconnect immediately.
+		// Async: the close handshake can outlast the stop grace period.
+		go chatHandler.CloseSockets()
 	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
