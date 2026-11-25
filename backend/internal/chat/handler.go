@@ -33,6 +33,9 @@ type Handler struct {
 	accounts       AccountStatus
 	revocations    auth.Revocations
 	originPatterns []string
+
+	mu      sync.Mutex
+	sockets map[*websocket.Conn]struct{}
 }
 
 // AccountStatus answers whether an account may still act, from wherever that is
@@ -54,6 +57,46 @@ func NewHandler(svc *Service, hub *Hub, accounts AccountStatus, originPatterns [
 // SetRevocations enables the backstop for missed revocation announcements.
 func (h *Handler) SetRevocations(revocations auth.Revocations) {
 	h.revocations = revocations
+}
+
+// track registers an accepted socket for shutdown draining and returns the
+// unregister func.
+func (h *Handler) track(conn *websocket.Conn) func() {
+	h.mu.Lock()
+	if h.sockets == nil {
+		h.sockets = make(map[*websocket.Conn]struct{})
+	}
+	h.sockets[conn] = struct{}{}
+	h.mu.Unlock()
+	return sync.OnceFunc(func() {
+		h.mu.Lock()
+		delete(h.sockets, conn)
+		h.mu.Unlock()
+	})
+}
+
+// CloseSockets closes every live socket with a normal closure so clients
+// reconnect immediately instead of holding the connection until the task is
+// killed. Hijacked connections are invisible to http.Server.Shutdown, so the
+// api calls this before shutting the server down. Closes run concurrently —
+// the handshake can wait seconds per peer and the caller is on a shutdown
+// deadline.
+func (h *Handler) CloseSockets() {
+	h.mu.Lock()
+	conns := make([]*websocket.Conn, 0, len(h.sockets))
+	for conn := range h.sockets {
+		conns = append(conns, conn)
+	}
+	h.mu.Unlock()
+	var wg sync.WaitGroup
+	for _, conn := range conns {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = conn.Close(websocket.StatusNormalClosure, "server shutting down")
+		}()
+	}
+	wg.Wait()
 }
 
 // Routes mounts the chat endpoints. All of them require authentication; the
@@ -228,6 +271,7 @@ func (h *Handler) websocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.CloseNow()
+	defer h.track(conn)()
 
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
