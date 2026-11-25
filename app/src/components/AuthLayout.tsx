@@ -161,6 +161,16 @@ export function AuthLayout({
         {landing ? (
           <View ref={landingRef} collapsable={false} style={styles.landing}>
             <Landing page={page} />
+            {/* Counterpart to the hero's scroll-down hint, at the foot of every landing page. */}
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Scroll up"
+              onPress={scrollToTop}
+              style={({ pressed }) => [styles.scrollUpHint, pressed && { opacity: 0.7 }]}
+            >
+              <Ionicons name="chevron-up" size={18} color={colors.sageDeep} />
+              <Text style={styles.scrollUpText}>Scroll up</Text>
+            </Pressable>
             {showTop ? (
               // Sticky (web) keeps the button inside the scroll chain — an
               // absolute overlay sibling would swallow wheel scrolling over it.
@@ -304,6 +314,8 @@ const styles = StyleSheet.create({
   compactTagline: { ...type.accent, textAlign: 'center', fontSize: 18, lineHeight: 24 },
   scrollHint: { alignSelf: 'center', alignItems: 'center', gap: 2, paddingBottom: 26, opacity: 0.9 },
   scrollHintText: { fontFamily: fonts.sansSemi, fontSize: 13, color: colors.primaryText },
+  scrollUpHint: { alignSelf: 'center', alignItems: 'center', gap: 1, paddingVertical: 10, opacity: 0.9 },
+  scrollUpText: { fontFamily: fonts.sansSemi, fontSize: 13, color: colors.muted },
   landing: { paddingHorizontal: 16, paddingTop: 8, paddingBottom: 32 },
   toTopSticky: {
     // `sticky` isn't in RN's position union; web-only cast, native falls back

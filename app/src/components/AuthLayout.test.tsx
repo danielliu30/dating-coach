@@ -64,4 +64,16 @@ describe('AuthLayout landing nav', () => {
     fireEvent.scroll(scroll, { nativeEvent: { contentOffset: { y: 0 } } });
     expect(screen.queryByRole('button', { name: 'Back to top' })).toBeNull();
   });
+
+  it('shows a scroll-up counterpart at the foot of every landing page', () => {
+    renderLanding();
+    const hint = screen.getByRole('button', { name: 'Scroll up' });
+    expect(hint).toBeTruthy();
+    fireEvent.press(hint); // scrollTo is a native method — guarded no-op under jest
+
+    fireEvent.press(screen.getByRole('button', { name: 'About' }));
+    expect(screen.getByRole('button', { name: 'Scroll up' })).toBeTruthy();
+    fireEvent.press(screen.getByRole('button', { name: 'How it works' }));
+    expect(screen.getByRole('button', { name: 'Scroll up' })).toBeTruthy();
+  });
 });
