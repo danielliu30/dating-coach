@@ -37,13 +37,13 @@ DELETE FROM users WHERE id = $1;
 
 -- name: UpdateUserDatingProfile :one
 UPDATE users
-SET dating_styles = $2,
-    phases_strong = $3,
-    phases_working_on = $4,
-    dating_preferences = $5,
-    coaching_goals = COALESCE($6::text[], coaching_goals),
+SET dating_styles = @dating_styles,
+    phases_strong = @phases_strong,
+    phases_working_on = @phases_working_on,
+    dating_preferences = @dating_preferences,
+    coaching_goals = COALESCE(@coaching_goals::text[], coaching_goals),
     updated_at = now()
-WHERE id = $1 AND deleted_at IS NULL
+WHERE id = @id AND deleted_at IS NULL
 RETURNING *;
 
 -- name: RecordSessionRevocation :exec
