@@ -99,6 +99,7 @@ export function FeatureTabs(): React.ReactElement {
               key={f.id}
               accessibilityRole="button"
               accessibilityState={{ selected }}
+              aria-pressed={selected}
               accessibilityLabel={f.label}
               onPress={() => setActive(i)}
               style={({ pressed }) => [styles.tab, selected && styles.tabActive, pressed && styles.tabPressed]}
