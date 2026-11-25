@@ -43,22 +43,28 @@ export function initials(name: string): string {
 }
 
 /**
- * The Dating Humane mark: a bare serif "DH" monogram with a small leaf
- * sprouting off the D. No tile — `onDark` picks white for the gradient
- * hero, moss for light surfaces.
+ * The Dating Humane mark: an upright serif "DH" kerned almost into a
+ * ligature, with a small sage leaf standing in for the period. No tile —
+ * `onDark` picks cream for the gradient hero, ink for light surfaces.
+ * `size` is the letter height.
  */
-export function LogoMark({ size = 32, onDark = false }: { size?: number; onDark?: boolean }): React.ReactElement {
+export function LogoMark({ size = 24, onDark = false }: { size?: number; onDark?: boolean }): React.ReactElement {
   return (
-    <View style={{ width: size, height: Math.round(size * 0.62), justifyContent: 'flex-end' }}>
-      <Ionicons
-        name="leaf"
-        size={size * 0.24}
-        color={onDark ? 'rgba(255,255,255,0.9)' : colors.sageDeep}
-        style={styles.logoLeaf}
-      />
-      <Text style={[styles.logoText, { fontSize: size * 0.58, color: onDark ? colors.primaryText : colors.moss }]}>
+    <View style={styles.logoMark}>
+      <Text
+        style={[
+          styles.logoText,
+          { fontSize: size, letterSpacing: -size * 0.16, color: onDark ? colors.primaryText : colors.text },
+        ]}
+      >
         DH
       </Text>
+      <Ionicons
+        name="leaf"
+        size={size * 0.3}
+        color={colors.sage}
+        style={{ marginLeft: -size * 0.05, marginBottom: size * 0.06 }}
+      />
     </View>
   );
 }
@@ -392,8 +398,8 @@ export function GradientCard({
 
 const styles = StyleSheet.create({
   fill: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
-  logoText: { fontFamily: fonts.serifItalic, letterSpacing: 0.5 },
-  logoLeaf: { position: 'absolute', top: 0, left: '4%' },
+  logoMark: { flexDirection: 'row', alignItems: 'flex-end' },
+  logoText: { fontFamily: fonts.serif },
   avatar: { alignItems: 'center', justifyContent: 'center', ...elevation.low },
   avatarText: { fontFamily: fonts.sansBlack, letterSpacing: -0.5 },
   presence: {
