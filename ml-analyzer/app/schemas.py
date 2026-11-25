@@ -7,7 +7,7 @@ so the Go backend never changes when the model behind it does.
 
 from __future__ import annotations
 
-from typing import Any, ClassVar, List, Literal, Optional
+from typing import Annotated, Any, ClassVar, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -330,3 +330,17 @@ class ReviewSummaryResponse(BaseModel):
     total: int = Field(ge=0)
     summary: str = ""
     strengths: List[str] = Field(default_factory=list)
+
+
+class EmbedRequest(BaseModel):
+    """Texts to embed for the backend's RAG retrieval, bounded for cost/abuse control."""
+
+    inputs: List[Annotated[str, Field(min_length=1, max_length=16000)]] = Field(min_length=1, max_length=32)
+
+
+class EmbedResponse(BaseModel):
+    """One vector per input, in request order; ``dims`` is the shared vector length."""
+
+    model: str
+    dims: int = Field(ge=0)
+    embeddings: List[List[float]]
