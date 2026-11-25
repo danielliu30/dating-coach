@@ -5,6 +5,7 @@ import { CommonActions, useLinkBuilder } from '@react-navigation/native';
 import React, { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 
+import { LogoMark } from '../components/kit';
 import { colors, elevation, fonts, radii } from '../theme';
 
 /** Below this viewport width the default bottom tab bar is kept. */
@@ -37,9 +38,7 @@ export function CollapsibleSidebar({ state, descriptors, navigation, insets }: B
       ]}
     >
       <View style={[styles.brand, collapsed && styles.brandCollapsed]}>
-        <View style={styles.brandMark}>
-          <Ionicons name="leaf" size={15} color={colors.primaryText} />
-        </View>
+        <LogoMark size={30} />
         {collapsed ? null : (
           <Text style={styles.wordmark} numberOfLines={1}>
             Dating Humane
@@ -115,15 +114,6 @@ const styles = StyleSheet.create({
   },
   brand: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 8, paddingBottom: 14, paddingTop: 4 },
   brandCollapsed: { justifyContent: 'center', paddingHorizontal: 0 },
-  brandMark: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    backgroundColor: colors.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-    ...elevation.primary,
-  },
   wordmark: { fontFamily: fonts.sansBlack, fontSize: 17, letterSpacing: -0.4, color: colors.text, flexShrink: 1 },
   itemsScroll: { flex: 1 },
   items: { gap: 4 },

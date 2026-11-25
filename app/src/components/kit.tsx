@@ -43,6 +43,26 @@ export function initials(name: string): string {
 }
 
 /**
+ * The Dating Humane mark: a "DH" monogram in soft serif on the leafy
+ * primary gradient. `size` is the tile edge; the squircle keeps it
+ * reading as a logo rather than a button.
+ */
+export function LogoMark({ size = 32 }: { size?: number }): React.ReactElement {
+  return (
+    <View style={[styles.logo, { width: size, height: size, borderRadius: Math.round(size * 0.3) }]}>
+      <LinearGradient
+        colors={gradients.primary}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.fill}
+      />
+      <Text style={[styles.logoText, { fontSize: size * 0.46, lineHeight: size * 0.6 }]}>DH</Text>
+      <Ionicons name="leaf" size={size * 0.34} color="rgba(255,255,255,0.85)" style={styles.logoLeaf} />
+    </View>
+  );
+}
+
+/**
  * Circular initials avatar tinted by `hueFor(name)`. `size` is the diameter;
  * an `online` dot is drawn on the bottom-right when provided.
  */
@@ -371,6 +391,9 @@ export function GradientCard({
 
 const styles = StyleSheet.create({
   fill: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
+  logo: { alignItems: 'center', justifyContent: 'center', overflow: 'hidden', ...elevation.primary },
+  logoText: { fontFamily: fonts.serifItalicBold, color: colors.primaryText, letterSpacing: -0.5 },
+  logoLeaf: { position: 'absolute', top: '7%', right: '7%' },
   avatar: { alignItems: 'center', justifyContent: 'center', ...elevation.low },
   avatarText: { fontFamily: fonts.sansBlack, letterSpacing: -0.5 },
   presence: {

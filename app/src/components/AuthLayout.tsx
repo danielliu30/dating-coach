@@ -15,6 +15,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { colors, elevation, fonts, radii, type } from '../theme';
+import { LogoMark } from './kit';
 import { Landing, type LandingPage } from './Landing';
 
 // A couple embracing at sunset, hills behind them.
@@ -101,9 +102,7 @@ export function AuthLayout({
           <SafeAreaView edges={['top', 'left', 'right']} style={{ flex: 1 }}>
             <View style={styles.nav}>
               <View style={styles.brand}>
-                <View style={styles.brandMark}>
-                  <Ionicons name="leaf" size={16} color={colors.primaryText} />
-                </View>
+                <LogoMark size={32} />
                 <Text style={styles.wordmark}>Dating Humane</Text>
               </View>
               {landing ? (
@@ -238,15 +237,6 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   brand: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  brandMark: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: colors.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-    ...elevation.primary,
-  },
   wordmark: { fontFamily: fonts.sansBlack, fontSize: 20, letterSpacing: -0.4, color: colors.primaryText },
   navLinks: { flexDirection: 'row', gap: 8, flexWrap: 'wrap', flexShrink: 1, justifyContent: 'flex-end' },
   navLink: {
