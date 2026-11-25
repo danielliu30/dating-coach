@@ -10,8 +10,6 @@ import {
   MetaRow,
   PageHeader,
   SkeletonCard,
-  StatRow,
-  StatTile,
   StatusPill,
 } from '../components/kit';
 import { Screen } from '../components/ui';
@@ -28,8 +26,6 @@ export default function ThreadsScreen({
   const isCoach = user?.role === 'coach';
   const { data, error, loading } = useAsync(() => (isCoach ? api.coachThreads('active') : api.threads()), [isCoach]);
   const threads = data ?? [];
-  const online = threads.filter((t) => t.counterpart_online).length;
-  const active = threads.filter((t) => t.status === 'active').length;
 
   return (
     <Screen scroll={false}>
@@ -49,13 +45,6 @@ export default function ThreadsScreen({
               }
               gradient="sky"
             />
-            {threads.length > 0 ? (
-              <StatRow>
-                <StatTile value={threads.length} label="Chats" icon="chatbubbles-outline" hue="sky" />
-                <StatTile value={active} label="Active" icon="pulse-outline" hue="sage" />
-                <StatTile value={online} label="Online now" icon="radio-button-on-outline" hue="rose" />
-              </StatRow>
-            ) : null}
             {error ? <Text style={shared.error}>{error}</Text> : null}
             {loading && !data ? (
               <>

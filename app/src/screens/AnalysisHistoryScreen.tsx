@@ -3,7 +3,7 @@ import React, { useRef, useState } from 'react';
 import { FlatList, Text, View } from 'react-native';
 
 import { api } from '../api/client';
-import { EmptyState, IconDisc, ListCard, MetaRow, PageHeader, SkeletonCard, StatRow, StatTile } from '../components/kit';
+import { EmptyState, IconDisc, ListCard, MetaRow, PageHeader, SkeletonCard } from '../components/kit';
 import { Screen } from '../components/ui';
 import { useAsync } from '../hooks/useAsync';
 import type { AnalysisStackParams } from '../navigation/types';
@@ -15,8 +15,6 @@ export default function AnalysisHistoryScreen({
 }: NativeStackScreenProps<AnalysisStackParams, 'History'>): React.ReactElement {
   const { data, error, loading } = useAsync(() => api.conversations());
   const conversations = data ?? [];
-  const platforms = new Set(conversations.map((c) => c.platform)).size;
-  const named = conversations.filter((c) => c.match_name).length;
 
   const [openError, setOpenError] = useState<{ conversationID: string; message: string } | null>(null);
   // Cards stay pressable while an open is in flight; only the latest tap may
@@ -53,13 +51,6 @@ export default function AnalysisHistoryScreen({
               subtitle="Every conversation you have had looked at. Reopen one to see the feedback again."
               gradient="sky"
             />
-            {conversations.length > 0 ? (
-              <StatRow>
-                <StatTile value={conversations.length} label="Conversations" icon="chatbubbles-outline" hue="sky" />
-                <StatTile value={platforms} label="Platforms" icon="apps-outline" hue="sun" />
-                <StatTile value={named} label="With a name" icon="person-outline" hue="rose" />
-              </StatRow>
-            ) : null}
             {error ? <Text style={shared.error}>{error}</Text> : null}
             {loading && !data ? (
               <>
