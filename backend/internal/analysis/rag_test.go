@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -320,6 +321,210 @@ func TestHandleInjectsRetrievedContext(t *testing.T) {
 	if row.Status != "succeeded" {
 		t.Fatalf("analysis status = %q, want succeeded", row.Status)
 	}
+}
+
+func TestRagDocumentAppendsOutcomeLine(t *testing.T) {
+	messages := []db.Message{
+		{Sender: "self", Body: "hey there"},
+		{Sender: "match", Body: "hi!"},
+	}
+	got := ragDocument(messages, "they hit it off", 10000)
+	want := "self: hey there\nmatch: hi!\nOutcome: they hit it off"
+	if got != want {
+		t.Fatalf("doc = %q, want %q", got, want)
+	}
+}
+
+func TestRagDocumentOmitsOutcomeWhenSummaryEmpty(t *testing.T) {
+	messages := []db.Message{{Sender: "self", Body: "hi"}}
+	got := ragDocument(messages, "", 10000)
+	if got != "self: hi" {
+		t.Fatalf("doc = %q, want %q", got, "self: hi")
+	}
+}
+
+func TestRagDocumentCapsDigestAtMaxChars(t *testing.T) {
+	messages := []db.Message{
+		{Sender: "self", Body: "aaa"}, // "self: aaa" = 9 chars
+		{Sender: "match", Body: "bb"}, // would overflow a 9-char digest budget
+	}
+	// maxChars applies to the digest portion only; the outcome line is
+	// appended past the cap.
+	got := ragDocument(messages, "went well", 9)
+	want := "self: aaa\nOutcome: went well"
+	if got != want {
+		t.Fatalf("doc = %q, want %q", got, want)
+	}
+}
+
+// TestIndexConversationDisabledWritesNothing: disabled indexing makes no ml
+// call and leaves no rag_chunks row.
+func TestIndexConversationDisabledWritesNothing(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	q := db.New(pool)
+	userID, conversationID := insertConversation(t, pool)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("ml call to %s while rag disabled", r.URL.Path)
+	}))
+	defer srv.Close()
+
+	w := NewWorker(q, NewMLClient(srv.URL, time.Second), nil, RAGConfig{Enabled: false})
+	w.indexConversation(ctx, db.Conversation{ID: conversationID, UserID: userID},
+		[]db.Message{{Sender: "self", Body: "hi"}}, "went well")
+
+	if n := chunkCount(t, pool, conversationID); n != 0 {
+		t.Fatalf("rag_chunks has %d rows, want 0", n)
+	}
+}
+
+// TestHandleIndexesConversation proves the write path end to end: a
+// successful Handle leaves one rag_chunks row holding the transcript digest
+// plus the outcome line, stamped with the embed model and doc version.
+func TestHandleIndexesConversation(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	q := db.New(pool)
+	job := seedJob(t, pool, q)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/embed":
+			_ = json.NewEncoder(w).Encode(MLEmbedResponse{
+				Model: "test-embedding-model", Dims: 1536,
+				Embeddings: [][]float64{unitVector64(0)},
+			})
+		case "/analyze":
+			_ = json.NewEncoder(w).Encode(analyzeResponse)
+		default:
+			t.Errorf("unexpected ml call to %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	w := NewWorker(q, NewMLClient(srv.URL, 5*time.Second), stubNotifier{}, RAGConfig{
+		Enabled: true, TopK: 4, MaxDistance: 0.35, MaxDocChars: 12000, MaxContextChars: 8000,
+	})
+	if err := w.Handle(ctx, job, true); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+
+	conversationID := mustUUID(t, job.ConversationID)
+	if n := chunkCount(t, pool, conversationID); n != 1 {
+		t.Fatalf("rag_chunks has %d rows, want 1", n)
+	}
+	var content, model string
+	var docVersion int16
+	if err := pool.QueryRow(ctx,
+		`SELECT content, model, doc_version FROM rag_chunks WHERE conversation_id = $1`,
+		conversationID).Scan(&content, &model, &docVersion); err != nil {
+		t.Fatalf("read rag chunk: %v", err)
+	}
+	if !strings.Contains(content, "self: hi, loved your hiking photos") {
+		t.Fatalf("content = %q, want the transcript digest", content)
+	}
+	if !strings.Contains(content, "\nOutcome: promising") {
+		t.Fatalf("content = %q, want a trailing Outcome line with the summary", content)
+	}
+	if model != "test-embedding-model" {
+		t.Fatalf("model = %q, want test-embedding-model", model)
+	}
+	if docVersion != ragDocVersion {
+		t.Fatalf("doc_version = %d, want %d", docVersion, ragDocVersion)
+	}
+}
+
+// TestHandleSucceedsWhenIndexingFails is the write-path mirror of
+// TestHandleCompletesWhenRetrievalFails: a dead /embed must never fail a job
+// whose analysis already completed.
+func TestHandleSucceedsWhenIndexingFails(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	q := db.New(pool)
+	job := seedJob(t, pool, q)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/embed":
+			http.Error(w, `{"detail":"embed down"}`, http.StatusInternalServerError)
+		case "/analyze":
+			_ = json.NewEncoder(w).Encode(analyzeResponse)
+		default:
+			t.Errorf("unexpected ml call to %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	w := NewWorker(q, NewMLClient(srv.URL, 5*time.Second), stubNotifier{}, RAGConfig{
+		Enabled: true, TopK: 4, MaxDistance: 0.35, MaxDocChars: 12000, MaxContextChars: 8000,
+	})
+	if err := w.Handle(ctx, job, true); err != nil {
+		t.Fatalf("Handle with dead /embed: %v", err)
+	}
+	row, err := q.GetAnalysisResult(ctx, mustUUID(t, job.AnalysisID))
+	if err != nil {
+		t.Fatalf("read analysis: %v", err)
+	}
+	if row.Status != "succeeded" {
+		t.Fatalf("analysis status = %q, want succeeded", row.Status)
+	}
+	if n := chunkCount(t, pool, mustUUID(t, job.ConversationID)); n != 0 {
+		t.Fatalf("rag_chunks has %d rows, want 0", n)
+	}
+}
+
+// TestIndexConversationIsIdempotent: re-indexing a conversation overwrites
+// its chunk via the (conversation_id, seq) upsert rather than adding rows.
+func TestIndexConversationIsIdempotent(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	q := db.New(pool)
+	userID, conversationID := insertConversation(t, pool)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/embed" {
+			t.Errorf("unexpected ml call to %s", r.URL.Path)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(MLEmbedResponse{
+			Model: "test-embedding-model", Dims: 1536,
+			Embeddings: [][]float64{unitVector64(0)},
+		})
+	}))
+	defer srv.Close()
+
+	w := NewWorker(q, NewMLClient(srv.URL, 5*time.Second), nil, RAGConfig{
+		Enabled: true, TopK: 4, MaxDistance: 0.35, MaxDocChars: 12000, MaxContextChars: 8000,
+	})
+	conversation := db.Conversation{ID: conversationID, UserID: userID}
+	messages := []db.Message{{Sender: "self", Body: "hi"}}
+	w.indexConversation(ctx, conversation, messages, "first outcome")
+	w.indexConversation(ctx, conversation, messages, "second outcome")
+
+	if n := chunkCount(t, pool, conversationID); n != 1 {
+		t.Fatalf("rag_chunks has %d rows, want 1 after two indexes", n)
+	}
+	var content string
+	if err := pool.QueryRow(ctx,
+		`SELECT content FROM rag_chunks WHERE conversation_id = $1`, conversationID,
+	).Scan(&content); err != nil {
+		t.Fatalf("read rag chunk: %v", err)
+	}
+	if !strings.Contains(content, "Outcome: second outcome") {
+		t.Fatalf("content = %q, want the second upsert's outcome", content)
+	}
+}
+
+func chunkCount(t *testing.T, pool *pgxpool.Pool, conversationID uuid.UUID) int {
+	t.Helper()
+	var n int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM rag_chunks WHERE conversation_id = $1`, conversationID,
+	).Scan(&n); err != nil {
+		t.Fatalf("count rag chunks: %v", err)
+	}
+	return n
 }
 
 func mustUUID(t *testing.T, s string) uuid.UUID {

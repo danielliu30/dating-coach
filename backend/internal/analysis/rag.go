@@ -20,6 +20,10 @@ type RAGConfig struct {
 	MaxContextChars int
 }
 
+// ragDocVersion stamps every row this binary writes to rag_chunks; bump it
+// whenever ragDocument's format changes so stale rows stay distinguishable.
+const ragDocVersion int16 = 1
+
 // transcriptDigest renders messages as speaker-tagged lines, the same
 // "self:"/"match:" vocabulary ml-analyzer's transcript renderer uses, joined by
 // newlines and truncated to maxChars at a line boundary: the line that would
@@ -41,6 +45,64 @@ func transcriptDigest(messages []db.Message, maxChars int) string {
 		b.WriteString(line)
 	}
 	return b.String()
+}
+
+// ragDocument is the text embedded and stored for a completed conversation:
+// the transcript digest plus a trailing "Outcome:" line carrying the
+// analyzer's summary, which biases retrieval toward conversations that ended
+// similarly. The outcome line is appended beyond maxChars — the cap applies
+// to the digest portion only.
+func ragDocument(messages []db.Message, summary string, maxChars int) string {
+	doc := transcriptDigest(messages, maxChars)
+	if summary != "" {
+		doc += "\nOutcome: " + summary
+	}
+	return doc
+}
+
+// indexConversation is the worker's best-effort write path: once a job has
+// completed it embeds the conversation's ragDocument and upserts it into
+// rag_chunks so future analyses can retrieve it. Like similarConversations,
+// every failure is logged and swallowed — indexing must never fail or block
+// a job that already succeeded.
+func (w *Worker) indexConversation(ctx context.Context, conversation db.Conversation, messages []db.Message, summary string) {
+	if !w.rag.Enabled {
+		return
+	}
+	start := time.Now()
+
+	doc := ragDocument(messages, summary, w.rag.MaxDocChars)
+	if doc == "" {
+		return
+	}
+
+	resp, err := w.ml.Embed(ctx, MLEmbedRequest{Inputs: []string{doc}})
+	if err != nil {
+		slog.Warn("rag index embed unavailable", "error", err, "conversation_id", conversation.ID)
+		return
+	}
+	if len(resp.Embeddings) == 0 || len(resp.Embeddings[0]) == 0 {
+		slog.Warn("rag index embed unavailable", "reason", "empty embedding", "conversation_id", conversation.ID)
+		return
+	}
+
+	f32 := make([]float32, len(resp.Embeddings[0]))
+	for i, f := range resp.Embeddings[0] {
+		f32[i] = float32(f)
+	}
+
+	if _, err := w.queries.UpsertRagChunk(ctx, db.UpsertRagChunkParams{
+		OwnerID:        &conversation.UserID,
+		ConversationID: &conversation.ID,
+		Content:        doc,
+		Embedding:      pgvector.NewVector(f32),
+		Model:          resp.Model,
+		DocVersion:     ragDocVersion,
+	}); err != nil {
+		slog.Warn("rag chunk upsert failed", "error", err, "conversation_id", conversation.ID)
+		return
+	}
+	slog.Debug("rag chunk written", "rag_write_ms", time.Since(start).Milliseconds(), "conversation_id", conversation.ID)
 }
 
 // similarConversations is the worker's best-effort retrieval step: it embeds
