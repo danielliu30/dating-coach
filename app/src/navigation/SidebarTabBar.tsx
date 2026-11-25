@@ -38,7 +38,7 @@ export function CollapsibleSidebar({ state, descriptors, navigation, insets }: B
       ]}
     >
       <View style={[styles.brand, collapsed && styles.brandCollapsed]}>
-        <LogoMark size={30} />
+        <LogoMark size={20} />
         {collapsed ? null : (
           <Text style={styles.wordmark} numberOfLines={1}>
             Dating Humane

@@ -48,6 +48,7 @@ export const fonts = {
   sansSemi: 'Manrope_600SemiBold',
   sansBold: 'Manrope_700Bold',
   sansBlack: 'Manrope_800ExtraBold',
+  serif: 'Fraunces_600SemiBold',
   serifItalic: 'Fraunces_500Medium_Italic',
   serifItalicBold: 'Fraunces_700Bold_Italic',
 };
