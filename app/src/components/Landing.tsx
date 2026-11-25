@@ -342,7 +342,7 @@ export function Landing({ page }: { page: LandingPage }): React.ReactElement {
 
       <View style={styles.footer}>
         <View style={styles.footerBrand}>
-          <LogoMark size={22} />
+          <LogoMark size={26} />
           <Text style={styles.footerWordmark}>Dating Humane</Text>
         </View>
         <Text style={type.caption}>Helping people become better, more intentional daters.</Text>

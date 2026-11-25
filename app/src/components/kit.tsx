@@ -43,28 +43,22 @@ export function initials(name: string): string {
 }
 
 /**
- * The Dating Humane mark: a "DH" monogram in soft serif on the leafy
- * primary gradient. `size` is the tile edge; the squircle keeps it
- * reading as a logo rather than a button.
+ * The Dating Humane mark: a bare serif "DH" monogram with a small leaf
+ * sprouting off the D. No tile — `onDark` picks white for the gradient
+ * hero, moss for light surfaces.
  */
-export function LogoMark({ size = 32 }: { size?: number }): React.ReactElement {
-  const inset = Math.round(size * 0.1);
+export function LogoMark({ size = 32, onDark = false }: { size?: number; onDark?: boolean }): React.ReactElement {
   return (
-    <View style={[styles.logo, { width: size, height: size, borderRadius: size / 2 }]}>
-      <LinearGradient
-        colors={gradients.meadow}
-        start={{ x: 0.2, y: 0 }}
-        end={{ x: 0.9, y: 1 }}
-        style={styles.fill}
+    <View style={{ width: size, height: Math.round(size * 0.62), justifyContent: 'flex-end' }}>
+      <Ionicons
+        name="leaf"
+        size={size * 0.24}
+        color={onDark ? 'rgba(255,255,255,0.9)' : colors.sageDeep}
+        style={styles.logoLeaf}
       />
-      <View
-        style={[
-          styles.logoRing,
-          { top: inset, left: inset, right: inset, bottom: inset, borderRadius: size / 2 },
-        ]}
-      />
-      <Ionicons name="leaf" size={size * 0.24} color="rgba(255,255,255,0.8)" style={{ marginBottom: -size * 0.03 }} />
-      <Text style={[styles.logoText, { fontSize: size * 0.42, lineHeight: size * 0.52 }]}>DH</Text>
+      <Text style={[styles.logoText, { fontSize: size * 0.58, color: onDark ? colors.primaryText : colors.moss }]}>
+        DH
+      </Text>
     </View>
   );
 }
@@ -398,9 +392,8 @@ export function GradientCard({
 
 const styles = StyleSheet.create({
   fill: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
-  logo: { alignItems: 'center', justifyContent: 'center', overflow: 'hidden', ...elevation.primary },
-  logoRing: { position: 'absolute', borderWidth: 1, borderColor: 'rgba(255,255,255,0.3)' },
-  logoText: { fontFamily: fonts.serifItalic, color: colors.primaryText, letterSpacing: 0.5 },
+  logoText: { fontFamily: fonts.serifItalic, letterSpacing: 0.5 },
+  logoLeaf: { position: 'absolute', top: 0, left: '4%' },
   avatar: { alignItems: 'center', justifyContent: 'center', ...elevation.low },
   avatarText: { fontFamily: fonts.sansBlack, letterSpacing: -0.5 },
   presence: {

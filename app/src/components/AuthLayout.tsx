@@ -102,7 +102,7 @@ export function AuthLayout({
           <SafeAreaView edges={['top', 'left', 'right']} style={{ flex: 1 }}>
             <View style={styles.nav}>
               <View style={styles.brand}>
-                <LogoMark size={32} />
+                <LogoMark size={36} onDark />
                 <Text style={styles.wordmark}>Dating Humane</Text>
               </View>
               {landing ? (
