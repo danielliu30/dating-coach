@@ -161,6 +161,12 @@ type RefreshToken struct {
 	FamilyID  uuid.UUID  `json:"family_id"`
 }
 
+type RevokedRefreshToken struct {
+	TokenHash string    `json:"token_hash"`
+	UserID    uuid.UUID `json:"user_id"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
 type TrainingExample struct {
 	ID              uuid.UUID       `json:"id"`
 	ConversationID  uuid.UUID       `json:"conversation_id"`
