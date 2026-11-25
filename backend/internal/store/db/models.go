@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	pgvector "github.com/pgvector/pgvector-go"
 )
 
 type AccountDeletion struct {
@@ -151,6 +152,20 @@ type PaymentEvent struct {
 	ReceivedAt      time.Time  `json:"received_at"`
 }
 
+type RagChunk struct {
+	ID             uuid.UUID       `json:"id"`
+	Kind           string          `json:"kind"`
+	OwnerID        *uuid.UUID      `json:"owner_id"`
+	ConversationID *uuid.UUID      `json:"conversation_id"`
+	Seq            int16           `json:"seq"`
+	Content        string          `json:"content"`
+	Embedding      pgvector.Vector `json:"embedding"`
+	Model          string          `json:"model"`
+	DocVersion     int16           `json:"doc_version"`
+	CreatedAt      time.Time       `json:"created_at"`
+	UpdatedAt      time.Time       `json:"updated_at"`
+}
+
 type RefreshToken struct {
 	ID        uuid.UUID  `json:"id"`
 	UserID    uuid.UUID  `json:"user_id"`
@@ -159,6 +174,12 @@ type RefreshToken struct {
 	ExpiresAt time.Time  `json:"expires_at"`
 	UsedAt    *time.Time `json:"used_at"`
 	FamilyID  uuid.UUID  `json:"family_id"`
+}
+
+type RevokedRefreshToken struct {
+	TokenHash string    `json:"token_hash"`
+	UserID    uuid.UUID `json:"user_id"`
+	ExpiresAt time.Time `json:"expires_at"`
 }
 
 type TrainingExample struct {
