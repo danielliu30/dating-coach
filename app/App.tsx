@@ -1,4 +1,8 @@
-import { Fraunces_500Medium_Italic, Fraunces_700Bold_Italic } from '@expo-google-fonts/fraunces';
+import {
+  Fraunces_500Medium_Italic,
+  Fraunces_600SemiBold,
+  Fraunces_700Bold_Italic,
+} from '@expo-google-fonts/fraunces';
 import {
   Manrope_500Medium,
   Manrope_600SemiBold,
@@ -22,6 +26,7 @@ export default function App(): React.ReactElement | null {
     Manrope_700Bold,
     Manrope_800ExtraBold,
     Fraunces_500Medium_Italic,
+    Fraunces_600SemiBold,
     Fraunces_700Bold_Italic,
   });
   // Fall back to system fonts rather than blocking the app if a font fails.

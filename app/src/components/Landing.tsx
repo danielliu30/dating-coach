@@ -5,7 +5,7 @@ import { Image, StyleSheet, Text, useWindowDimensions, View } from 'react-native
 
 import { colors, elevation, fonts, gradients, radii, type } from '../theme';
 import { FeatureTabs } from './FeatureTabs';
-import { IconDisc, type Hue } from './kit';
+import { IconDisc, LogoMark, type Hue } from './kit';
 import type { IconName } from './ui';
 
 const IMAGES = {
@@ -342,7 +342,7 @@ export function Landing({ page }: { page: LandingPage }): React.ReactElement {
 
       <View style={styles.footer}>
         <View style={styles.footerBrand}>
-          <Ionicons name="leaf" size={16} color={colors.sageDeep} />
+          <LogoMark size={18} />
           <Text style={styles.footerWordmark}>Dating Humane</Text>
         </View>
         <Text style={type.caption}>Helping people become better, more intentional daters.</Text>

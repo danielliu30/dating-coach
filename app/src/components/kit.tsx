@@ -43,6 +43,33 @@ export function initials(name: string): string {
 }
 
 /**
+ * The Dating Humane mark: an upright serif "DH" kerned almost into a
+ * ligature, with a small sage leaf standing in for the period. No tile —
+ * `onDark` picks cream for the gradient hero, ink for light surfaces.
+ * `size` is the letter height.
+ */
+export function LogoMark({ size = 24, onDark = false }: { size?: number; onDark?: boolean }): React.ReactElement {
+  return (
+    <View style={styles.logoMark}>
+      <Text
+        style={[
+          styles.logoText,
+          { fontSize: size, letterSpacing: -size * 0.16, color: onDark ? colors.primaryText : colors.text },
+        ]}
+      >
+        DH
+      </Text>
+      <Ionicons
+        name="leaf"
+        size={size * 0.3}
+        color={colors.sage}
+        style={{ marginLeft: -size * 0.05, marginBottom: size * 0.06 }}
+      />
+    </View>
+  );
+}
+
+/**
  * Circular initials avatar tinted by `hueFor(name)`. `size` is the diameter;
  * an `online` dot is drawn on the bottom-right when provided.
  */
@@ -371,6 +398,8 @@ export function GradientCard({
 
 const styles = StyleSheet.create({
   fill: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
+  logoMark: { flexDirection: 'row', alignItems: 'flex-end' },
+  logoText: { fontFamily: fonts.serif },
   avatar: { alignItems: 'center', justifyContent: 'center', ...elevation.low },
   avatarText: { fontFamily: fonts.sansBlack, letterSpacing: -0.5 },
   presence: {
