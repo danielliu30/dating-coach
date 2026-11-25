@@ -4,6 +4,7 @@ import { StatusBar } from 'expo-status-bar';
 import React, { useCallback, useRef, useState } from 'react';
 import {
   Image,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -160,21 +161,24 @@ export function AuthLayout({
         {landing ? (
           <View ref={landingRef} collapsable={false} style={styles.landing}>
             <Landing page={page} />
+            {showTop ? (
+              // Sticky (web) keeps the button inside the scroll chain — an
+              // absolute overlay sibling would swallow wheel scrolling over it.
+              <View style={styles.toTopSticky}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Back to top"
+                  onPress={scrollToTop}
+                  style={({ pressed }) => [styles.toTop, pressed && { opacity: 0.8 }]}
+                >
+                  <Ionicons name="arrow-up" size={16} color={colors.primaryText} />
+                  <Text style={styles.toTopText}>Top</Text>
+                </Pressable>
+              </View>
+            ) : null}
           </View>
         ) : null}
       </ScrollView>
-
-      {landing && showTop ? (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Back to top"
-          onPress={scrollToTop}
-          style={({ pressed }) => [styles.toTop, pressed && { opacity: 0.8 }]}
-        >
-          <Ionicons name="arrow-up" size={16} color={colors.primaryText} />
-          <Text style={styles.toTopText}>Top</Text>
-        </Pressable>
-      ) : null}
     </View>
   );
 }
@@ -301,10 +305,18 @@ const styles = StyleSheet.create({
   scrollHint: { alignSelf: 'center', alignItems: 'center', gap: 2, paddingBottom: 26, opacity: 0.9 },
   scrollHintText: { fontFamily: fonts.sansSemi, fontSize: 13, color: colors.primaryText },
   landing: { paddingHorizontal: 16, paddingTop: 8, paddingBottom: 32 },
-  toTop: {
-    position: 'absolute',
-    right: 20,
+  toTopSticky: {
+    // `sticky` isn't in RN's position union; web-only cast, native falls back
+    // to pinning the button at the end of the landing content.
+    ...(Platform.select({
+      web: { position: 'sticky' as 'absolute' },
+      default: { position: 'absolute' as const, bottom: 20 },
+    })),
     bottom: 20,
+    alignItems: 'flex-end',
+    paddingRight: 20,
+  },
+  toTop: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
