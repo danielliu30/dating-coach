@@ -15,7 +15,9 @@ OFF=/logs/.metrics-access.offset
 while true; do
     ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     # started comes from inspect: docker stats has no start-time field.
-    docker stats --no-stream --filter "name=$STACK" --format '{{json .}}' \
+    # docker stats has no --filter; list stack containers via docker ps.
+    docker ps -q --filter "name=$STACK" \
+        | xargs -r docker stats --no-stream --format '{{json .}}' \
         | while IFS= read -r line; do
             name=$(printf '%s' "$line" | sed -n 's/.*"Name":"\([^"]*\)".*/\1/p')
             started=$(docker inspect -f '{{.State.StartedAt}}' "$name" 2>/dev/null)
