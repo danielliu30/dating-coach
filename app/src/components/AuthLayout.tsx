@@ -164,7 +164,7 @@ export function AuthLayout({
             {showTop ? (
               // Sticky (web) keeps the button inside the scroll chain — an
               // absolute overlay sibling would swallow wheel scrolling over it.
-              <View style={styles.toTopSticky}>
+              <View testID="to-top-sticky" pointerEvents="box-none" style={styles.toTopSticky}>
                 <Pressable
                   accessibilityRole="button"
                   accessibilityLabel="Back to top"
