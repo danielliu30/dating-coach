@@ -1,6 +1,7 @@
+import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, type NavigationProp } from '@react-navigation/native';
 import React, { useRef, useState } from 'react';
-import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { api } from '../api/client';
 import type { CoachingSession } from '../api/types';
@@ -39,6 +40,8 @@ export default function CoachDashboardScreen(): React.ReactElement {
   const threads = useAsync(() => api.coachThreads('active'));
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [meetingUrls, setMeetingUrls] = useState<Record<string, string>>({});
+  // Cards with their prep section (meeting link + notes) expanded.
+  const [prepOpen, setPrepOpen] = useState<Record<string, boolean>>({});
   const [actError, setActError] = useState<string | null>(null);
   // In-flight request per session id; sessions absent from the map are idle.
   // The ref is the lock (checked synchronously, so two taps in one render
@@ -184,43 +187,7 @@ export default function CoachDashboardScreen(): React.ReactElement {
               {session.topic ? <MetaRow icon="chatbox-ellipses-outline" text={session.topic} /> : null}
             </View>
             <Divider />
-            <Field
-              label="Meeting link"
-              value={meetingUrls[session.id] ?? session.meeting_url ?? ''}
-              onChangeText={(text) => setMeetingUrls((current) => ({ ...current, [session.id]: text }))}
-              placeholder="https://meet.example.com/your-room"
-              autoCapitalize="none"
-              autoCorrect={false}
-              keyboardType="url"
-            />
-            <Button
-              label="Save meeting link"
-              icon="videocam-outline"
-              variant="secondary"
-              loading={isBusy(session, 'meeting_url')}
-              disabled={isBlocked(session, 'meeting_url')}
-              onPress={() => void act(session, 'meeting_url')}
-            />
-            <Text style={styles.label}>Session notes</Text>
-            <TextInput
-              value={notes[session.id] ?? session.coach_notes ?? ''}
-              onChangeText={(text) => setNotes((current) => ({ ...current, [session.id]: text }))}
-              placeholder="What came up, what to follow up on next time…"
-              placeholderTextColor={colors.muted}
-              multiline
-              style={styles.notes}
-            />
             <View style={styles.actions}>
-              <View style={{ flex: 1 }}>
-                <Button
-                  label="Save notes"
-                  icon="save-outline"
-                  variant="secondary"
-                  loading={isBusy(session, 'notes')}
-                  disabled={isBlocked(session, 'notes')}
-                  onPress={() => void act(session, 'notes')}
-                />
-              </View>
               <View style={{ flex: 1 }}>
                 <Button
                   label="Completed"
@@ -240,6 +207,65 @@ export default function CoachDashboardScreen(): React.ReactElement {
                 />
               </View>
             </View>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Prep — meeting link and notes"
+              accessibilityState={{ expanded: Boolean(prepOpen[session.id]) }}
+              // RN Web drops accessibilityState; mirror it for screen readers.
+              aria-expanded={Boolean(prepOpen[session.id])}
+              onPress={() => setPrepOpen((current) => ({ ...current, [session.id]: !current[session.id] }))}
+              style={({ pressed }) => [styles.prepToggle, pressed && { opacity: 0.7 }]}
+            >
+              <Ionicons
+                name={prepOpen[session.id] ? 'chevron-down' : 'chevron-forward'}
+                size={15}
+                color={colors.muted}
+              />
+              <Text style={styles.prepText}>Prep — meeting link & notes</Text>
+              <Text style={styles.prepHint}>
+                {[session.meeting_url ? 'link set' : null, session.coach_notes ? 'notes saved' : null]
+                  .filter(Boolean)
+                  .join(' · ')}
+              </Text>
+            </Pressable>
+            {prepOpen[session.id] ? (
+              <>
+                <Field
+                  label="Meeting link"
+                  value={meetingUrls[session.id] ?? session.meeting_url ?? ''}
+                  onChangeText={(text) => setMeetingUrls((current) => ({ ...current, [session.id]: text }))}
+                  placeholder="https://meet.example.com/your-room"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  keyboardType="url"
+                />
+                <Button
+                  label="Save meeting link"
+                  icon="videocam-outline"
+                  variant="secondary"
+                  loading={isBusy(session, 'meeting_url')}
+                  disabled={isBlocked(session, 'meeting_url')}
+                  onPress={() => void act(session, 'meeting_url')}
+                />
+                <Text style={styles.label}>Session notes</Text>
+                <TextInput
+                  value={notes[session.id] ?? session.coach_notes ?? ''}
+                  onChangeText={(text) => setNotes((current) => ({ ...current, [session.id]: text }))}
+                  placeholder="What came up, what to follow up on next time…"
+                  placeholderTextColor={colors.muted}
+                  multiline
+                  style={styles.notes}
+                />
+                <Button
+                  label="Save notes"
+                  icon="save-outline"
+                  variant="secondary"
+                  loading={isBusy(session, 'notes')}
+                  disabled={isBlocked(session, 'notes')}
+                  onPress={() => void act(session, 'notes')}
+                />
+              </>
+            ) : null}
           </View>
         );
       })}
@@ -271,4 +297,7 @@ const styles = StyleSheet.create({
     textAlignVertical: 'top',
   },
   actions: { flexDirection: 'row', gap: 8 },
+  prepToggle: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 4 },
+  prepText: { fontFamily: fonts.sansSemi, fontSize: 13, color: colors.muted, flex: 1 },
+  prepHint: { fontFamily: fonts.sans, fontSize: 12, color: colors.sageDeep },
 });
