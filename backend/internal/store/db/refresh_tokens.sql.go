@@ -79,9 +79,23 @@ func (q *Queries) GetRefreshToken(ctx context.Context, tokenHash string) (Refres
 	return i, err
 }
 
+const refreshTokenRevoked = `-- name: RefreshTokenRevoked :one
+SELECT EXISTS (
+  SELECT 1 FROM revoked_refresh_tokens
+  WHERE token_hash = $1 AND expires_at > now()
+)
+`
+
+func (q *Queries) RefreshTokenRevoked(ctx context.Context, tokenHash string) (bool, error) {
+	row := q.db.QueryRow(ctx, refreshTokenRevoked, tokenHash)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const revokeUserRefreshTokens = `-- name: RevokeUserRefreshTokens :execrows
 WITH revoked AS (
-  DELETE FROM refresh_tokens WHERE user_id = $1
+  DELETE FROM refresh_tokens WHERE refresh_tokens.user_id = $1
   RETURNING token_hash, user_id, expires_at
 )
 INSERT INTO revoked_refresh_tokens (token_hash, user_id, expires_at)
@@ -99,7 +113,7 @@ func (q *Queries) RevokeUserRefreshTokens(ctx context.Context, userID uuid.UUID)
 const revokeUserRefreshTokensIssuedBy = `-- name: RevokeUserRefreshTokensIssuedBy :execrows
 WITH revoked AS (
 DELETE FROM refresh_tokens
-WHERE user_id = $1
+WHERE refresh_tokens.user_id = $1
   AND family_id IN (
     SELECT r.family_id FROM refresh_tokens r
     WHERE r.user_id = $1
@@ -110,19 +124,6 @@ RETURNING token_hash, user_id, expires_at
 INSERT INTO revoked_refresh_tokens (token_hash, user_id, expires_at)
 SELECT token_hash, user_id, expires_at FROM revoked
 `
-
-const refreshTokenRevoked = `-- name: RefreshTokenRevoked :one
-SELECT EXISTS (
-  SELECT 1 FROM revoked_refresh_tokens
-  WHERE token_hash = $1 AND expires_at > now()
-)
-`
-
-func (q *Queries) RefreshTokenRevoked(ctx context.Context, tokenHash string) (bool, error) {
-	var revoked bool
-	err := q.db.QueryRow(ctx, refreshTokenRevoked, tokenHash).Scan(&revoked)
-	return revoked, err
-}
 
 type RevokeUserRefreshTokensIssuedByParams struct {
 	UserID   uuid.UUID `json:"user_id"`
