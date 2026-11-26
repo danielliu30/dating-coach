@@ -12,6 +12,7 @@ import { useAsync } from '../hooks/useAsync';
 import { PHASE_LABELS } from '../lib/phases';
 import { RECOMMEND_OPTIONS, recommendLabel } from '../lib/reviews';
 import type { CoachesStackParams, RootTabParams } from '../navigation/types';
+import { useAuth } from '../state/auth';
 import { colors, fonts, radii, shared, type } from '../theme';
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -42,6 +43,7 @@ export default function CoachDetailScreen({
   route,
 }: NativeStackScreenProps<CoachesStackParams, 'CoachDetail'>): React.ReactElement {
   const { coachID } = route.params;
+  const { user } = useAuth();
   const navigation = useNavigation<NavigationProp<RootTabParams>>();
 
   const [duration, setDuration] = useState(45);
@@ -182,6 +184,10 @@ export default function CoachDetailScreen({
   }
 
   const c = coach.data;
+  // Viewing your own coach profile (reachable by deep link or stale navigation
+  // even though the directory filters it): booking and chat are client actions
+  // the API refuses for self, so only the public-profile sections are shown.
+  const isSelf = user?.id === c.id;
   const rate = (c.hourly_rate_cents / 100).toFixed(0);
   // Slots fetched for a previous length linger in `slots.data` while the new
   // request is in flight (or after it fails); only offer the current length's.
@@ -241,90 +247,98 @@ export default function CoachDetailScreen({
           <Badge text={c.review_count > 0 ? recommendLabel(c) : 'No reviews yet'} tone={colors.primary} />
         </View>
         <Divider />
-        <View style={styles.chatRow}>
-          <IconDisc icon="chatbubbles-outline" hue="sky" size={44} />
-          <View style={{ flex: 1, gap: 2 }}>
-            <Text style={type.subheading}>Need a quick perspective?</Text>
-            <Text style={type.caption}>Start a live chat — no booking required.</Text>
-          </View>
-        </View>
-        <Button label="Start a live chat" icon="chatbubble-outline" variant="secondary" onPress={startChat} />
+        {isSelf ? (
+          <MetaRow icon="person-outline" text="This is your public coach profile." />
+        ) : (
+          <>
+            <View style={styles.chatRow}>
+              <IconDisc icon="chatbubbles-outline" hue="sky" size={44} />
+              <View style={{ flex: 1, gap: 2 }}>
+                <Text style={type.subheading}>Need a quick perspective?</Text>
+                <Text style={type.caption}>Start a live chat — no booking required.</Text>
+              </View>
+            </View>
+            <Button label="Start a live chat" icon="chatbubble-outline" variant="secondary" onPress={startChat} />
+          </>
+        )}
       </View>
 
-      <View style={shared.card}>
-        <SectionHeader title="Book a session" caption="Pick a length, choose a time, tell them what to focus on." />
-        <Text style={styles.label}>Session length</Text>
-        <View style={shared.row}>
-          {DURATIONS.map((minutes) => {
-            const active = duration === minutes;
-            return (
-              <Pressable
-                key={minutes}
-                accessibilityRole="radio"
-                accessibilityState={{ selected: active }}
-                onPress={() => pickDuration(minutes)}
-                style={[styles.duration, active && styles.durationActive]}
-              >
-                <Text style={[styles.durationValue, active && { color: colors.primaryText }]}>{minutes}</Text>
-                <Text style={[styles.durationUnit, active && { color: 'rgba(255,255,255,0.85)' }]}>min</Text>
-              </Pressable>
-            );
-          })}
-        </View>
-
-        <Text style={styles.label}>Open slots · next 7 days</Text>
-        {slots.loading && openSlots.length === 0 ? <Loading /> : null}
-        {!slots.loading && slots.error ? <Text style={shared.error}>{slots.error}</Text> : null}
-        {!slots.loading && !slots.error && slots.data && openSlots.length === 0 ? (
-          <MetaRow icon="calendar-clear-outline" text="No open slots in this window. Try another length." />
-        ) : null}
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
-          {openSlots.map((slot) => {
-            const active = selected === slot.start;
-            const parts = slotParts(slot);
-            return (
-              <Pressable
-                key={slot.start}
-                accessibilityRole="button"
-                accessibilityLabel={slotLabel(slot)}
-                onPress={() => setSelected(slot.start)}
-                style={[styles.slot, active && styles.slotActive]}
-              >
-                <Text style={[styles.slotDay, active && { color: colors.primaryDeep }]}>{parts.day}</Text>
-                <Text style={[styles.slotTime, active && { color: colors.primaryDeep }]}>{parts.time}</Text>
-                {active ? <Ionicons name="checkmark-circle" size={16} color={colors.primary} /> : null}
-              </Pressable>
-            );
-          })}
-        </ScrollView>
-
-        <Field
-          label="What do you want to work on?"
-          value={topic}
-          onChangeText={setTopic}
-          placeholder="Opening messages on Hinge"
-        />
-        <View style={styles.summary}>
-          <Ionicons name="receipt-outline" size={16} color={colors.bark} />
-          <Text style={[type.caption, { flex: 1, color: colors.bark }]}>
-            {selectedSlot
-              ? `${duration} min with ${c.display_name} · ${slotLabel(selectedSlot)}`
-              : `${duration} min with ${c.display_name} · pick a time above`}
-          </Text>
-          <Text style={styles.summaryPrice}>${(Math.round((c.hourly_rate_cents * duration) / 60) / 100).toFixed(2)}</Text>
-        </View>
-        {status ? (
+      {!isSelf ? (
+        <View style={shared.card}>
+          <SectionHeader title="Book a session" caption="Pick a length, choose a time, tell them what to focus on." />
+          <Text style={styles.label}>Session length</Text>
           <View style={shared.row}>
-            <Ionicons name="checkmark-circle" size={16} color={colors.engaging} />
-            <Text style={[type.caption, { color: colors.engaging }]}>{status}</Text>
+            {DURATIONS.map((minutes) => {
+              const active = duration === minutes;
+              return (
+                <Pressable
+                  key={minutes}
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected: active }}
+                  onPress={() => pickDuration(minutes)}
+                  style={[styles.duration, active && styles.durationActive]}
+                >
+                  <Text style={[styles.durationValue, active && { color: colors.primaryText }]}>{minutes}</Text>
+                  <Text style={[styles.durationUnit, active && { color: 'rgba(255,255,255,0.85)' }]}>min</Text>
+                </Pressable>
+              );
+            })}
           </View>
-        ) : null}
-        {error ? <Text style={shared.error}>{error}</Text> : null}
-        {checkoutUrl ? (
-          <Button label="Continue to payment" icon="card-outline" onPress={() => void openCheckout(checkoutUrl)} />
-        ) : null}
-        <Button label="Book session" icon="calendar-outline" onPress={book} loading={busy} />
-      </View>
+  
+          <Text style={styles.label}>Open slots · next 7 days</Text>
+          {slots.loading && openSlots.length === 0 ? <Loading /> : null}
+          {!slots.loading && slots.error ? <Text style={shared.error}>{slots.error}</Text> : null}
+          {!slots.loading && !slots.error && slots.data && openSlots.length === 0 ? (
+            <MetaRow icon="calendar-clear-outline" text="No open slots in this window. Try another length." />
+          ) : null}
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+            {openSlots.map((slot) => {
+              const active = selected === slot.start;
+              const parts = slotParts(slot);
+              return (
+                <Pressable
+                  key={slot.start}
+                  accessibilityRole="button"
+                  accessibilityLabel={slotLabel(slot)}
+                  onPress={() => setSelected(slot.start)}
+                  style={[styles.slot, active && styles.slotActive]}
+                >
+                  <Text style={[styles.slotDay, active && { color: colors.primaryDeep }]}>{parts.day}</Text>
+                  <Text style={[styles.slotTime, active && { color: colors.primaryDeep }]}>{parts.time}</Text>
+                  {active ? <Ionicons name="checkmark-circle" size={16} color={colors.primary} /> : null}
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+  
+          <Field
+            label="What do you want to work on?"
+            value={topic}
+            onChangeText={setTopic}
+            placeholder="Opening messages on Hinge"
+          />
+          <View style={styles.summary}>
+            <Ionicons name="receipt-outline" size={16} color={colors.bark} />
+            <Text style={[type.caption, { flex: 1, color: colors.bark }]}>
+              {selectedSlot
+                ? `${duration} min with ${c.display_name} · ${slotLabel(selectedSlot)}`
+                : `${duration} min with ${c.display_name} · pick a time above`}
+            </Text>
+            <Text style={styles.summaryPrice}>${(Math.round((c.hourly_rate_cents * duration) / 60) / 100).toFixed(2)}</Text>
+          </View>
+          {status ? (
+            <View style={shared.row}>
+              <Ionicons name="checkmark-circle" size={16} color={colors.engaging} />
+              <Text style={[type.caption, { color: colors.engaging }]}>{status}</Text>
+            </View>
+          ) : null}
+          {error ? <Text style={shared.error}>{error}</Text> : null}
+          {checkoutUrl ? (
+            <Button label="Continue to payment" icon="card-outline" onPress={() => void openCheckout(checkoutUrl)} />
+          ) : null}
+          <Button label="Book session" icon="calendar-outline" onPress={book} loading={busy} />
+        </View>
+      ) : null}
 
       <View style={shared.card}>
         <SectionHeader
