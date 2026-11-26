@@ -75,6 +75,11 @@ const coachApproved = "approved"
 // has approved; otherwise (or when the user has no coach profile) it returns
 // ErrNotFound so unapproved coaches are indistinguishable from absent ones.
 func (s *Service) StartThread(ctx context.Context, userID, coachID uuid.UUID, sessionID *uuid.UUID) (Thread, error) {
+	// A thread needs two distinct parties; without this a coach could open a
+	// conversation with themselves.
+	if userID == coachID {
+		return Thread{}, fmt.Errorf("%w: cannot start a chat with yourself", ErrInvalidInput)
+	}
 	existing, err := s.queries.GetActiveThreadForPair(ctx, db.GetActiveThreadForPairParams{UserID: userID, CoachID: coachID})
 	if err == nil {
 		return threadOf(existing), nil
@@ -89,6 +94,21 @@ func (s *Service) StartThread(ctx context.Context, userID, coachID uuid.UUID, se
 	}
 	if err != nil || approval != coachApproved {
 		return Thread{}, fmt.Errorf("%w: coach is not available for chat", ErrNotFound)
+	}
+
+	// A linked session must be one between this caller and this coach; the FK
+	// only proves the session exists, not whose it is.
+	if sessionID != nil {
+		session, err := s.queries.GetCoachingSession(ctx, *sessionID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return Thread{}, ErrNotFound
+			}
+			return Thread{}, fmt.Errorf("get session: %w", err)
+		}
+		if session.UserID != userID || session.CoachID != coachID {
+			return Thread{}, fmt.Errorf("%w: session does not belong to this coach", ErrInvalidInput)
+		}
 	}
 
 	created, err := s.queries.CreateChatThread(ctx, db.CreateChatThreadParams{
