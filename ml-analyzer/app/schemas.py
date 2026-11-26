@@ -269,8 +269,15 @@ class AnalyzeResponse(BaseModel):
 class ImageRef(BaseModel):
     """One profile photo, supplied inline (``base64``) or by ``url``; exactly one must be set."""
 
-    url: Optional[str] = Field(default=None, max_length=2000)
-    base64: Optional[str] = Field(default=None, description="Raw base64 payload without a data: prefix")
+    # URL images are fetched by the LLM provider rather than this service, so
+    # the scheme is pinned to https: file://, plaintext http and other
+    # non-https URLs must never reach a provider (pentest pt-abuse).
+    url: Optional[str] = Field(default=None, max_length=2000, pattern=r"^https://")
+    # ~4 MiB decoded is ample for a profile photo; the cap keeps a 10-image
+    # request bounded instead of admitting arbitrary payloads.
+    base64: Optional[str] = Field(
+        default=None, max_length=5_600_000, description="Raw base64 payload without a data: prefix"
+    )
     media_type: str = Field(default="image/jpeg", pattern=r"^image/(jpeg|png|webp|gif)$")
 
     @model_validator(mode="after")

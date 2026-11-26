@@ -1561,6 +1561,19 @@ def test_image_ref_requires_exactly_one_source() -> None:
         ImageRef(url="https://cdn.example/a.jpg", base64=_png_base64(800, 800))
 
 
+def test_image_ref_rejects_non_https_urls() -> None:
+    """Only https URLs may be forwarded to the LLM provider (pentest pt-abuse)."""
+    for bad in ("file:///etc/passwd", "http://cdn.example/a.jpg", "ftp://x/y.png", "data:image/png;base64,eA=="):
+        with pytest.raises(ValidationError):
+            ImageRef(url=bad)
+
+
+def test_image_ref_rejects_oversized_base64() -> None:
+    """Base64 payloads are capped at ~4 MiB decoded (pentest pt-abuse)."""
+    with pytest.raises(ValidationError):
+        ImageRef(base64="A" * 5_600_001)
+
+
 def test_heuristic_image_scorer_fallback_without_llm_key() -> None:
     """Without LLM_API_KEY build_image_scorer picks the heuristic, which judges resolution from headers only."""
     settings = Settings(
