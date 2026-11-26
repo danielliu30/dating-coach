@@ -34,7 +34,7 @@ jobs:
           for repo in dating-coach-loadtest dating-coach-pentest dating-coach-infra; do
             dir="/tmp/$repo"
             git clone --depth 1 "https://x-access-token:${PAT}@github.com/danielliu30/${repo}.git" "$dir"
-            ./scripts/sync-skills.sh "$dir"
+            bash scripts/sync-skills.sh "$dir"
             if [ -z "$(git -C "$dir" status --porcelain -- .agents/skills)" ]; then
               echo "$repo already in sync"
               continue
