@@ -1,6 +1,7 @@
 package coaching
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -62,5 +63,28 @@ func TestNormalisePhases(t *testing.T) {
 
 	if _, err := normalisePhases([]string{"opening", "ghosting"}); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("expected ErrInvalidInput for unknown phase, got %v", err)
+	}
+}
+
+func TestBookSessionRejectsSelfBooking(t *testing.T) {
+	svc, pool := testService(t)
+	coach := insertCoach(t, pool)
+	start := time.Now().UTC().Truncate(time.Hour).Add(48 * time.Hour)
+	_, err := svc.BookSession(context.Background(), coach, BookInput{
+		CoachID:         coach.String(),
+		ScheduledTime:   start.Format(time.RFC3339),
+		DurationMinutes: 45,
+	})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("self-booking error = %v, want ErrInvalidInput", err)
+	}
+	var sessions int
+	if err := pool.QueryRow(context.Background(),
+		"SELECT count(*) FROM coaching_sessions WHERE coach_id = $1 AND user_id = $1", coach,
+	).Scan(&sessions); err != nil {
+		t.Fatal(err)
+	}
+	if sessions != 0 {
+		t.Fatalf("self-booking created %d sessions, want 0", sessions)
 	}
 }

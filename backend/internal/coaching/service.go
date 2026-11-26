@@ -734,6 +734,9 @@ func (s *Service) BookSession(ctx context.Context, userID uuid.UUID, in BookInpu
 	if err != nil {
 		return Session{}, fmt.Errorf("%w: coach_id must be a uuid", ErrInvalidInput)
 	}
+	if coachID == userID {
+		return Session{}, fmt.Errorf("%w: coaches cannot book themselves", ErrInvalidInput)
+	}
 	scheduled, err := time.Parse(time.RFC3339, in.ScheduledTime)
 	if err != nil {
 		return Session{}, fmt.Errorf("%w: scheduled_time must be RFC3339", ErrInvalidInput)
