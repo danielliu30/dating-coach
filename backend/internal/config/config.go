@@ -38,10 +38,17 @@ type Config struct {
 	BcryptCost           int
 	AuthRateLimit        int
 	AuthRateWindow       time.Duration
-	TrustedProxyHops     int
-	TrustedProxyCIDRs    []netip.Prefix
-	LoginFailureLimit    int
-	LoginFailureWindow   time.Duration
+	// APIRate* bound every authenticated user's request rate across the
+	// private mounts; AnalysisRate* bound only LLM-cost POSTs (submit +
+	// reanalyze) since each burns model tokens.
+	APIRateLimit       int
+	APIRateWindow      time.Duration
+	AnalysisRateLimit  int
+	AnalysisRateWindow time.Duration
+	TrustedProxyHops   int
+	TrustedProxyCIDRs  []netip.Prefix
+	LoginFailureLimit  int
+	LoginFailureWindow time.Duration
 
 	MLServiceURL        string
 	MLServiceTimeout    time.Duration
@@ -174,6 +181,10 @@ func Load() (*Config, error) {
 		BcryptCost:                envInt("BCRYPT_COST", 12),
 		AuthRateLimit:             envInt("AUTH_RATE_LIMIT", 20),
 		AuthRateWindow:            envDuration("AUTH_RATE_WINDOW", time.Minute),
+		APIRateLimit:              envInt("API_RATE_LIMIT", 240),
+		APIRateWindow:             envDuration("API_RATE_WINDOW", time.Minute),
+		AnalysisRateLimit:         envInt("ANALYSIS_RATE_LIMIT", 100),
+		AnalysisRateWindow:        envDuration("ANALYSIS_RATE_WINDOW", time.Hour),
 		TrustedProxyHops:          envInt("TRUSTED_PROXY_HOPS", 0),
 		LoginFailureLimit:         envInt("LOGIN_FAILURE_LIMIT", 10),
 		LoginFailureWindow:        envDuration("LOGIN_FAILURE_WINDOW", 15*time.Minute),

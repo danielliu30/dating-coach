@@ -13,23 +13,33 @@ import (
 	"github.com/danielliu30/dating-coach/backend/internal/httpx"
 )
 
-// RateLimiter is a fixed-window per-IP limiter backed by Redis so the limit is
-// shared across API replicas.
+// RateLimiter is a fixed-window limiter backed by Redis so limits are shared
+// across API replicas. prefix namespaces the bucket ("ratelimit:auth" for
+// per-IP auth limits, "ratelimit:user"/"ratelimit:analysis" for per-user ones).
 type RateLimiter struct {
 	rdb    *redis.Client
+	prefix string
 	limit  int
 	window time.Duration
 }
 
-// NewRateLimiter returns a limiter allowing limit requests per window per key.
+// NewRateLimiter returns a limiter allowing limit requests per window per key,
+// in the per-IP auth namespace.
 func NewRateLimiter(rdb *redis.Client, limit int, window time.Duration) *RateLimiter {
-	return &RateLimiter{rdb: rdb, limit: limit, window: window}
+	return NewKeyedRateLimiter(rdb, "ratelimit:auth", limit, window)
+}
+
+// NewKeyedRateLimiter returns a limiter under a caller-chosen Redis prefix so
+// different surfaces (per-IP auth, per-user API, cost-bounded analysis) keep
+// separate budgets.
+func NewKeyedRateLimiter(rdb *redis.Client, prefix string, limit int, window time.Duration) *RateLimiter {
+	return &RateLimiter{rdb: rdb, prefix: prefix, limit: limit, window: window}
 }
 
 // Allow counts one request against key and reports whether it stays within the
 // current window's budget.
 func (l *RateLimiter) Allow(ctx context.Context, key string) (bool, error) {
-	redisKey := fmt.Sprintf("ratelimit:auth:%s:%d", key, time.Now().UnixNano()/int64(l.window))
+	redisKey := fmt.Sprintf("%s:%s:%d", l.prefix, key, time.Now().UnixNano()/int64(l.window))
 	count, err := l.rdb.Incr(ctx, redisKey).Result()
 	if err != nil {
 		return false, fmt.Errorf("incr rate limit key: %w", err)
@@ -54,7 +64,38 @@ func (l *RateLimiter) Middleware(next http.Handler) http.Handler {
 		}
 		if !allowed {
 			w.Header().Set("Retry-After", fmt.Sprintf("%d", int(l.window.Seconds())))
-			httpx.Error(w, http.StatusTooManyRequests, "too many requests")
+			l.tooMany(w)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// tooMany answers a rejected request.
+func (l *RateLimiter) tooMany(w http.ResponseWriter) {
+	httpx.Error(w, http.StatusTooManyRequests, "too many requests")
+}
+
+// UserMiddleware limits requests per authenticated principal. It runs after
+// the auth middleware: requests without a principal pass through (the auth
+// middleware rejects them itself), and like Middleware it fails open on Redis
+// outages so a cache failure never takes the API down.
+func (l *RateLimiter) UserMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		principal, ok := PrincipalFrom(r.Context())
+		if !ok {
+			next.ServeHTTP(w, r)
+			return
+		}
+		allowed, err := l.Allow(r.Context(), "user:"+principal.UserID.String())
+		if err != nil {
+			slog.Error("user rate limiter unavailable", "error", err)
+			next.ServeHTTP(w, r)
+			return
+		}
+		if !allowed {
+			w.Header().Set("Retry-After", fmt.Sprintf("%d", int(l.window.Seconds())))
+			l.tooMany(w)
 			return
 		}
 		next.ServeHTTP(w, r)
