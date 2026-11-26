@@ -48,11 +48,23 @@ func (p Principal) IsAdmin() bool { return p.Role == RoleAdmin }
 // plain HTTP and REST calls cannot authenticate via the URL. It returns ""
 // when the request carries no usable token.
 func bearerToken(r *http.Request) string {
-	raw := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer"))
+	raw := bearerCredential(r.Header.Get("Authorization"))
 	if raw == "" && strings.HasSuffix(r.URL.Path, "/ws") && isWebSocketUpgrade(r) {
 		raw = r.URL.Query().Get("token")
 	}
 	return raw
+}
+
+// bearerCredential extracts the token from an Authorization header per
+// RFC 6750: a case-insensitive "bearer" auth-scheme followed by a space.
+// Anything else — a bare token, a tab separator, a different scheme — yields
+// no credential rather than being parsed leniently.
+func bearerCredential(header string) string {
+	const scheme = "bearer "
+	if len(header) > len(scheme) && strings.EqualFold(header[:len(scheme)], scheme) {
+		return strings.TrimSpace(header[len(scheme):])
+	}
+	return ""
 }
 
 // isWebSocketUpgrade reports whether r asks to upgrade to the websocket

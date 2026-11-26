@@ -156,3 +156,30 @@ func TestMiddlewareQueryTokenRejectedOnRESTUpgrade(t *testing.T) {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
 }
+
+// TestBearerCredentialScheme checks that only a proper "Bearer <token>"
+// auth-scheme yields a credential: bare tokens, tab separators and foreign
+// schemes must all produce none (pentest pt-headers probes).
+func TestBearerCredentialScheme(t *testing.T) {
+	tests := []struct {
+		header string
+		want   string
+	}{
+		{"Bearer abc.def.ghi", "abc.def.ghi"},
+		{"bearer abc.def.ghi", "abc.def.ghi"},
+		{"BEARER abc.def.ghi", "abc.def.ghi"},
+		{"Bearer  abc.def.ghi", "abc.def.ghi"},
+		{"Bearer\tabc.def.ghi", ""},
+		{"Bearerabc.def.ghi", ""},
+		{"abc.def.ghi", ""},
+		{"Basic abc.def.ghi", ""},
+		{"Bearer", ""},
+		{"Bearer ", ""},
+		{"", ""},
+	}
+	for _, tc := range tests {
+		if got := bearerCredential(tc.header); got != tc.want {
+			t.Errorf("bearerCredential(%q) = %q, want %q", tc.header, got, tc.want)
+		}
+	}
+}
