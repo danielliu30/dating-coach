@@ -86,6 +86,51 @@ func TestStartThreadRequiresApprovedCoach(t *testing.T) {
 	}
 }
 
+func TestStartThreadRejectsSelfAndForeignSession(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	svc := NewService(db.New(pool), nil)
+	client := insertUser(t, pool, "user")
+	coach := insertUser(t, pool, "coach")
+	otherClient := insertUser(t, pool, "user")
+	if _, err := pool.Exec(ctx, `INSERT INTO coaches (user_id, approval_status) VALUES ($1, 'approved')`, coach); err != nil {
+		t.Fatalf("insert coach: %v", err)
+	}
+
+	// A coach cannot open a thread with themselves, approved profile or not.
+	if _, err := svc.StartThread(ctx, coach, coach, nil); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("self thread: err = %v, want ErrInvalidInput", err)
+	}
+
+	insertSession := func(userID uuid.UUID, hoursAhead int) uuid.UUID {
+		t.Helper()
+		var id uuid.UUID
+		if err := pool.QueryRow(ctx,
+			`INSERT INTO coaching_sessions (user_id, coach_id, scheduled_time)
+			 VALUES ($1, $2, now() + make_interval(hours => $3)) RETURNING id`, userID, coach, hoursAhead,
+		).Scan(&id); err != nil {
+			t.Fatalf("insert session: %v", err)
+		}
+		return id
+	}
+
+	// A session between a different client and this coach cannot be attached.
+	foreign := insertSession(otherClient, 48)
+	if _, err := svc.StartThread(ctx, client, coach, &foreign); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("foreign session: err = %v, want ErrInvalidInput", err)
+	}
+
+	// The caller's own session with this coach links normally.
+	own := insertSession(client, 72)
+	thread, err := svc.StartThread(ctx, client, coach, &own)
+	if err != nil {
+		t.Fatalf("thread with own session: %v", err)
+	}
+	if thread.SessionID != own.String() {
+		t.Fatalf("thread.SessionID = %q, want %q", thread.SessionID, own)
+	}
+}
+
 func TestEchoEventCarriesClientID(t *testing.T) {
 	msg := Message{ID: "m1", ThreadID: "t1", SenderID: "u1", Body: "hi", CreatedAt: "2030-01-01T00:00:00Z"}
 
