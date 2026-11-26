@@ -135,11 +135,13 @@ func run() error {
 	analysisHandler := analysis.NewHandler(analysis.NewService(pg.Pool, pg.Queries, queue), cfg.ProfileScoreEnabled)
 
 	router := newRouter(cfg, auth.Middleware(issuer, wsTickets, denylist), handlers{
-		auth:     authHandler,
-		coaching: coachingHandler,
-		chat:     chatHandler,
-		analysis: analysisHandler,
-		payments: provider,
+		auth:            authHandler,
+		coaching:        coachingHandler,
+		chat:            chatHandler,
+		analysis:        analysisHandler,
+		payments:        provider,
+		userLimiter:     auth.NewKeyedRateLimiter(rdb, "ratelimit:user", cfg.APIRateLimit, cfg.APIRateWindow),
+		analysisLimiter: auth.NewKeyedRateLimiter(rdb, "ratelimit:analysis", cfg.AnalysisRateLimit, cfg.AnalysisRateWindow),
 	})
 
 	server := &http.Server{
@@ -180,6 +182,24 @@ type handlers struct {
 	chat     *chat.Handler
 	analysis *analysis.Handler
 	payments payments.Provider
+	// userLimiter throttles every private route per authenticated principal;
+	// analysisLimiter applies only to LLM-cost POSTs. Either may be nil in
+	// tests to leave a surface unthrottled.
+	userLimiter     *auth.RateLimiter
+	analysisLimiter *auth.RateLimiter
+}
+
+// onlyPOST applies mw to POST requests and leaves other methods unwrapped,
+// so read traffic is never billed against a mutation budget.
+func onlyPOST(mw func(http.Handler) http.Handler, next http.Handler) http.Handler {
+	wrapped := mw(next)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			wrapped.ServeHTTP(w, r)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // newRouter builds the API routing tree: an unauthenticated health check, the
@@ -211,6 +231,9 @@ func newRouter(cfg *config.Config, authenticate func(http.Handler) http.Handler,
 		}
 		v1.Group(func(private chi.Router) {
 			private.Use(authenticate, auth.RequireScope(auth.ScopeSession))
+			if h.userLimiter != nil {
+				private.Use(h.userLimiter.UserMiddleware)
+			}
 			private.Use(func(next http.Handler) http.Handler {
 				return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					limit := int64(httpx.MaxJSONBodyBytes)
@@ -222,7 +245,11 @@ func newRouter(cfg *config.Config, authenticate func(http.Handler) http.Handler,
 			})
 			private.Mount("/coaching", h.coaching.Routes())
 			private.Mount("/chat", h.chat.Routes())
-			private.Mount("/analysis", h.analysis.Routes())
+			analysisRoutes := h.analysis.Routes()
+			if h.analysisLimiter != nil {
+				analysisRoutes = onlyPOST(h.analysisLimiter.UserMiddleware, analysisRoutes)
+			}
+			private.Mount("/analysis", analysisRoutes)
 			private.Route("/coach", func(coach chi.Router) {
 				coach.Use(auth.RequireCoach)
 				coach.Mount("/", h.coaching.CoachRoutes())

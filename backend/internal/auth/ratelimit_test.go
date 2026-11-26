@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -87,5 +88,47 @@ func TestRateLimiterRejectsRotatingForwardedPrefix(t *testing.T) {
 		if w.Code != want {
 			t.Fatalf("request %d: status = %d, want %d", i, w.Code, want)
 		}
+	}
+}
+
+// TestUserRateLimiterKeysOnPrincipal checks that the per-user limiter budgets
+// each authenticated account separately and passes unauthenticated requests
+// through (the auth middleware upstream rejects them).
+func TestUserRateLimiterKeysOnPrincipal(t *testing.T) {
+	cache := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: cache.Addr()})
+	t.Cleanup(func() { _ = rdb.Close() })
+	limiter := NewKeyedRateLimiter(rdb, "ratelimit:user", 2, time.Hour)
+	h := limiter.UserMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	userA := Principal{UserID: uuid.New(), Email: "a@example.com", Role: RoleUser, Scope: ScopeSession}
+	userB := Principal{UserID: uuid.New(), Email: "b@example.com", Role: RoleUser, Scope: ScopeSession}
+	for i, want := range []int{http.StatusNoContent, http.StatusNoContent, http.StatusTooManyRequests} {
+		r := httptest.NewRequest(http.MethodGet, "/chat/threads", nil)
+		r = r.WithContext(WithPrincipal(r.Context(), userA))
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("user A request %d: status = %d, want %d", i, w.Code, want)
+		}
+	}
+	// A different user keeps a full budget.
+	for i := 0; i < 2; i++ {
+		r := httptest.NewRequest(http.MethodGet, "/chat/threads", nil)
+		r = r.WithContext(WithPrincipal(r.Context(), userB))
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != http.StatusNoContent {
+			t.Fatalf("user B request %d: status = %d", i, w.Code)
+		}
+	}
+	// No principal: middleware defers to upstream auth and does not count.
+	r := httptest.NewRequest(http.MethodGet, "/chat/threads", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("anonymous request: status = %d", w.Code)
 	}
 }
