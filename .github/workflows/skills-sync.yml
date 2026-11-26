@@ -1,0 +1,57 @@
+name: skills-sync
+
+# Keeps .agents/skills identical across the dating-coach family of repos.
+# The app repo is canonical; this workflow copies the tree into each sibling
+# checkout and pushes (direct to the default branch, or via PR when the
+# branch is protected).
+#
+# Cross-repo pushes need a token with contents:write on the siblings:
+# secrets.SKILLS_SYNC_PAT, falling back to MERGE_BOT_TOKEN. Without either,
+# the job warns and exits cleanly — run scripts/sync-skills.sh manually.
+
+on:
+  push:
+    branches: [main]
+    paths: ['.agents/skills/**']
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sync skills to sibling repos
+        env:
+          PAT: ${{ secrets.SKILLS_SYNC_PAT || secrets.MERGE_BOT_TOKEN }}
+          GH_TOKEN: ${{ secrets.SKILLS_SYNC_PAT || secrets.MERGE_BOT_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PAT:-}" ]; then
+            echo "::warning::SKILLS_SYNC_PAT/MERGE_BOT_TOKEN not set — skipping automated sync"
+            exit 0
+          fi
+          for repo in dating-coach-loadtest dating-coach-pentest dating-coach-infra; do
+            dir="/tmp/$repo"
+            git clone --depth 1 "https://x-access-token:${PAT}@github.com/danielliu30/${repo}.git" "$dir"
+            ./scripts/sync-skills.sh "$dir"
+            if [ -z "$(git -C "$dir" status --porcelain -- .agents/skills)" ]; then
+              echo "$repo already in sync"
+              continue
+            fi
+            git -C "$dir" config user.name "github-actions[bot]"
+            git -C "$dir" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git -C "$dir" add .agents/skills
+            git -C "$dir" commit -m "Sync .agents/skills from dating-coach"
+            if git -C "$dir" push origin HEAD; then
+              echo "$repo: pushed to default branch"
+            else
+              branch="skills-sync/$(git -C "$dir" rev-parse --short HEAD)"
+              git -C "$dir" checkout -b "$branch"
+              git -C "$dir" push -u origin "$branch"
+              gh pr create --repo "danielliu30/$repo" --head "$branch" \
+                --title "Sync .agents/skills from dating-coach" \
+                --body "Automated sync of \`.agents/skills/\` from danielliu30/dating-coach (scripts/sync-skills.sh)."
+              echo "$repo: opened PR (default branch protected)"
+            fi
+          done
