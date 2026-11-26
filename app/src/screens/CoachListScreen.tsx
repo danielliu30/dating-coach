@@ -9,13 +9,17 @@ import { useAsync } from '../hooks/useAsync';
 import { PHASE_LABELS } from '../lib/phases';
 import { recommendLabel } from '../lib/reviews';
 import type { CoachesStackParams } from '../navigation/types';
+import { useAuth } from '../state/auth';
 import { colors, fonts, shared, type } from '../theme';
 
 export default function CoachListScreen({
   navigation,
 }: NativeStackScreenProps<CoachesStackParams, 'CoachList'>): React.ReactElement {
+  const { user } = useAuth();
   const { data, error, loading } = useAsync(() => api.listCoaches(true));
-  const coaches = data ?? [];
+  // A coach browsing the directory should not be offered their own profile:
+  // the API refuses self-booking, so the entry would only lead to a 400.
+  const coaches = (data ?? []).filter((coach) => coach.id !== user?.id);
 
   return (
     <Screen scroll={false}>

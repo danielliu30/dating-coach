@@ -25,6 +25,10 @@ jest.mock('../api/client', () => ({
   },
 }));
 
+jest.mock('../state/auth', () => ({
+  useAuth: () => ({ user: { id: 'u1', display_name: 'Riley', role: 'user' } }),
+}));
+
 const mocked = api as jest.Mocked<typeof api>;
 
 const coach: Coach = {
