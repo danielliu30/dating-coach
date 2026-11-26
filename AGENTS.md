@@ -27,6 +27,8 @@ Invoke these whenever their trigger matches — they are part of the working pro
 - `dating-coach-verify` — before reporting any change; cheapest sufficient check.
 - `review` — self-review the final `git diff` before reporting; also `/review <PR#>` for GitHub PRs.
 
+This repo is canonical for `.agents/skills/` — the loadtest, pentest and infra repos carry verbatim copies. After editing a skill, run `scripts/sync-skills.sh` (or let the `skills-sync` workflow do it on merge); `scripts/sync-skills.sh --check` reports drift.
+
 ## Ops skills — invoke when needed
 
 - `testing-dating-coach` — local stack bring-up, click-through recipes, adversarial scenarios.
