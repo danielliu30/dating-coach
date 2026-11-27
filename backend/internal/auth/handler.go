@@ -148,6 +148,7 @@ func (h *Handler) signIn(w http.ResponseWriter, r *http.Request) {
 		slog.Error("login throttle", "error", err)
 		httpx.Error(w, http.StatusServiceUnavailable, "could not sign in")
 	case errors.Is(err, ErrInvalidCredentials):
+		slog.Warn("sign in failed", "reason", "invalid credentials", "email", in.Email)
 		httpx.Error(w, http.StatusUnauthorized, err.Error())
 	case errors.Is(err, ErrEmailNotVerified):
 		httpx.Error(w, http.StatusForbidden, err.Error())
@@ -231,6 +232,7 @@ func (h *Handler) verify(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ErrSessionRevoked):
 		httpx.Error(w, http.StatusUnauthorized, err.Error())
 	case errors.Is(err, ErrInvalidCode):
+		slog.Warn("verify code failed", "email", in.Email)
 		httpx.Error(w, http.StatusBadRequest, err.Error())
 	case err != nil:
 		slog.Error("verify email", "error", err)

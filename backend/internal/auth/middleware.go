@@ -175,6 +175,7 @@ func RequireScope(scope string) func(http.Handler) http.Handler {
 				httpx.Error(w, http.StatusUnauthorized, "token predates scopes; sign in again")
 				return
 			case principal.Scope != scope:
+				slog.Warn("scope gate denied", "required_scope", scope, "scope", principal.Scope, "user_id", principal.UserID, "path", r.URL.Path)
 				httpx.Error(w, http.StatusForbidden, "token scope not permitted")
 				return
 			}
@@ -188,6 +189,7 @@ func RequireCoach(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		principal, ok := PrincipalFrom(r.Context())
 		if !ok || !principal.IsCoach() {
+			slog.Warn("role gate denied", "required_role", "coach", "user_id", principal.UserID, "email", principal.Email, "path", r.URL.Path)
 			httpx.Error(w, http.StatusForbidden, "coach role required")
 			return
 		}
@@ -202,6 +204,7 @@ func RequireAdmin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		principal, ok := PrincipalFrom(r.Context())
 		if !ok || !principal.IsAdmin() {
+			slog.Warn("role gate denied", "required_role", "admin", "user_id", principal.UserID, "email", principal.Email, "path", r.URL.Path)
 			httpx.Error(w, http.StatusForbidden, "admin role required")
 			return
 		}
