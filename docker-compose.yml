@@ -280,8 +280,12 @@ services:
       PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@admin.com}
       PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-admin}
       PGADMIN_CONFIG_SERVER_MODE: 'False'
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: 'False'
+      PGADMIN_CONFIG_ALLOW_SAVE_PASSWORD: 'True'
     ports: ['${PGADMIN_PORT:-127.0.0.1:5050}:80']
-    volumes: ['pgadmin-data:/var/lib/pgadmin']
+    volumes:
+      - 'pgadmin-data:/var/lib/pgadmin'
+      - './pgadmin/servers.json:/pgadmin4/servers.json:ro'
     depends_on:
       postgres:
         condition: service_healthy
