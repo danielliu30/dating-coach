@@ -123,6 +123,7 @@ func (h *Handler) signUp(w http.ResponseWriter, r *http.Request) {
 		slog.Error("sign up", "error", err)
 		httpx.Error(w, http.StatusInternalServerError, "could not create account")
 	default:
+		setRefreshCookie(w, session)
 		httpx.JSON(w, http.StatusCreated, session)
 	}
 }
@@ -156,6 +157,7 @@ func (h *Handler) signIn(w http.ResponseWriter, r *http.Request) {
 		slog.Error("sign in", "error", err)
 		httpx.Error(w, http.StatusInternalServerError, "could not sign in")
 	default:
+		setRefreshCookie(w, session)
 		httpx.JSON(w, http.StatusOK, session)
 	}
 }
@@ -185,6 +187,7 @@ func (h *Handler) signInWithGoogle(w http.ResponseWriter, r *http.Request) {
 		slog.Error("google sign in", "error", err)
 		httpx.Error(w, http.StatusInternalServerError, "could not sign in")
 	default:
+		setRefreshCookie(w, session)
 		httpx.JSON(w, http.StatusOK, session)
 	}
 }
@@ -196,11 +199,16 @@ func (h *Handler) refresh(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		RefreshToken string `json:"refresh_token"`
 	}
-	if err := httpx.Decode(r, &in); err != nil {
+	if err := httpx.Decode(r, &in); err != nil && !errors.Is(err, io.EOF) {
 		httpx.DecodeError(w, err)
 		return
 	}
-	session, err := h.svc.Refresh(r.Context(), in.RefreshToken)
+	token := refreshTokenFrom(r, in.RefreshToken)
+	if token == "" {
+		httpx.Error(w, http.StatusBadRequest, "refresh token required")
+		return
+	}
+	session, err := h.svc.Refresh(r.Context(), token)
 	switch {
 	case errors.Is(err, ErrRevokedRefreshToken):
 		httpx.Error(w, http.StatusUnauthorized, "session revoked")
@@ -210,6 +218,7 @@ func (h *Handler) refresh(w http.ResponseWriter, r *http.Request) {
 		slog.Error("refresh session", "error", err)
 		httpx.Error(w, http.StatusInternalServerError, "could not refresh session")
 	default:
+		setRefreshCookie(w, session)
 		httpx.JSON(w, http.StatusOK, session)
 	}
 }
@@ -242,6 +251,7 @@ func (h *Handler) verify(w http.ResponseWriter, r *http.Request) {
 			httpx.JSON(w, http.StatusOK, map[string]string{"status": "verified"})
 			return
 		}
+		setRefreshCookie(w, session)
 		httpx.JSON(w, http.StatusOK, session)
 	}
 }
@@ -284,6 +294,7 @@ func (h *Handler) deleteMe(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, http.StatusInternalServerError, "could not delete account")
 		return
 	}
+	clearRefreshCookie(w)
 	httpx.JSON(w, http.StatusAccepted, map[string]string{"status": "deleted"})
 }
 
@@ -307,6 +318,7 @@ func (h *Handler) signOut(w http.ResponseWriter, r *http.Request) {
 		age := time.Duration(*in.TokenAgeMS) * time.Millisecond
 		req.TokenAge = &age
 	}
+	clearRefreshCookie(w)
 	if err := h.svc.SignOut(r.Context(), principal.UserID, req); err != nil {
 		slog.Error("sign out", "error", err, "user_id", principal.UserID)
 		if errors.Is(err, ErrRevocationUnavailable) {
