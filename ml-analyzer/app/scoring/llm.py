@@ -32,7 +32,7 @@ from ..schemas import (
     UserProfile,
     profile_label,
 )
-from .base import Scorer, align_segments, chunk, clamp, transcript
+from .base import Scorer, UNTRUSTED_NOTE, align_segments, chunk, clamp, transcript, untrusted, untrusted_block
 from .heuristic import HeuristicScorer, review_self_messages
 
 logger = logging.getLogger(__name__)
@@ -136,7 +136,7 @@ LIST_LIMITS: Dict[str, int] = {"strengths": 6, "improvements": 8, "reflection_qu
 
 # Composed from the brain so the philosophy has one source of truth; the
 # output contract and hard rules below are the scorer's own.
-SYSTEM_PROMPT = _PROMPT_INTRO + render_pillars() + _PROMPT_CONTRACT
+SYSTEM_PROMPT = _PROMPT_INTRO + render_pillars() + _PROMPT_CONTRACT + UNTRUSTED_NOTE
 
 # Worst-case output tokens (~4 characters per token) for the JSON the parser
 # keeps: a segment entry with its 500-character comment, a goal score with its
@@ -182,14 +182,14 @@ class LLMScorer(Scorer):
         match_name = request.match_name or "the match"
         preferences = request.preferences.strip() if request.preferences else "not stated"
         return (
-            f"Platform: {request.platform}. The match is called {match_name}.\n"
-            f"What the customer is looking for: {preferences}\n"
+            f"Platform: {request.platform}. The match is called {untrusted(match_name)}.\n"
+            f"What the customer is looking for: {untrusted(preferences)}\n"
             f"{focus_area_spec(request.focus_areas)}"
-            f"{profile_spec(request.profile)}"
-            f"{similar_spec(request.similar_conversations)}"
+            f"{untrusted_block(profile_spec(request.profile))}"
+            f"{untrusted_block(similar_spec(request.similar_conversations))}"
             f"Use exactly these segment boundaries (start-end message positions): {segment_spec}\n\n"
-            f"Transcript (context only, review just the self lines):\n{transcript(request.messages, flatten=True)}\n\n"
-            f"Customer messages to review, with the reply each one drew:\n{self_message_digest(request.messages)}"
+            f"Transcript (context only, review just the self lines):\n{untrusted_block(transcript(request.messages, flatten=True))}\n\n"
+            f"Customer messages to review, with the reply each one drew:\n{untrusted_block(self_message_digest(request.messages))}"
         )
 
     async def _complete(self, prompt: str, max_tokens: int) -> str:

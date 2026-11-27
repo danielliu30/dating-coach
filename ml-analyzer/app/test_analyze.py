@@ -872,7 +872,7 @@ def test_llm_prompt_reviews_only_self_messages_and_never_drafts() -> None:
     )
     request = AnalyzeRequest(conversation_id="conv-6", preferences="a fellow climber", messages=messages)
     prompt = LLMScorer(settings)._user_prompt(request, [(0, 1), (2, 3), (4, 4)])
-    assert "What the customer is looking for: a fellow climber" in prompt
+    assert "What the customer is looking for: <untrusted_data>a fellow climber</untrusted_data>" in prompt
     assert "Customer messages to review" in prompt
 
     assert 'Evaluate ONLY messages from "self"' in SYSTEM_PROMPT

@@ -18,6 +18,7 @@ import httpx
 
 from ..config import Settings
 from ..schemas import ReviewComment, ReviewSummaryRequest, ReviewSummaryResponse
+from .base import UNTRUSTED_NOTE, untrusted, untrusted_block
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +52,7 @@ an empty list is fine when nobody recommends the coach.
 recurring criticism briefly if it exists; never invent anything not in the reviews.
 - Never quote a client verbatim, name a client, or mention scores, stars or \
 numbers of reviews. Never mention that you are an AI.
-"""
+""" + UNTRUSTED_NOTE
 
 
 class ReviewSummarizer(ABC):
@@ -138,7 +139,7 @@ class LLMReviewSummarizer(ReviewSummarizer):
             for r in written
         ]
         who = request.coach_name.strip() or "the coach"
-        return f"Reviews of {who}:\n" + "\n".join(lines)
+        return f"Reviews of {untrusted(who)}:\n" + untrusted_block("\n".join(lines))
 
     async def _complete(self, prompt: str) -> str:
         provider = self.settings.llm_provider
