@@ -171,10 +171,11 @@ def test_user_prompt_labels_collapsed_and_truncated_reviews() -> None:
             ReviewComment(rating=2, comment=" not   recommended "),
         ],
     )
-    assert "Reviews of Sam:" in prompt
+    assert "Reviews of <untrusted_data>Sam</untrusted_data>:" in prompt
     assert "- [recommends] line one line two" in prompt
     assert "- [does not recommend] not recommended" in prompt
-    assert len(prompt.splitlines()[1].split("] ", 1)[1]) == 1000
+    rec = next(l for l in prompt.splitlines() if l.startswith("- [recommends]"))
+    assert len(rec.split("] ", 1)[1]) == 1000
 
 
 def test_llm_review_summarize_parses_happy_path() -> None:

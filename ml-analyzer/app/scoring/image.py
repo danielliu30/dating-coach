@@ -20,7 +20,7 @@ import httpx
 
 from ..config import Settings
 from ..schemas import ImageAnalyzeRequest, ImageAnalyzeResponse, ImageAssessment, ImageOverall, ImageRef
-from .base import clamp
+from .base import UNTRUSTED_NOTE, clamp, untrusted
 from .llm import _strip_fences
 
 logger = logging.getLogger(__name__)
@@ -65,7 +65,7 @@ Rules:
 framing, distance, what else is in the shot); never comment on the person's \
 attractiveness, body or appearance beyond visibility.
 - Never mention that you are an AI.
-"""
+""" + UNTRUSTED_NOTE
 
 
 class ImageScorer(ABC):
@@ -203,7 +203,7 @@ class LLMImageScorer(ImageScorer):
     def _instructions(self, request: ImageAnalyzeRequest) -> str:
         preferences = request.preferences.strip() if request.preferences else "not stated"
         return (
-            f"What the customer is looking for: {preferences}\n"
+            f"What the customer is looking for: {untrusted(preferences)}\n"
             f"There are {len(request.images)} photos, indexed 0-{len(request.images) - 1} in the order attached."
         )
 
