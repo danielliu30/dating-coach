@@ -1,0 +1,15 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "dating-coach (local)",
+      "Group": "Servers",
+      "Host": "postgres",
+      "Port": 5432,
+      "MaintenanceDB": "datingcoach",
+      "Username": "datingcoach",
+      "Password": "datingcoach",
+      "SSLMode": "prefer",
+      "SavePassword": true
+    }
+  }
+}
