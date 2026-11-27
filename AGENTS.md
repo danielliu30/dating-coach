@@ -17,6 +17,8 @@ Each service directory has its own `AGENTS.md` — read it before working there.
 
 Loadtest-surfaced issues (`loadtest-finding` in danielliu30/dating-coach-loadtest): label the fix PR `loadtest-fix` — it dispatches the suite against the head SHA (or comments the manual command until `LOADTEST_DISPATCH_PAT` is set). Don't merge a load finding's fix on app checks alone; the finding must not recur under load.
 
+Pentest-surfaced issues (`pentest-finding` in danielliu30/dating-coach-pentest) follow the same contract: label the fix PR `pentest-fix` -- `pentest-verify` dispatches the suite against the head SHA (or comments the manual command until `PENTEST_DISPATCH_PAT` is set). The probe must go green before merge.
+
 ## Workflow skills — apply every session
 
 Invoke these whenever their trigger matches — they are part of the working protocol, not optional references:
