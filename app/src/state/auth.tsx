@@ -4,6 +4,7 @@ import { ApiError, api } from '../api/client';
 import type { RenewalResult, SessionEndReason, SignOutScope } from '../api/client';
 import type { AuthSession, DatingProfileInput, Profile, Role } from '../api/types';
 import { requestGoogleIdToken } from '../lib/googleIdentity';
+import { Platform } from 'react-native';
 import { sessionStorage } from './sessionStorage';
 
 // How long anything waits on a sign-out's server-side revocation, so a hung
@@ -189,6 +190,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
     setUser(session.user);
     setSignedOutReason(null);
     const record: StoredSession = { ...session, received_at: receivedAt };
+    // On web the refresh token rides an httpOnly cookie instead; keeping it
+    // out of JS-readable storage is the whole point, so the copy in memory
+    // (refreshRef) is the only one this tab holds.
+    if (Platform.OS === 'web') record.refresh_token = undefined;
     await sessionStorage.write(JSON.stringify(record));
     return session.user;
   }, []);
@@ -202,7 +207,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
    */
   const rotate = useCallback(
     async (refreshToken: string): Promise<RotationResult> => {
-      if (!refreshToken) return 'rejected';
+      if (!refreshToken && Platform.OS !== 'web') return 'rejected';
       const generation = generationRef.current;
       try {
         const session = await api.refreshSession(refreshToken);
@@ -259,11 +264,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }): React
             },
             stored.received_at ?? Number.NaN,
           );
-        } else if (!stored.refresh_token) {
+        } else if (!stored.refresh_token && Platform.OS !== 'web') {
           await forget();
         } else {
           try {
-            await persist(await api.refreshSession(stored.refresh_token));
+            // An empty token is fine on web: the httpOnly cookie carries it.
+            await persist(await api.refreshSession(stored.refresh_token ?? ''));
           } catch (error) {
             // Only a refusal is final, and only a refusal is worth explaining:
             // an unreachable backend leaves the app signed out for now but

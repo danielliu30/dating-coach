@@ -129,7 +129,9 @@ describe('AuthProvider sign in / sign up', () => {
     expect(mocked.signIn).toHaveBeenCalledWith({ email: 'a@b.c', password: 'pw' });
     expect(result.current.token).toBe('access');
     expect(result.current.user).toEqual(user);
-    expect(await stored()).toMatchObject({ token: 'access', refresh_token: 'refresh' });
+    expect(await stored()).toMatchObject({ token: 'access' });
+      // Web keeps the refresh token in the httpOnly cookie, not storage.
+      expect((await stored())?.refresh_token).toBeUndefined();
   });
 
   it('signUp maps displayName to display_name and persists', async () => {
@@ -179,7 +181,8 @@ describe('AuthProvider restore', () => {
 
     expect(mocked.refreshSession).toHaveBeenCalledWith('refresh');
     expect(result.current.token).toBe('rotated');
-    expect(await stored()).toMatchObject({ token: 'rotated', refresh_token: 'refresh2' });
+    expect(await stored()).toMatchObject({ token: 'rotated' });
+    expect((await stored())?.refresh_token).toBeUndefined();
   });
 
   it('a refused refresh on restore forgets the session and reports expired', async () => {
@@ -190,6 +193,18 @@ describe('AuthProvider restore', () => {
     expect(result.current.token).toBeNull();
     expect(result.current.signedOutReason).toBe('expired');
     expect(await stored()).toBeNull();
+  });
+
+  it('renews a stored session with no refresh token through the cookie path', async () => {
+    await AsyncStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify(session({ token: 'stale', refresh_token: undefined, expires_at: anHourAgo() })),
+    );
+    mocked.refreshSession.mockResolvedValue(session({ token: 'rotated' }));
+    const { result } = await renderAuth();
+
+    expect(mocked.refreshSession).toHaveBeenCalledWith('');
+    expect(result.current.token).toBe('rotated');
   });
 
   it('a revoked refresh on restore reports revocation, not expiry', async () => {
@@ -211,7 +226,8 @@ describe('AuthProvider restore', () => {
     expect(await stored()).not.toBeNull();
   });
 
-  it('forgets an expired session that has no refresh token', async () => {
+  it.each(['ios', 'android'] as const)('forgets an expired session that has no refresh token (%s)', async (platform) => {
+    jest.replaceProperty(Platform, 'OS', platform);
     await AsyncStorage.setItem(
       STORAGE_KEY,
       JSON.stringify(session({ refresh_token: undefined, expires_at: anHourAgo() })),
@@ -586,7 +602,8 @@ describe('AuthProvider renewal', () => {
     await expect(registeredRenewal()()).resolves.toBe('unavailable');
   });
 
-  it('reports rejected without a refresh token to renew', async () => {
+  it.each(['ios', 'android'] as const)('reports rejected without a refresh token to renew (%s)', async (platform) => {
+    jest.replaceProperty(Platform, 'OS', platform);
     await renderAuth();
     await expect(registeredRenewal()()).resolves.toBe('rejected');
     expect(mocked.refreshSession).not.toHaveBeenCalled();
